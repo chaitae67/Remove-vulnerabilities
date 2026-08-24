@@ -4,6 +4,7 @@ import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.Role;
 import com.example.clinic.repository.AppUserRepository;
 import jakarta.transaction.Transactional;
+import java.util.List;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -45,6 +46,11 @@ public class UserService {
     public AppUser findById(Long id) {
         return userRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+    }
+
+    // VULNERABLE LAB: 관리자용 조회지만 서비스 계층에서는 호출자의 권한을 확인하지 않는다.
+    public List<AppUser> findAllUsers() {
+        return userRepository.findAll();
     }
 
     @Transactional
