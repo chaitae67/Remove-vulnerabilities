@@ -14,7 +14,16 @@
         <h1 th:text="${procedure.name}">시술명</h1>
         <p th:text="${procedure.summary}">설명</p>
         <strong class="price" th:text="|${#numbers.formatInteger(procedure.price, 0, 'COMMA')}원|">0원</strong>
+        <p>보유 포인트: <strong th:text="|${#numbers.formatInteger(user.pointBalance, 0, 'COMMA')}P|">0P</strong></p>
         <form class="stack-form" th:action="@{/payments/checkout/{id}(id=${procedure.id})}" method="post">
+            <label>사용할 포인트</label>
+            <input name="usePoints" type="number" value="0">
+            <label>쿠폰</label>
+            <select name="couponCode">
+                <option value="">쿠폰 사용 안 함</option>
+                <option th:each="coupon : ${coupons}" th:value="${coupon.code}"
+                        th:text="|${coupon.name} (${#numbers.formatInteger(coupon.discountAmount, 0, 'COMMA')}원)|">쿠폰</option>
+            </select>
             <select name="method" required>
                 <option value="CARD">신용카드</option>
                 <option value="BANK_TRANSFER">무통장입금</option>
@@ -24,6 +33,7 @@
             <button class="button" type="submit">테스트 결제 완료</button>
         </form>
         <p class="muted">실제 PG 연동 전까지 사용하는 모의 결제 화면입니다.</p>
+        <p class="muted">취약점 진단 실습: 결제 요청의 포인트와 쿠폰 파라미터를 관찰해 보세요.</p>
     </section>
 </main>
 <div th:replace="~{fragments/footer :: footer}"></div>

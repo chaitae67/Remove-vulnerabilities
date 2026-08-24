@@ -18,6 +18,7 @@
     <section class="content-band">
         <div class="section-head">
             <h2>회원 정보</h2>
+            <a th:href="@{/mypage/edit(userId=${user.id})}">수정</a>
         </div>
         <article class="card">
             <p>아이디: <strong th:text="${user.username}"></strong></p>
