@@ -5,12 +5,14 @@ import com.example.clinic.domain.Coupon;
 import com.example.clinic.domain.Notice;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.domain.QnaPost;
+import com.example.clinic.domain.Review;
 import com.example.clinic.domain.Role;
 import com.example.clinic.repository.AppUserRepository;
 import com.example.clinic.repository.CouponRepository;
 import com.example.clinic.repository.NoticeRepository;
 import com.example.clinic.repository.ProcedureProductRepository;
 import com.example.clinic.repository.QnaPostRepository;
+import com.example.clinic.repository.ReviewRepository;
 import java.math.BigDecimal;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
@@ -26,6 +28,7 @@ public class DataSeeder {
         ProcedureProductRepository procedureRepository,
         NoticeRepository noticeRepository,
         QnaPostRepository qnaPostRepository,
+        ReviewRepository reviewRepository,
         PasswordEncoder passwordEncoder,
         CouponRepository couponRepository
     ) {
@@ -100,6 +103,19 @@ public class DataSeeder {
                 post.setAnswered(true);
                 post.setAnswer("개인 상태에 따라 다르므로 사진 상담 또는 내원 상담을 권장드립니다. 기본 회복 안내는 상담 시 자세히 설명드릴게요.");
                 qnaPostRepository.save(post);
+            }
+
+            if (reviewRepository.count() == 0) {
+                ProcedureProduct featured = procedureRepository.findByActiveTrueOrderByIdAsc()
+                    .stream().findFirst().orElse(null);
+
+                Review review = new Review();
+                review.setTitle("상담부터 관리까지 꼼꼼하게 챙겨주셨어요");
+                review.setContent("체형 분석부터 회복 케어 일정까지 자세히 안내해 주셔서 만족스러웠습니다.");
+                review.setRating(5);
+                review.setWriter(member);
+                review.setProcedureProduct(featured);
+                reviewRepository.save(review);
             }
         };
     }

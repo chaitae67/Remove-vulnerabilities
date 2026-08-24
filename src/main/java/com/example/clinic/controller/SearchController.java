@@ -9,17 +9,21 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import com.example.clinic.repository.NoticeSearchRepository;
 import com.example.clinic.repository.ProcedureSearchRepository;
+import com.example.clinic.repository.ReviewSearchRepository;
 
 @Controller
 public class SearchController {
 
     private final NoticeSearchRepository noticeSearchRepository;
     private final ProcedureSearchRepository procedureSearchRepository;
+    private final ReviewSearchRepository reviewSearchRepository;
 
     public SearchController(NoticeSearchRepository noticeSearchRepository,
-                             ProcedureSearchRepository procedureSearchRepository) {
+                             ProcedureSearchRepository procedureSearchRepository,
+                             ReviewSearchRepository reviewSearchRepository) {
         this.noticeSearchRepository = noticeSearchRepository;
         this.procedureSearchRepository = procedureSearchRepository;
+        this.reviewSearchRepository = reviewSearchRepository;
     }
 
     @GetMapping("/notices/search")
@@ -48,6 +52,13 @@ public class SearchController {
         return "procedures/list";
     }
 
+    @GetMapping("/reviews/search")
+    public String searchReviews(@RequestParam(required = false) String keyword, Model model) {
+        model.addAttribute("reviews", reviewSearchRepository.searchByTitle(keyword == null ? "" : keyword));
+        model.addAttribute("keyword", keyword);
+        return "reviews/list";
+    }
+}
     private SQLException findSqlException(Throwable throwable) {
         Throwable current = throwable;
         while (current != null) {

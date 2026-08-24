@@ -91,6 +91,17 @@ VALUES (
   SYSTIMESTAMP
 );
 
+INSERT INTO review (id, title, content, rating, writer_id, procedure_product_id, created_at)
+VALUES (
+  1,
+  '상담부터 관리까지 꼼꼼하게 챙겨주셨어요',
+  '체형 분석부터 회복 케어 일정까지 자세히 안내해 주셔서 만족스러웠습니다.',
+  5,
+  2,
+  1,
+  SYSTIMESTAMP
+);
+
 INSERT INTO coupon (id, code, name, discount_amount, active, expires_at)
 VALUES (1, 'WELCOME10000', '신규 회원 1만원 할인', 10000, 1, SYSDATE + 365);
 

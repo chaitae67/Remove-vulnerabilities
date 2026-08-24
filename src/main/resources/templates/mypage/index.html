@@ -60,6 +60,23 @@
             </li>
         </ul>
     </section>
+
+    <section class="content-band">
+        <div class="section-head">
+            <h2>내가 작성한 후기</h2>
+            <a th:href="@{/reviews}">more</a>
+        </div>
+        <ul class="board-list">
+            <li th:each="review : ${myReviews}">
+                <a th:href="@{/reviews/{id}(id=${review.id})}" th:utext="${review.title}">제목</a>
+                <span class="state" th:text="${'★'.repeat(review.rating)}">★★★★★</span>
+                <time th:text="${#temporals.format(review.createdAt, 'yyyy-MM-dd')}">작성일</time>
+            </li>
+            <li th:if="${myReviews.isEmpty()}">
+                <span>작성한 후기가 없습니다.</span>
+            </li>
+        </ul>
+    </section>
 </main>
 <div th:replace="~{fragments/footer :: footer}"></div>
 </body>
