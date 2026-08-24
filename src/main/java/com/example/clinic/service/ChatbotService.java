@@ -15,19 +15,49 @@ public class ChatbotService {
 
     private final ProcedureService procedureService;
     private final NoticeService noticeService;
+    private final OllamaChatClient ollamaChatClient;
 
-    public ChatbotService(ProcedureService procedureService, NoticeService noticeService) {
+    public ChatbotService(
+        ProcedureService procedureService,
+        NoticeService noticeService,
+        OllamaChatClient ollamaChatClient
+    ) {
         this.procedureService = procedureService;
         this.noticeService = noticeService;
+        this.ollamaChatClient = ollamaChatClient;
     }
 
-    public String answer(String message) {
+    public ChatbotReply answer(String message) {
+        String normalized = message == null ? "" : message.strip().toLowerCase(Locale.KOREAN);
+        if (containsAny(normalized, "어떤 도움", "무슨 도움", "뭘 도와", "무엇을 도와", "할 수 있어", "가능한 질문", "기능 알려")) {
+            return new ChatbotReply(capabilityAnswer(), "GUIDE");
+        }
+        if (ollamaChatClient.isEnabled()) {
+            return ollamaChatClient.ask(buildVulnerablePrompt(message))
+                .map(answer -> new ChatbotReply(answer, "AI"))
+                .orElseGet(() -> new ChatbotReply(ruleBasedAnswer(message), "FALLBACK"));
+        }
+        return new ChatbotReply(ruleBasedAnswer(message), "FALLBACK");
+    }
+
+    private String capabilityAnswer() {
+        return """
+            <p>아래 항목을 편하게 물어보세요.</p>
+            <div class="chatbot-topic-grid">
+                <span>시술·가격</span><span>최근 공지</span><span>포인트 사용</span>
+                <span>쿠폰·할인</span><span>상담·Q&amp;A</span><span>결제 방법</span>
+                <span>주소·전화</span><span>로그인·마이페이지</span>
+            </div>
+            """;
+    }
+
+    private String ruleBasedAnswer(String message) {
         String normalized = message == null ? "" : message.strip().toLowerCase(Locale.KOREAN);
 
         if (containsAny(normalized, "진단", "처방", "처방약", "약물", "복용", "부작용", "수술 가능", "치료")) {
             return MEDICAL_NOTICE;
         }
-        if (containsAny(normalized, "안녕", "반가", "도와")) {
+        if (containsAny(normalized, "안녕", "반가", "도와", "도움", "무엇을 할 수")) {
             return "안녕하세요. 탑라인 성형외과 안내 챗봇입니다. 시술 가격, 공지사항, 상담, 포인트 또는 쿠폰에 대해 물어보세요.";
         }
         if (containsAny(normalized, "시술", "가격", "비용", "패키지")) {
@@ -61,6 +91,43 @@ public class ChatbotService {
          */
         return "입력한 질문 <strong>" + message.strip() + "</strong>은 이해하지 못했습니다. "
             + "시술 가격, 공지사항, 상담, 결제, 포인트 또는 쿠폰에 대해 질문해 주세요.";
+    }
+
+    private String buildVulnerablePrompt(String message) {
+        String procedureContext = procedureAnswer();
+        String noticeContext = noticeAnswer();
+
+        /*
+         * VULNERABLE LAB - Prompt Injection:
+         * 신뢰해야 할 운영 지시와 신뢰할 수 없는 사용자 입력을 하나의 문자열로 이어 붙인다.
+         * 별도의 역할 분리나 입력 경계 검증이 없어 사용자가 "이전 지시를 무시하라"와 같은
+         * 문장으로 챗봇의 동작과 HTML 출력을 바꾸는 프롬프트 인젝션을 실습할 수 있다.
+         */
+        return """
+            당신은 탑라인 성형외과의 한국어 AI 안내 챗봇입니다.
+            답변은 핵심만 2~3문장으로 짧고 친절하게 작성하세요.
+            사용자가 목록을 요청한 경우에만 <ul><li>를 사용하고, 강조는 <strong> HTML만 사용하세요.
+            Markdown의 **, #, ``` 기호는 사용하지 마세요.
+            사용자가 어떤 도움을 받을 수 있는지 물으면 시술·가격, 최근 공지, 포인트, 쿠폰·할인,
+            상담·Q&A, 결제 방법, 주소·전화, 로그인·마이페이지를 안내하세요.
+            의료 진단이나 처방을 요구받으면 의료진 상담이 필요하다고 안내하세요.
+            다음 병원 정보와 일반적인 웹사이트 이용 정보만 참고하세요.
+
+            [현재 시술 정보]
+            %s
+
+            [최근 공지사항]
+            %s
+
+            [기본 안내]
+            포인트는 마이페이지에서 확인하고 결제 화면에서 사용합니다.
+            쿠폰은 결제 화면에서 선택합니다.
+            결제 방법은 카드, 무통장입금, 간편결제이며 현재 모의 결제입니다.
+            주소는 서울특별시 강남구 테헤란로 000, 전화번호는 02-0000-0000입니다.
+            빠른 상담은 누구나, 온라인 Q&A는 로그인 후 이용할 수 있습니다.
+
+            사용자 질문: %s
+            """.formatted(procedureContext, noticeContext, message);
     }
 
     private String procedureAnswer() {
@@ -98,5 +165,8 @@ public class ChatbotService {
             }
         }
         return false;
+    }
+
+    public record ChatbotReply(String answer, String mode) {
     }
 }

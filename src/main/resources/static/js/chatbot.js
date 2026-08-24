@@ -19,7 +19,7 @@
     }
 
     function appendMessage(text, type, renderHtml = false) {
-        const message = document.createElement('p');
+        const message = document.createElement('div');
         message.className = `chatbot-message ${type}`;
         if (renderHtml) {
             // VULNERABLE LAB: 서버 답변을 정화하지 않고 HTML로 렌더링해 반사형 XSS가 가능하다.
@@ -30,6 +30,44 @@
         messages.appendChild(message);
         messages.scrollTop = messages.scrollHeight;
         return message;
+    }
+
+    function formatAssistantAnswer(rawAnswer) {
+        const normalized = String(rawAnswer || '')
+            .replace(/\r/g, '')
+            .trim();
+
+        // 모델이 이미 HTML을 반환했다면 그대로 사용한다.
+        if (/<\/?(?:p|div|span|ul|ol|li|strong|em|br)\b/i.test(normalized)) {
+            return normalized.replace(/\n+/g, ' ');
+        }
+
+        const lines = normalized.split('\n');
+        const html = [];
+        let listItems = [];
+
+        const flushList = () => {
+            if (listItems.length) {
+                html.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`);
+                listItems = [];
+            }
+        };
+
+        lines.forEach(line => {
+            const compact = line.trim().replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            const listMatch = compact.match(/^(?:[-*•]|\d+\.)\s+(.+)$/);
+            if (listMatch) {
+                listItems.push(listMatch[1]);
+                return;
+            }
+            flushList();
+            if (compact) {
+                html.push(`<p>${compact}</p>`);
+            }
+        });
+        flushList();
+
+        return html.join('');
     }
 
     async function sendMessage(question) {
@@ -56,7 +94,13 @@
 
             const data = await response.json();
             // VULNERABLE LAB: ChatbotService가 질문을 그대로 반사한 응답을 HTML로 해석한다.
-            loading.innerHTML = data.answer;
+            const formattedAnswer = formatAssistantAnswer(data.answer);
+            const modeLabel = data.mode === 'AI'
+                ? '<small class="chatbot-mode">AI 답변</small>'
+                : data.mode === 'GUIDE'
+                    ? '<small class="chatbot-mode">빠른 안내</small>'
+                    : '<small class="chatbot-mode fallback">기본 안내 · Ollama 연결 안 됨</small>';
+            loading.innerHTML = `${modeLabel}${formattedAnswer}`;
             loading.classList.remove('loading');
         } catch (error) {
             loading.textContent = '일시적으로 답변을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';

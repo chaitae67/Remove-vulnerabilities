@@ -27,6 +27,11 @@ spring:
 
 app:
   upload-dir: uploads
+  chatbot:
+    ai:
+      enabled: ${OLLAMA_ENABLED:true}
+      model: ${OLLAMA_MODEL:gemma3:1b}
+      endpoint: ${OLLAMA_CHAT_URL:http://localhost:11434/api/chat}
 
 ---
 spring:

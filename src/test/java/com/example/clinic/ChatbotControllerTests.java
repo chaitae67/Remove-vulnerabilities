@@ -15,7 +15,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = {
     "spring.datasource.url=jdbc:h2:mem:chatbot-test;MODE=Oracle;DATABASE_TO_UPPER=false;NON_KEYWORDS=USER;DB_CLOSE_DELAY=-1",
-    "spring.jpa.hibernate.ddl-auto=create-drop"
+    "spring.jpa.hibernate.ddl-auto=create-drop",
+    "app.chatbot.ai.enabled=false"
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("local")
@@ -32,6 +33,19 @@ class ChatbotControllerTests {
                 .content("{\"message\":\"포인트 사용 방법 알려줘\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.answer").value(org.hamcrest.Matchers.containsString("보유 포인트")));
+    }
+
+    @Test
+    void capabilityQuestionShowsTopicGuide() throws Exception {
+        mockMvc.perform(post("/api/chat")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"message\":\"어떤 도움을 받을 수 있어?\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.mode").value("GUIDE"))
+            .andExpect(jsonPath("$.answer").value(
+                org.hamcrest.Matchers.containsString("시술·가격")
+            ));
     }
 
     @Test

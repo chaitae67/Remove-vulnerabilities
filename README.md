@@ -172,3 +172,30 @@ H2 콘솔:
 - 동일 쿠폰 반복 사용
 
 이 동작은 취약점 진단 교육을 위해 의도적으로 포함된 것이므로 실제 운영 환경에 사용하면 안 됩니다.
+
+## 로컬 AI 챗봇 실행
+
+챗봇은 API 키가 필요 없는 로컬 Ollama API를 사용합니다. 각 PC에 Ollama와 모델을 한 번씩 설치해야 합니다.
+
+1. `https://ollama.com/download`에서 Ollama를 설치합니다.
+2. 터미널에서 기본 모델을 내려받습니다.
+
+```bash
+ollama pull gemma3:1b
+```
+
+3. Ollama가 실행 중인 상태에서 Spring Boot 애플리케이션을 실행합니다.
+
+```bash
+mvn -Dmaven.repo.local=work/.m2 spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+기본 모델은 `gemma3:1b`, 기본 API 주소는 `http://localhost:11434/api/chat`입니다. 각각 `OLLAMA_MODEL`, `OLLAMA_CHAT_URL` 환경변수로 변경할 수 있습니다. Ollama가 꺼져 있거나 모델이 설치되지 않았으면 기존 규칙 기반 안내로 자동 전환됩니다.
+
+이 챗봇에는 보안 교육을 위해 다음 취약점이 의도적으로 포함되어 있습니다.
+
+- 사용자 입력을 운영 지시와 같은 프롬프트 문자열에 결합하는 프롬프트 인젝션
+- AI 응답을 HTML 정화 없이 `innerHTML`로 출력하는 XSS
+- 인증 없이 누구나 사용할 수 있어 로컬 CPU·메모리 자원을 소모시키는 무제한 호출
+
+실제 운영 환경에서는 역할이 분리된 메시지, 출력 HTML 정화, 인증·호출 제한·자원 사용량 제한을 적용해야 합니다.

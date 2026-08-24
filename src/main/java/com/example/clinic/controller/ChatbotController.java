@@ -21,7 +21,8 @@ public class ChatbotController {
 
     @PostMapping
     public ChatResponse chat(@Valid @RequestBody ChatRequest request) {
-        return new ChatResponse(chatbotService.answer(request.message()));
+        ChatbotService.ChatbotReply reply = chatbotService.answer(request.message());
+        return new ChatResponse(reply.answer(), reply.mode());
     }
 
     public record ChatRequest(
@@ -31,6 +32,6 @@ public class ChatbotController {
     ) {
     }
 
-    public record ChatResponse(String answer) {
+    public record ChatResponse(String answer, String mode) {
     }
 }
