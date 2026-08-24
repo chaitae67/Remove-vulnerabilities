@@ -8,11 +8,14 @@
 </head>
 <body>
 <div th:replace="~{fragments/header :: header}"></div>
+
 <main>
     <section class="page-title">
         <p class="eyebrow">My Page</p>
         <h1>마이페이지</h1>
-        <p th:text="${user.name} + '님의 이용 내역입니다.'">회원님의 이용 내역입니다.</p>
+        <p th:text="${user.name} + '님의 이용 내역입니다.'">
+            회원님의 이용 내역입니다.
+        </p>
     </section>
 
     <section class="content-band">
@@ -20,10 +23,19 @@
             <h2>회원 정보</h2>
             <a th:href="@{/mypage/edit(userId=${user.id})}">수정</a>
         </div>
+
         <article class="card">
             <p>아이디: <strong th:text="${user.username}"></strong></p>
             <p>이메일: <strong th:text="${user.email}"></strong></p>
             <p>연락처: <strong th:text="${user.phone}"></strong></p>
+
+            <form th:action="@{/mypage/withdraw}" method="post"
+                  onsubmit="return confirm('정말 회원 탈퇴하시겠습니까?');">
+                <input type="hidden" name="userId" th:value="${user.id}">
+                <button class="button button-outline" type="submit">
+                    회원 탈퇴
+                </button>
+            </form>
         </article>
     </section>
 
@@ -31,6 +43,7 @@
         <div class="section-head">
             <h2>결제 내역</h2>
         </div>
+
         <ul class="board-list">
             <li th:each="payment : ${payments}">
                 <span th:text="${payment.procedureProduct.name}">패키지명</span>
@@ -49,10 +62,13 @@
             <h2>내가 작성한 Q&amp;A</h2>
             <a th:href="@{/qna}">more</a>
         </div>
+
         <ul class="board-list">
             <li th:each="post : ${qnaPosts}">
-                <a th:href="@{/qna/{id}(id=${post.id})}" th:text="${post.title}">제목</a>
-                <span class="state" th:text="${post.answered ? '답변완료' : '답변대기'}">대기</span>
+                <a th:href="@{/qna/{id}(id=${post.id})}"
+                   th:text="${post.title}">제목</a>
+                <span class="state"
+                      th:text="${post.answered ? '답변완료' : '답변대기'}">대기</span>
                 <time th:text="${#temporals.format(post.createdAt, 'yyyy-MM-dd')}">작성일</time>
             </li>
             <li th:if="${qnaPosts.isEmpty()}">
@@ -66,10 +82,13 @@
             <h2>내가 작성한 후기</h2>
             <a th:href="@{/reviews}">more</a>
         </div>
+
         <ul class="board-list">
             <li th:each="review : ${myReviews}">
-                <a th:href="@{/reviews/{id}(id=${review.id})}" th:utext="${review.title}">제목</a>
-                <span class="state" th:text="${'★'.repeat(review.rating)}">★★★★★</span>
+                <a th:href="@{/reviews/{id}(id=${review.id})}"
+                   th:utext="${review.title}">제목</a>
+                <span class="state"
+                      th:text="${'★'.repeat(review.rating)}">★★★★★</span>
                 <time th:text="${#temporals.format(review.createdAt, 'yyyy-MM-dd')}">작성일</time>
             </li>
             <li th:if="${myReviews.isEmpty()}">
@@ -78,6 +97,7 @@
         </ul>
     </section>
 </main>
+
 <div th:replace="~{fragments/footer :: footer}"></div>
 </body>
 </html>
