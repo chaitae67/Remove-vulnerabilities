@@ -16,7 +16,7 @@ public class ProcedureSearchRepository {
     @SuppressWarnings("unchecked")
     public List<Object[]> searchByName(String keyword) {
         String sql = "SELECT id, name, category, price, description FROM procedure_product " +
-                     "WHERE name LIKE '%" + keyword + "%' AND active = 1";
+                     "WHERE name LIKE '%" + keyword + "%' AND CAST(active AS INTEGER) = 1";
         return em.createNativeQuery(sql).getResultList();
     }
 }
