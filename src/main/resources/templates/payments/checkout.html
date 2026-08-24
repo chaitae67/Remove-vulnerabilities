@@ -20,7 +20,9 @@
 
             <p>보유 포인트: <strong th:text="|${#numbers.formatInteger(user.pointBalance, 0, 'COMMA')}P|">0P</strong></p>
             <label for="usePoints">사용할 포인트</label>
-            <input id="usePoints" name="usePoints" type="number" value="0">
+            <input id="usePoints" name="usePoints" type="number" value="0" min="0"
+                   th:max="${user.pointBalance}" required
+                   oninput="this.setCustomValidity(Number(this.value) > Number(this.max) ? '보유 포인트보다 많은 포인트를 입력할 수 없습니다.' : '')">
 
             <label for="couponCode">쿠폰</label>
             <select id="couponCode" name="couponCode">
