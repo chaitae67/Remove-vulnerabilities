@@ -2,6 +2,9 @@ package com.example.clinic.controller;
 
 import java.security.Principal;
 
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -72,5 +75,13 @@ public class QnaController {
         qnaService.answer(id, answer);
         redirectAttributes.addFlashAttribute("message", "답변이 등록되었습니다.");
         return "redirect:/qna/" + id;
+    }
+
+    @GetMapping("/qna/download")
+    public ResponseEntity<Resource> download(@RequestParam String filename) {
+        Resource resource = qnaService.loadAttachment(filename);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
+            .body(resource);
     }
 }

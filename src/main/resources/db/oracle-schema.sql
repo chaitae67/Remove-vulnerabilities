@@ -71,7 +71,7 @@ CREATE TABLE qna_attachment (
   original_filename VARCHAR2(255 CHAR) NOT NULL,
   stored_filename VARCHAR2(255 CHAR) NOT NULL,
   content_type VARCHAR2(120 CHAR),
-  size NUMBER(19) NOT NULL,
+  file_size NUMBER(19) NOT NULL,
   post_id NUMBER(19) NOT NULL,
   CONSTRAINT pk_qna_attachment PRIMARY KEY (id),
   CONSTRAINT fk_qna_attachment_post FOREIGN KEY (post_id) REFERENCES qna_post (id)
