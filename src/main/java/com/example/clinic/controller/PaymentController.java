@@ -7,6 +7,7 @@ import com.example.clinic.service.PaymentService;
 import com.example.clinic.service.CouponService;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.UserService;
+import java.math.BigDecimal;
 import java.security.Principal;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -40,14 +41,30 @@ public class PaymentController {
     }
 
     @PostMapping("/payments/checkout/{procedureId}")
-    public String pay(@PathVariable Long procedureId,
-                      @RequestParam String method,
-                      @RequestParam(defaultValue = "0") int usePoints,
-                      @RequestParam(required = false) String couponCode,
-                      Principal principal) {
+    public String pay(
+        @PathVariable Long procedureId,
+        @RequestParam String method,
+        @RequestParam BigDecimal price,
+        @RequestParam int quantity,
+        @RequestParam(defaultValue = "0") BigDecimal discountAmount,
+        @RequestParam(defaultValue = "0") BigDecimal fee,
+        @RequestParam(defaultValue = "0") int usePoints,
+        @RequestParam(required = false) String couponCode,
+        Principal principal
+    ) {
         AppUser buyer = userService.findByUsername(principal.getName());
         ProcedureProduct procedure = procedureService.findById(procedureId);
-        PaymentOrder order = paymentService.createPaidOrder(buyer, procedure, method, usePoints, couponCode);
+        PaymentOrder order = paymentService.createPaidOrder(
+            buyer,
+            procedure,
+            method,
+            price,
+            quantity,
+            discountAmount,
+            fee,
+            usePoints,
+            couponCode
+        );
         return "redirect:/payments/success/" + order.getOrderNumber();
     }
 

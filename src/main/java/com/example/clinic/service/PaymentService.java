@@ -6,6 +6,7 @@ import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.PaymentStatus;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.repository.PaymentOrderRepository;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -24,23 +25,23 @@ public class PaymentService {
     }
 
     @Transactional
-    public PaymentOrder createPaidOrder(AppUser buyer, ProcedureProduct procedureProduct, String method,
-                                        int usePoints, String couponCode) {
+    public PaymentOrder createPaidOrder(
+        AppUser buyer,
+        ProcedureProduct procedureProduct,
+        String method,
+        BigDecimal price,
+        int quantity,
+        BigDecimal discountAmount,
+        BigDecimal fee,
+        int usePoints,
+        String couponCode
+    ) {
         Coupon coupon = couponCode == null || couponCode.isBlank() ? null : couponService.findByCode(couponCode);
-        int couponDiscount = coupon == null ? 0 : coupon.getDiscountAmount();
-
-        /*
-         * VULNERABLE LAB: usePoints is trusted without checking the user's balance or
-         * whether it is negative. Coupons are not bound to a user and are never marked
-         * as used. These flaws are intentional for parameter-tampering practice.
-         */
-        var originalAmount = procedureProduct.getPrice();
-        var finalAmount = originalAmount
-            .subtract(java.math.BigDecimal.valueOf(couponDiscount))
-            .subtract(java.math.BigDecimal.valueOf(usePoints));
-        if (finalAmount.signum() < 0) {
-            finalAmount = java.math.BigDecimal.ZERO;
-        }
+        BigDecimal originalAmount = price.multiply(BigDecimal.valueOf(quantity));
+        BigDecimal finalAmount = originalAmount
+            .subtract(discountAmount)
+            .subtract(BigDecimal.valueOf(usePoints))
+            .add(fee);
         int earnedPoints = finalAmount.intValue() / 100;
         buyer.setPointBalance(buyer.getPointBalance() - usePoints + earnedPoints);
 
@@ -50,7 +51,7 @@ public class PaymentService {
         order.setProcedureProduct(procedureProduct);
         order.setOriginalAmount(originalAmount);
         order.setCoupon(coupon);
-        order.setCouponDiscount(couponDiscount);
+        order.setCouponDiscount(discountAmount.intValue());
         order.setPointsUsed(usePoints);
         order.setEarnedPoints(earnedPoints);
         order.setAmount(finalAmount);
