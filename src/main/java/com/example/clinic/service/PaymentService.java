@@ -5,6 +5,7 @@ import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.PaymentStatus;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.repository.PaymentOrderRepository;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -21,12 +22,25 @@ public class PaymentService {
     }
 
     @Transactional
-    public PaymentOrder createPaidOrder(AppUser buyer, ProcedureProduct procedureProduct, String method) {
+    public PaymentOrder createPaidOrder(
+        AppUser buyer,
+        ProcedureProduct procedureProduct,
+        String method,
+        BigDecimal price,
+        int quantity,
+        BigDecimal discountAmount,
+        BigDecimal fee
+    ) {
+        BigDecimal amount = price
+            .multiply(BigDecimal.valueOf(quantity))
+            .subtract(discountAmount)
+            .add(fee);
+
         PaymentOrder order = new PaymentOrder();
         order.setOrderNumber("CLINIC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         order.setBuyer(buyer);
         order.setProcedureProduct(procedureProduct);
-        order.setAmount(procedureProduct.getPrice());
+        order.setAmount(amount);
         order.setMethod(method);
         order.setStatus(PaymentStatus.PAID);
         order.setPaidAt(LocalDateTime.now());

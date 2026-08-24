@@ -14,18 +14,74 @@
         <h1 th:text="${procedure.name}">시술명</h1>
         <p th:text="${procedure.summary}">설명</p>
         <strong class="price" th:text="|${#numbers.formatInteger(procedure.price, 0, 'COMMA')}원|">0원</strong>
-        <form class="stack-form" th:action="@{/payments/checkout/{id}(id=${procedure.id})}" method="post">
+        <form id="payment-form" class="stack-form" th:action="@{/payments/checkout/{id}(id=${procedure.id})}" method="post">
+            <label for="quantity">수량</label>
+            <input id="quantity" name="quantity" type="number" value="1" min="1" required>
+
+            <label for="couponCode">쿠폰 코드</label>
+            <div class="form-row">
+                <input id="couponCode" name="couponCode" placeholder="WELCOME10">
+                <button id="apply-coupon" class="button button-small" type="button">쿠폰 적용</button>
+            </div>
+
             <select name="method" required>
                 <option value="CARD">신용카드</option>
                 <option value="BANK_TRANSFER">무통장입금</option>
                 <option value="KAKAO_PAY">간편결제</option>
             </select>
             <input placeholder="카드번호 테스트 입력" value="4242-4242-4242-4242">
+            <dl class="summary-list">
+                <div><dt>상품 금액</dt><dd id="subtotal">0원</dd></div>
+                <div><dt>할인 금액</dt><dd id="discount-display">0원</dd></div>
+                <div><dt>결제 금액</dt><dd id="total">0원</dd></div>
+            </dl>
+
+            <input id="price" name="price" type="hidden" th:value="${procedure.price}">
+            <input id="discountAmount" name="discountAmount" type="hidden" value="0">
+            <input id="fee" name="fee" type="hidden" value="0">
             <button class="button" type="submit">테스트 결제 완료</button>
         </form>
         <p class="muted">실제 PG 연동 전까지 사용하는 모의 결제 화면입니다.</p>
     </section>
 </main>
 <div th:replace="~{fragments/footer :: footer}"></div>
+<script>
+    const priceInput = document.getElementById('price');
+    const quantityInput = document.getElementById('quantity');
+    const couponInput = document.getElementById('couponCode');
+    const discountInput = document.getElementById('discountAmount');
+    const feeInput = document.getElementById('fee');
+
+    function formatWon(value) {
+        return `${Number(value).toLocaleString('ko-KR')}원`;
+    }
+
+    function updateAmount() {
+        const price = Number(priceInput.value);
+        const quantity = Number(quantityInput.value);
+        const discount = Number(discountInput.value);
+        const fee = Number(feeInput.value);
+        const subtotal = price * quantity;
+
+        document.getElementById('subtotal').textContent = formatWon(subtotal);
+        document.getElementById('discount-display').textContent = formatWon(discount);
+        document.getElementById('total').textContent = formatWon(subtotal - discount + fee);
+    }
+
+    document.getElementById('apply-coupon').addEventListener('click', () => {
+        const subtotal = Number(priceInput.value) * Number(quantityInput.value);
+        discountInput.value = couponInput.value.trim().toUpperCase() === 'WELCOME10'
+            ? Math.floor(subtotal * 0.1)
+            : 0;
+        updateAmount();
+    });
+
+    quantityInput.addEventListener('input', () => {
+        discountInput.value = 0;
+        updateAmount();
+    });
+
+    updateAmount();
+</script>
 </body>
 </html>
