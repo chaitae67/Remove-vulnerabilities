@@ -12,10 +12,12 @@ public class UserService {
 
     private final AppUserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final PointService pointService;
 
-    public UserService(AppUserRepository userRepository, PasswordEncoder passwordEncoder) {
+    public UserService(AppUserRepository userRepository, PasswordEncoder passwordEncoder, PointService pointService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.pointService = pointService;
     }
 
     @Transactional
@@ -34,7 +36,12 @@ public class UserService {
         user.setEmail(email);
         user.setPhone(phone);
         user.setRole(Role.USER);
-        return userRepository.save(user);
+        user = userRepository.save(user);
+
+        // 신규 가입 축하 포인트 지급
+        pointService.grantSignupBonus(user);
+
+        return user;
     }
 
     public AppUser findByUsername(String username) {

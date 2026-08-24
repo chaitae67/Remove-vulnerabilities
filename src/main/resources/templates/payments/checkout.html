@@ -14,6 +14,9 @@
         <h1 th:text="${procedure.name}">시술명</h1>
         <p th:text="${procedure.summary}">설명</p>
         <strong class="price" th:text="|${#numbers.formatInteger(procedure.price, 0, 'COMMA')}원|">0원</strong>
+
+        <div class="flash error" th:if="${error}" th:text="${error}"></div>
+
         <form class="stack-form" th:action="@{/payments/checkout/{id}(id=${procedure.id})}" method="post">
             <select name="method" required>
                 <option value="CARD">신용카드</option>
@@ -21,9 +24,29 @@
                 <option value="KAKAO_PAY">간편결제</option>
             </select>
             <input placeholder="카드번호 테스트 입력" value="4242-4242-4242-4242">
+
+            <label>
+                보유 포인트
+                <strong th:text="|${#numbers.formatInteger(pointBalance, 0, 'COMMA')}P|">0P</strong>
+                <input type="number" name="usePoints" min="0" th:max="${pointBalance}" value="0" step="1"
+                       placeholder="사용할 포인트">
+            </label>
+
+            <label>
+                보유 쿠폰
+                <select name="couponId">
+                    <option value="">쿠폰 사용 안 함</option>
+                    <option th:each="uc : ${availableCoupons}"
+                            th:value="${uc.id}"
+                            th:text="|${uc.coupon.name} (-${#numbers.formatInteger(uc.coupon.discountAmount, 0, 'COMMA')}원)|">
+                        쿠폰명
+                    </option>
+                </select>
+            </label>
+
             <button class="button" type="submit">테스트 결제 완료</button>
         </form>
-        <p class="muted">실제 PG 연동 전까지 사용하는 모의 결제 화면입니다.</p>
+        <p class="muted">실제 PG 연동 전까지 사용하는 모의 결제 화면입니다. 포인트와 쿠폰은 함께 사용할 수 있습니다.</p>
     </section>
 </main>
 <div th:replace="~{fragments/footer :: footer}"></div>

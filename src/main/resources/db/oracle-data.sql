@@ -1,4 +1,4 @@
-INSERT INTO app_user (id, username, password, name, email, phone, role, created_at)
+INSERT INTO app_user (id, username, password, name, email, phone, role, points, created_at)
 VALUES (
   1,
   'admin',
@@ -7,10 +7,11 @@ VALUES (
   'admin@clinic.local',
   '02-0000-0000',
   'ADMIN',
+  0,
   SYSTIMESTAMP
 );
 
-INSERT INTO app_user (id, username, password, name, email, phone, role, created_at)
+INSERT INTO app_user (id, username, password, name, email, phone, role, points, created_at)
 VALUES (
   2,
   'user',
@@ -19,6 +20,7 @@ VALUES (
   'user@clinic.local',
   '010-1234-5678',
   'USER',
+  2000,
   SYSTIMESTAMP
 );
 
@@ -54,6 +56,36 @@ VALUES (
   120000,
   1
 );
+
+INSERT INTO coupon (id, code, name, discount_amount, min_order_amount, expires_at, active, created_at)
+VALUES (
+  1,
+  'WELCOME5000',
+  '신규 상담 5,000원 할인 쿠폰',
+  5000,
+  30000,
+  NULL,
+  1,
+  SYSTIMESTAMP
+);
+
+INSERT INTO coupon (id, code, name, discount_amount, min_order_amount, expires_at, active, created_at)
+VALUES (
+  2,
+  'SUMMER10000',
+  '여름 시술 상담 10,000원 할인 쿠폰',
+  10000,
+  50000,
+  SYSTIMESTAMP + 90,
+  1,
+  SYSTIMESTAMP
+);
+
+INSERT INTO user_coupon (id, user_id, coupon_id, used, issued_at, used_at)
+VALUES (1, 2, 1, 0, SYSTIMESTAMP, NULL);
+
+INSERT INTO user_coupon (id, user_id, coupon_id, used, issued_at, used_at)
+VALUES (2, 2, 2, 0, SYSTIMESTAMP, NULL);
 
 INSERT INTO notice (id, title, content, author_id, created_at)
 VALUES (
@@ -104,7 +136,8 @@ VALUES (
 );
 
 INSERT INTO payment_order (
-  id, order_number, buyer_id, procedure_product_id, amount, status, method, created_at, paid_at
+  id, order_number, buyer_id, procedure_product_id, product_price, points_used, points_earned,
+  coupon_discount, user_coupon_id, amount, status, method, created_at, paid_at
 )
 VALUES (
   1,
@@ -112,10 +145,18 @@ VALUES (
   2,
   1,
   50000,
+  0,
+  0,
+  0,
+  NULL,
+  50000,
   'PAID',
   'CARD',
   SYSTIMESTAMP,
   SYSTIMESTAMP
 );
+
+INSERT INTO point_history (id, user_id, type, amount, balance_after, order_id, memo, created_at)
+VALUES (1, 2, 'EARN', 2000, 2000, NULL, '회원가입 축하 포인트', SYSTIMESTAMP);
 
 COMMIT;

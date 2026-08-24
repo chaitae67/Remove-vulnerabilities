@@ -37,6 +37,9 @@ public class AppUser {
     private Role role = Role.USER;
 
     @Column(nullable = false)
+    private Integer points = 0;
+
+    @Column(nullable = false)
     private LocalDateTime createdAt;
 
     @PrePersist
@@ -94,6 +97,14 @@ public class AppUser {
 
     public void setRole(Role role) {
         this.role = role;
+    }
+
+    public Integer getPoints() {
+        return points;
+    }
+
+    public void setPoints(Integer points) {
+        this.points = points;
     }
 
     public LocalDateTime getCreatedAt() {

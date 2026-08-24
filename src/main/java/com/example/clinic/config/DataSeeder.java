@@ -1,15 +1,21 @@
 package com.example.clinic.config;
 
 import com.example.clinic.domain.AppUser;
+import com.example.clinic.domain.Coupon;
 import com.example.clinic.domain.Notice;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.domain.QnaPost;
 import com.example.clinic.domain.Role;
+import com.example.clinic.domain.UserCoupon;
 import com.example.clinic.repository.AppUserRepository;
+import com.example.clinic.repository.CouponRepository;
 import com.example.clinic.repository.NoticeRepository;
 import com.example.clinic.repository.ProcedureProductRepository;
 import com.example.clinic.repository.QnaPostRepository;
+import com.example.clinic.repository.UserCouponRepository;
+import com.example.clinic.service.PointService;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,6 +30,9 @@ public class DataSeeder {
         ProcedureProductRepository procedureRepository,
         NoticeRepository noticeRepository,
         QnaPostRepository qnaPostRepository,
+        CouponRepository couponRepository,
+        UserCouponRepository userCouponRepository,
+        PointService pointService,
         PasswordEncoder passwordEncoder
     ) {
         return args -> {
@@ -35,9 +44,11 @@ public class DataSeeder {
                 user.setEmail("admin@clinic.local");
                 user.setPhone("02-0000-0000");
                 user.setRole(Role.ADMIN);
+                user.setPoints(0);
                 return userRepository.save(user);
             });
 
+            boolean memberJustCreated = userRepository.findByUsername("user").isEmpty();
             AppUser member = userRepository.findByUsername("user").orElseGet(() -> {
                 AppUser user = new AppUser();
                 user.setUsername("user");
@@ -46,8 +57,14 @@ public class DataSeeder {
                 user.setEmail("user@clinic.local");
                 user.setPhone("010-1234-5678");
                 user.setRole(Role.USER);
+                user.setPoints(0);
                 return userRepository.save(user);
             });
+
+            // 테스트 계정은 시딩 시 최초 1회, 취약점 진단용으로 넉넉한 웰컴 포인트를 지급한다.
+            if (memberJustCreated) {
+                pointService.grantSignupBonus(member);
+            }
 
             if (procedureRepository.count() == 0) {
                 procedureRepository.save(procedure("바디라인 컨설팅 패키지", "지방흡입", "부위별 라인 분석과 수술 전 검사를 포함한 기본 상담 패키지", "상담, 체형 분석, 수술 가능성 안내를 묶은 입문 패키지입니다. 실제 수술 여부와 비용은 의료진 상담 후 확정됩니다.", 50000));
@@ -80,6 +97,16 @@ public class DataSeeder {
                 post.setAnswer("개인 상태에 따라 다르므로 사진 상담 또는 내원 상담을 권장드립니다. 기본 회복 안내는 상담 시 자세히 설명드릴게요.");
                 qnaPostRepository.save(post);
             }
+
+            if (couponRepository.count() == 0) {
+                Coupon coupon5000 = couponRepository.save(
+                    coupon("WELCOME5000", "신규 상담 5,000원 할인 쿠폰", 5000, 30000, null));
+                Coupon coupon10000 = couponRepository.save(
+                    coupon("SUMMER10000", "여름 시술 상담 10,000원 할인 쿠폰", 10000, 50000, LocalDateTime.now().plusMonths(3)));
+
+                userCouponRepository.save(issue(member, coupon5000));
+                userCouponRepository.save(issue(member, coupon10000));
+            }
         };
     }
 
@@ -91,5 +118,24 @@ public class DataSeeder {
         product.setDescription(description);
         product.setPrice(BigDecimal.valueOf(price));
         return product;
+    }
+
+    private Coupon coupon(String code, String name, int discountAmount, int minOrderAmount, LocalDateTime expiresAt) {
+        Coupon coupon = new Coupon();
+        coupon.setCode(code);
+        coupon.setName(name);
+        coupon.setDiscountAmount(BigDecimal.valueOf(discountAmount));
+        coupon.setMinOrderAmount(BigDecimal.valueOf(minOrderAmount));
+        coupon.setExpiresAt(expiresAt);
+        coupon.setActive(true);
+        return coupon;
+    }
+
+    private UserCoupon issue(AppUser user, Coupon coupon) {
+        UserCoupon userCoupon = new UserCoupon();
+        userCoupon.setUser(user);
+        userCoupon.setCoupon(coupon);
+        userCoupon.setUsed(false);
+        return userCoupon;
     }
 }

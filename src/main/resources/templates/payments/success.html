@@ -15,7 +15,20 @@
         <dl class="summary-list">
             <div><dt>주문번호</dt><dd th:text="${order.orderNumber}">ORDER</dd></div>
             <div><dt>상품</dt><dd th:text="${order.procedureProduct.name}">상품명</dd></div>
-            <div><dt>금액</dt><dd th:text="|${#numbers.formatInteger(order.amount, 0, 'COMMA')}원|">0원</dd></div>
+            <div><dt>상품 금액</dt><dd th:text="|${#numbers.formatInteger(order.productPrice, 0, 'COMMA')}원|">0원</dd></div>
+            <div th:if="${order.pointsUsed > 0}">
+                <dt>포인트 사용</dt>
+                <dd th:text="|-${#numbers.formatInteger(order.pointsUsed, 0, 'COMMA')}P|">0P</dd>
+            </div>
+            <div th:if="${order.couponDiscount.signum() > 0}">
+                <dt>쿠폰 할인</dt>
+                <dd th:text="|-${#numbers.formatInteger(order.couponDiscount, 0, 'COMMA')}원|">0원</dd>
+            </div>
+            <div><dt>결제 금액</dt><dd th:text="|${#numbers.formatInteger(order.amount, 0, 'COMMA')}원|">0원</dd></div>
+            <div th:if="${order.pointsEarned > 0}">
+                <dt>적립 포인트</dt>
+                <dd th:text="|+${#numbers.formatInteger(order.pointsEarned, 0, 'COMMA')}P|">0P</dd>
+            </div>
             <div><dt>상태</dt><dd th:text="${order.status}">PAID</dd></div>
         </dl>
         <a class="button" th:href="@{/}">홈으로</a>
