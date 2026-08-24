@@ -19,6 +19,10 @@
             <span th:if="${review.procedureProduct != null}" class="tag" th:text="${review.procedureProduct.name}">시술명</span>
         </p>
         <div class="article-body" th:utext="${review.content}">본문</div>
+        <div class="attachments" th:if="${!review.attachments.isEmpty()}">
+            <h2>첨부 사진</h2>
+            <a th:each="file : ${review.attachments}" th:href="@{/uploads/reviews/{name}(name=${file.storedFilename})}" th:text="${file.originalFilename}" target="_blank">파일</a>
+        </div>
 
         <div class="actions">
             <a class="button button-outline" th:href="@{/reviews}">목록</a>

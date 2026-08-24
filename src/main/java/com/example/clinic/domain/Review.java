@@ -1,14 +1,19 @@
 package com.example.clinic.domain;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 public class Review {
@@ -37,6 +42,9 @@ public class Review {
 
     private LocalDateTime updatedAt;
 
+    @OneToMany(mappedBy = "review", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    private List<ReviewAttachment> attachments = new ArrayList<>();
+
     @PrePersist
     void prePersist() {
         createdAt = LocalDateTime.now();
@@ -45,6 +53,15 @@ public class Review {
     @PreUpdate
     void preUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    public void addAttachment(ReviewAttachment attachment) {
+        attachments.add(attachment);
+        attachment.setReview(this);
+    }
+
+    public List<ReviewAttachment> getAttachments() {
+        return attachments;
     }
 
     public Long getId() {

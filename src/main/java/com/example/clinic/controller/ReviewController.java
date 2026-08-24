@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.example.clinic.domain.AppUser;
@@ -51,10 +52,11 @@ public class ReviewController {
         @RequestParam int rating,
         @RequestParam(required = false) Long procedureProductId,
         @RequestParam Long writerId,
+        @RequestParam(required = false) MultipartFile[] photos,
         RedirectAttributes redirectAttributes
     ) {
         AppUser writer = userService.findById(writerId);
-        Review review = reviewService.create(title, content, rating, procedureProductId, writer);
+        Review review = reviewService.create(title, content, rating, procedureProductId, writer, photos);
         redirectAttributes.addFlashAttribute("message", "후기가 등록되었습니다.");
         return "redirect:/reviews/" + review.getId();
     }
@@ -86,9 +88,10 @@ public class ReviewController {
         @RequestParam String content,
         @RequestParam int rating,
         @RequestParam(required = false) Long procedureProductId,
+        @RequestParam(required = false) MultipartFile[] photos,
         RedirectAttributes redirectAttributes
     ) {
-        reviewService.update(id, title, content, rating, procedureProductId);
+        reviewService.update(id, title, content, rating, procedureProductId, photos);
         redirectAttributes.addFlashAttribute("message", "후기가 수정되었습니다.");
         return "redirect:/reviews/" + id;
     }

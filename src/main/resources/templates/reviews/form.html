@@ -12,7 +12,7 @@
     <section class="panel">
         <p class="eyebrow">Review</p>
         <h1 th:text="${review == null ? '후기 작성' : '후기 수정'}">후기 작성</h1>
-        <form class="stack-form" th:action="${review == null ? '/reviews' : '/reviews/' + review.id + '/edit'}" method="post">
+        <form class="stack-form" th:action="${review == null ? '/reviews' : '/reviews/' + review.id + '/edit'}" method="post" enctype="multipart/form-data">
             <input th:if="${review == null}" type="hidden" name="writerId" th:value="${currentUserId}">
             <input name="title" placeholder="제목" required th:value="${review != null ? review.title : ''}">
             <select name="procedureProductId">
@@ -30,6 +30,11 @@
                         th:selected="${review != null and review.rating == score}">★★★★★</option>
             </select>
             <textarea name="content" rows="10" placeholder="시술 경험을 자세히 남겨주세요" required th:text="${review != null ? review.content : ''}"></textarea>
+            <label class="check">사진 첨부 (이미지 파일만 업로드 가능)</label>
+            <input name="photos" type="file" accept="image/*" multiple>
+            <div th:if="${review != null and !review.attachments.isEmpty()}" class="attachments">
+                <span th:each="file : ${review.attachments}" th:text="${file.originalFilename}">첨부파일</span>
+            </div>
             <button class="button" type="submit">저장</button>
         </form>
     </section>
