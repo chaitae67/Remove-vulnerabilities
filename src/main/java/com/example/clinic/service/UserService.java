@@ -41,4 +41,23 @@ public class UserService {
         return userRepository.findByUsername(username)
             .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
     }
+
+    public AppUser findById(Long id) {
+        return userRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+    }
+
+    @Transactional
+    public AppUser updateProfile(Long userId, AppUser form) {
+        AppUser user = findById(userId);
+        user.setName(form.getName());
+        user.setEmail(form.getEmail());
+        user.setPhone(form.getPhone());
+        // 폼 화면에는 role 입력란이 없지만, AppUser 엔티티를 통째로 바인딩 받다 보니
+        // 요청 파라미터에 role 값이 같이 오면 그대로 반영된다.
+        if (form.getRole() != null) {
+            user.setRole(form.getRole());
+        }
+        return userRepository.save(user);
+    }
 }
