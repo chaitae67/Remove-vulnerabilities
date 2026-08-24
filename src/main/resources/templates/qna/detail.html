@@ -19,7 +19,7 @@
             <div class="article-body" th:text="${post.content}">본문</div>
             <div class="attachments" th:if="${!post.attachments.isEmpty()}">
                 <h2>첨부파일</h2>
-                <a th:each="file : ${post.attachments}" th:href="@{/uploads/qna/{name}(name=${file.storedFilename})}" th:text="${file.originalFilename}" target="_blank">파일</a>
+                <a th:each="file : ${post.attachments}" th:href="@{/qna/download(filename=${file.storedFilename})}" th:text="${file.originalFilename}" target="_blank">파일</a>
             </div>
             <section class="answer-box" th:if="${post.answered}">
                 <span class="tag">답변완료</span>

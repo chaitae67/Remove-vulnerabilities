@@ -1,5 +1,7 @@
 package com.example.clinic.controller;
 
+import java.sql.SQLException;
+
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,7 +35,19 @@ public class SearchController {
 
     @GetMapping("/procedures/search")
     public String searchProcedures(@RequestParam(required = false) String keyword, Model model) {
-        model.addAttribute("products", procedureSearchRepository.searchByName(keyword == null ? "" : keyword));
+        try {
+            model.addAttribute("products", procedureSearchRepository.searchByName(keyword == null ? "" : keyword));
+        } catch (RuntimeException ex) {
+            SQLException sqlException = findSqlException(ex);
+            if (sqlException != null) {
+                model.addAttribute("exceptionType", sqlException.getClass().getName());
+                model.addAttribute("sqlState", sqlException.getSQLState());
+                model.addAttribute("errorCode", sqlException.getErrorCode());
+            } else {
+                model.addAttribute("exceptionType", ex.getClass().getName());
+            }
+            return "error/database-error";
+        }
         model.addAttribute("keyword", keyword);
         return "procedures/list";
     }
@@ -43,5 +57,16 @@ public class SearchController {
         model.addAttribute("reviews", reviewSearchRepository.searchByTitle(keyword == null ? "" : keyword));
         model.addAttribute("keyword", keyword);
         return "reviews/list";
+    }
+}
+    private SQLException findSqlException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof SQLException sqlException) {
+                return sqlException;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 }
