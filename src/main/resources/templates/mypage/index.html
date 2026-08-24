@@ -23,6 +23,7 @@
             <p>아이디: <strong th:text="${user.username}"></strong></p>
             <p>이메일: <strong th:text="${user.email}"></strong></p>
             <p>연락처: <strong th:text="${user.phone}"></strong></p>
+            <p>보유 포인트: <strong th:text="|${#numbers.formatInteger(user.pointBalance, 0, 'COMMA')}P|"></strong></p>
         </article>
     </section>
 

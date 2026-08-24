@@ -1,11 +1,13 @@
 package com.example.clinic.config;
 
 import com.example.clinic.domain.AppUser;
+import com.example.clinic.domain.Coupon;
 import com.example.clinic.domain.Notice;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.domain.QnaPost;
 import com.example.clinic.domain.Role;
 import com.example.clinic.repository.AppUserRepository;
+import com.example.clinic.repository.CouponRepository;
 import com.example.clinic.repository.NoticeRepository;
 import com.example.clinic.repository.ProcedureProductRepository;
 import com.example.clinic.repository.QnaPostRepository;
@@ -24,7 +26,8 @@ public class DataSeeder {
         ProcedureProductRepository procedureRepository,
         NoticeRepository noticeRepository,
         QnaPostRepository qnaPostRepository,
-        PasswordEncoder passwordEncoder
+        PasswordEncoder passwordEncoder,
+        CouponRepository couponRepository
     ) {
         return args -> {
             AppUser admin = userRepository.findByUsername("admin").orElseGet(() -> {
@@ -35,6 +38,7 @@ public class DataSeeder {
                 user.setEmail("admin@clinic.local");
                 user.setPhone("02-0000-0000");
                 user.setRole(Role.ADMIN);
+                user.setPointBalance(10000);
                 return userRepository.save(user);
             });
 
@@ -46,8 +50,25 @@ public class DataSeeder {
                 user.setEmail("user@clinic.local");
                 user.setPhone("010-1234-5678");
                 user.setRole(Role.USER);
+                user.setPointBalance(5000);
                 return userRepository.save(user);
             });
+
+            if (couponRepository.count() == 0) {
+                Coupon welcome = new Coupon();
+                welcome.setCode("WELCOME10000");
+                welcome.setName("신규 회원 1만원 할인");
+                welcome.setDiscountAmount(10000);
+                welcome.setExpiresAt(java.time.LocalDate.now().plusYears(1));
+                couponRepository.save(welcome);
+
+                Coupon secret = new Coupon();
+                secret.setCode("ADMIN50000");
+                secret.setName("관리자 전용 5만원 할인 (실습용)");
+                secret.setDiscountAmount(50000);
+                secret.setExpiresAt(java.time.LocalDate.now().plusYears(1));
+                couponRepository.save(secret);
+            }
 
             if (procedureRepository.count() == 0) {
                 procedureRepository.save(procedure("바디라인 컨설팅 패키지", "지방흡입", "부위별 라인 분석과 수술 전 검사를 포함한 기본 상담 패키지", "상담, 체형 분석, 수술 가능성 안내를 묶은 입문 패키지입니다. 실제 수술 여부와 비용은 의료진 상담 후 확정됩니다.", 50000));

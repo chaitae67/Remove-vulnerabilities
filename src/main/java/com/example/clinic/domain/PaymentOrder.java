@@ -31,6 +31,21 @@ public class PaymentOrder {
     @Column(nullable = false, precision = 12, scale = 0)
     private BigDecimal amount;
 
+    @Column(nullable = false, precision = 12, scale = 0)
+    private BigDecimal originalAmount;
+
+    @Column(nullable = false)
+    private int couponDiscount;
+
+    @Column(nullable = false)
+    private int pointsUsed;
+
+    @Column(nullable = false)
+    private int earnedPoints;
+
+    @ManyToOne
+    private Coupon coupon;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private PaymentStatus status = PaymentStatus.READY;
@@ -83,6 +98,17 @@ public class PaymentOrder {
     public void setAmount(BigDecimal amount) {
         this.amount = amount;
     }
+
+    public BigDecimal getOriginalAmount() { return originalAmount; }
+    public void setOriginalAmount(BigDecimal originalAmount) { this.originalAmount = originalAmount; }
+    public int getCouponDiscount() { return couponDiscount; }
+    public void setCouponDiscount(int couponDiscount) { this.couponDiscount = couponDiscount; }
+    public int getPointsUsed() { return pointsUsed; }
+    public void setPointsUsed(int pointsUsed) { this.pointsUsed = pointsUsed; }
+    public int getEarnedPoints() { return earnedPoints; }
+    public void setEarnedPoints(int earnedPoints) { this.earnedPoints = earnedPoints; }
+    public Coupon getCoupon() { return coupon; }
+    public void setCoupon(Coupon coupon) { this.coupon = coupon; }
 
     public PaymentStatus getStatus() {
         return status;

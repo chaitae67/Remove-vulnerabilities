@@ -18,12 +18,16 @@
             <label for="quantity">수량</label>
             <input id="quantity" name="quantity" type="number" value="1" min="1" required>
 
-            <label for="couponCode">쿠폰 코드</label>
-            <div class="form-row">
-                <input id="couponCode" name="couponCode" placeholder="WELCOME10">
-                <button id="apply-coupon" class="button button-small" type="button">쿠폰 적용</button>
-            </div>
+            <p>보유 포인트: <strong th:text="|${#numbers.formatInteger(user.pointBalance, 0, 'COMMA')}P|">0P</strong></p>
+            <label for="usePoints">사용할 포인트</label>
+            <input id="usePoints" name="usePoints" type="number" value="0">
 
+            <label for="couponCode">쿠폰</label>
+            <select id="couponCode" name="couponCode">
+                <option value="">쿠폰 사용 안 함</option>
+                <option th:each="coupon : ${coupons}" th:value="${coupon.code}" th:data-discount="${coupon.discountAmount}"
+                        th:text="|${coupon.name} (${#numbers.formatInteger(coupon.discountAmount, 0, 'COMMA')}원)|">쿠폰</option>
+            </select>
             <select name="method" required>
                 <option value="CARD">신용카드</option>
                 <option value="BANK_TRANSFER">무통장입금</option>
@@ -42,6 +46,7 @@
             <button class="button" type="submit">테스트 결제 완료</button>
         </form>
         <p class="muted">실제 PG 연동 전까지 사용하는 모의 결제 화면입니다.</p>
+        <p class="muted">취약점 진단 실습: 결제 요청의 포인트와 쿠폰 파라미터를 관찰해 보세요.</p>
     </section>
 </main>
 <div th:replace="~{fragments/footer :: footer}"></div>
@@ -51,6 +56,7 @@
     const couponInput = document.getElementById('couponCode');
     const discountInput = document.getElementById('discountAmount');
     const feeInput = document.getElementById('fee');
+    const pointsInput = document.getElementById('usePoints');
 
     function formatWon(value) {
         return `${Number(value).toLocaleString('ko-KR')}원`;
@@ -61,25 +67,24 @@
         const quantity = Number(quantityInput.value);
         const discount = Number(discountInput.value);
         const fee = Number(feeInput.value);
+        const points = Number(pointsInput.value);
         const subtotal = price * quantity;
 
         document.getElementById('subtotal').textContent = formatWon(subtotal);
         document.getElementById('discount-display').textContent = formatWon(discount);
-        document.getElementById('total').textContent = formatWon(subtotal - discount + fee);
+        document.getElementById('total').textContent = formatWon(subtotal - discount - points + fee);
     }
 
-    document.getElementById('apply-coupon').addEventListener('click', () => {
-        const subtotal = Number(priceInput.value) * Number(quantityInput.value);
-        discountInput.value = couponInput.value.trim().toUpperCase() === 'WELCOME10'
-            ? Math.floor(subtotal * 0.1)
-            : 0;
+    couponInput.addEventListener('change', () => {
+        const option = couponInput.options[couponInput.selectedIndex];
+        discountInput.value = option.dataset.discount || 0;
         updateAmount();
     });
 
     quantityInput.addEventListener('input', () => {
-        discountInput.value = 0;
         updateAmount();
     });
+    pointsInput.addEventListener('input', updateAmount);
 
     updateAmount();
 </script>

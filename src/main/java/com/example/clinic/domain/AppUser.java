@@ -39,6 +39,9 @@ public class AppUser {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
+    @Column(nullable = false)
+    private int pointBalance = 0;
+
     @PrePersist
     void prePersist() {
         createdAt = LocalDateTime.now();
@@ -98,5 +101,13 @@ public class AppUser {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public int getPointBalance() {
+        return pointBalance;
+    }
+
+    public void setPointBalance(int pointBalance) {
+        this.pointBalance = pointBalance;
     }
 }

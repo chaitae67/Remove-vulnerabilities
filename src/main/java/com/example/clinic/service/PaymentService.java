@@ -1,6 +1,7 @@
 package com.example.clinic.service;
 
 import com.example.clinic.domain.AppUser;
+import com.example.clinic.domain.Coupon;
 import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.PaymentStatus;
 import com.example.clinic.domain.ProcedureProduct;
@@ -16,9 +17,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class PaymentService {
 
     private final PaymentOrderRepository paymentOrderRepository;
+    private final CouponService couponService;
 
-    public PaymentService(PaymentOrderRepository paymentOrderRepository) {
+    public PaymentService(PaymentOrderRepository paymentOrderRepository, CouponService couponService) {
         this.paymentOrderRepository = paymentOrderRepository;
+        this.couponService = couponService;
     }
 
     @Transactional
@@ -29,18 +32,29 @@ public class PaymentService {
         BigDecimal price,
         int quantity,
         BigDecimal discountAmount,
-        BigDecimal fee
+        BigDecimal fee,
+        int usePoints,
+        String couponCode
     ) {
-        BigDecimal amount = price
-            .multiply(BigDecimal.valueOf(quantity))
+        Coupon coupon = couponCode == null || couponCode.isBlank() ? null : couponService.findByCode(couponCode);
+        BigDecimal originalAmount = price.multiply(BigDecimal.valueOf(quantity));
+        BigDecimal finalAmount = originalAmount
             .subtract(discountAmount)
+            .subtract(BigDecimal.valueOf(usePoints))
             .add(fee);
+        int earnedPoints = finalAmount.intValue() / 100;
+        buyer.setPointBalance(buyer.getPointBalance() - usePoints + earnedPoints);
 
         PaymentOrder order = new PaymentOrder();
         order.setOrderNumber("CLINIC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         order.setBuyer(buyer);
         order.setProcedureProduct(procedureProduct);
-        order.setAmount(amount);
+        order.setOriginalAmount(originalAmount);
+        order.setCoupon(coupon);
+        order.setCouponDiscount(discountAmount.intValue());
+        order.setPointsUsed(usePoints);
+        order.setEarnedPoints(earnedPoints);
+        order.setAmount(finalAmount);
         order.setMethod(method);
         order.setStatus(PaymentStatus.PAID);
         order.setPaidAt(LocalDateTime.now());

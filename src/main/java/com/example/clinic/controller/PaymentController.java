@@ -4,6 +4,7 @@ import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.service.PaymentService;
+import com.example.clinic.service.CouponService;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.UserService;
 import java.math.BigDecimal;
@@ -21,16 +22,21 @@ public class PaymentController {
     private final ProcedureService procedureService;
     private final PaymentService paymentService;
     private final UserService userService;
+    private final CouponService couponService;
 
-    public PaymentController(ProcedureService procedureService, PaymentService paymentService, UserService userService) {
+    public PaymentController(ProcedureService procedureService, PaymentService paymentService, UserService userService,
+                             CouponService couponService) {
         this.procedureService = procedureService;
         this.paymentService = paymentService;
         this.userService = userService;
+        this.couponService = couponService;
     }
 
     @GetMapping("/payments/checkout/{procedureId}")
-    public String checkout(@PathVariable Long procedureId, Model model) {
+    public String checkout(@PathVariable Long procedureId, Principal principal, Model model) {
         model.addAttribute("procedure", procedureService.findById(procedureId));
+        model.addAttribute("user", userService.findByUsername(principal.getName()));
+        model.addAttribute("coupons", couponService.findActiveCoupons());
         return "payments/checkout";
     }
 
@@ -42,6 +48,8 @@ public class PaymentController {
         @RequestParam int quantity,
         @RequestParam(defaultValue = "0") BigDecimal discountAmount,
         @RequestParam(defaultValue = "0") BigDecimal fee,
+        @RequestParam(defaultValue = "0") int usePoints,
+        @RequestParam(required = false) String couponCode,
         Principal principal
     ) {
         AppUser buyer = userService.findByUsername(principal.getName());
@@ -53,7 +61,9 @@ public class PaymentController {
             price,
             quantity,
             discountAmount,
-            fee
+            fee,
+            usePoints,
+            couponCode
         );
         return "redirect:/payments/success/" + order.getOrderNumber();
     }
