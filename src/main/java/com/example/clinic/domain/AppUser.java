@@ -42,6 +42,9 @@ public class AppUser {
     @Column(nullable = false)
     private int pointBalance = 0;
 
+    @Column(nullable = false)
+    private boolean withdrawn = false;
+
     @PrePersist
     void prePersist() {
         createdAt = LocalDateTime.now();
@@ -109,5 +112,13 @@ public class AppUser {
 
     public void setPointBalance(int pointBalance) {
         this.pointBalance = pointBalance;
+    }
+    
+        public boolean isWithdrawn() {
+        return withdrawn;
+    }
+
+    public void withdraw() {
+        this.withdrawn = true;
     }
 }

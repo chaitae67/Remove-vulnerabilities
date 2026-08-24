@@ -41,6 +41,7 @@ public class UserService {
         return userRepository.findByUsername(username)
             .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
     }
+<<<<<<< HEAD
 
     public AppUser findById(Long id) {
         return userRepository.findById(id)
@@ -59,5 +60,17 @@ public class UserService {
             user.setRole(form.getRole());
         }
         return userRepository.save(user);
+=======
+    
+        @Transactional
+    public void withdraw(String username, String rawPassword) {
+        AppUser user = findByUsername(username);
+
+        if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
+            throw new IllegalArgumentException("비밀번호가 일치하지 않습니다.");
+        }
+
+        user.withdraw();
+>>>>>>> d656707562c653f5c466e17a0e3dd819bfbe35ec
     }
 }

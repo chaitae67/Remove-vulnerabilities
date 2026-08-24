@@ -1,5 +1,6 @@
 package com.example.clinic.config;
 
+import com.example.clinic.repository.AppUserRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -12,8 +13,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
-import com.example.clinic.repository.AppUserRepository;
-
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
@@ -22,21 +21,35 @@ public class SecurityConfig {
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/", "/login", "/register", "/css/**", "/js/**", "/uploads/**", "/h2-console/**","/error").permitAll()
-                .requestMatchers("/procedures","procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/consultations").permitAll()
-                .requestMatchers("/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/qna/*/answer").hasRole("ADMIN")
+                .requestMatchers(
+                    "/", "/login", "/register", "/css/**", "/js/**",
+                    "/uploads/**", "/h2-console/**", "/error"
+                ).permitAll()
+                .requestMatchers(
+                    "/procedures", "/procedures/*", "/notices",
+                    "/notices/*", "/qna", "/qna/*", "/consultations"
+                ).permitAll()
+                .requestMatchers(
+                    "/admin/**", "/notices/new", "/notices/*/edit",
+                    "/notices/*/delete", "/qna/*/answer"
+                ).hasRole("ADMIN")
                 .requestMatchers("/qna/new", "/payments/**").authenticated()
-                .anyRequest().authenticated())
+                .anyRequest().authenticated()
+            )
             .formLogin(form -> form
                 .loginPage("/login")
                 .defaultSuccessUrl("/", true)
-                .permitAll())
+                .permitAll()
+            )
             .logout(logout -> logout
                 .logoutRequestMatcher(new AntPathRequestMatcher("/logout"))
                 .logoutSuccessUrl("/")
-                .permitAll())
+                .permitAll()
+            )
             .csrf(csrf -> csrf.ignoringRequestMatchers("/h2-console/**"))
-            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
+            .headers(headers ->
+                headers.frameOptions(frame -> frame.sameOrigin())
+            );
 
         return http.build();
     }
@@ -44,19 +57,33 @@ public class SecurityConfig {
     @Bean
     UserDetailsService userDetailsService(AppUserRepository userRepository) {
         return username -> userRepository.findByUsername(username)
-            .map(user -> org.springframework.security.core.userdetails.User
-                .withUsername(user.getUsername())
-                .password(user.getPassword())
-                .roles(user.getRole().name())
-                .build())
-            .orElseThrow(() -> new UsernameNotFoundException("사용자를 찾을 수 없습니다."));
+            .map(user -> {
+                if (user.isWithdrawn()) {
+                    throw new UsernameNotFoundException("탈퇴한 계정입니다.");
+                }
+
+                return org.springframework.security.core.userdetails.User
+                    .withUsername(user.getUsername())
+                    .password(user.getPassword())
+                    .roles(user.getRole().name())
+                    .build();
+            })
+            .orElseThrow(() ->
+                new UsernameNotFoundException("사용자를 찾을 수 없습니다.")
+            );
     }
 
     @Bean
-    DaoAuthenticationProvider authenticationProvider(UserDetailsService userDetailsService, PasswordEncoder passwordEncoder) {
-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+    DaoAuthenticationProvider authenticationProvider(
+            UserDetailsService userDetailsService,
+            PasswordEncoder passwordEncoder
+    ) {
+        DaoAuthenticationProvider provider =
+                new DaoAuthenticationProvider();
+
         provider.setUserDetailsService(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder);
+
         return provider;
     }
 
