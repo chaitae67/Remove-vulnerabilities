@@ -1,6 +1,7 @@
 package com.example.clinic.service;
 
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -8,6 +9,8 @@ import java.util.List;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -67,6 +70,21 @@ public class QnaService {
         post.setAnswer(answer);
         post.setAnswered(true);
         post.setAnsweredAt(LocalDateTime.now());
+    }
+
+    public Resource loadAttachment(String filename) {
+        try {
+            // 취약점: 사용자가 보낸 filename을 업로드 경로에 그대로 붙이고
+            // normalize() / 상위 경로(..) 검증을 하지 않음 -> Path Traversal
+            Path filePath = qnaUploadPath.resolve(filename);
+            Resource resource = new UrlResource(filePath.toUri());
+            if (resource.exists() && resource.isReadable()) {
+                return resource;
+            }
+            throw new IllegalArgumentException("파일을 찾을 수 없습니다.");
+        } catch (MalformedURLException ex) {
+            throw new IllegalStateException("파일을 불러오는 중 오류가 발생했습니다.", ex);
+        }
     }
 
     private QnaAttachment store(MultipartFile file) {
