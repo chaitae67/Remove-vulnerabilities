@@ -18,47 +18,13 @@
     <section class="content-band">
         <div class="section-head">
             <h2>회원 정보</h2>
+            <a th:href="@{/mypage/edit(userId=${user.id})}">수정</a>
         </div>
         <article class="card">
             <p>아이디: <strong th:text="${user.username}"></strong></p>
             <p>이메일: <strong th:text="${user.email}"></strong></p>
             <p>연락처: <strong th:text="${user.phone}"></strong></p>
-            <p>보유 포인트: <strong th:text="|${#numbers.formatInteger(pointBalance, 0, 'COMMA')}P|">0P</strong></p>
         </article>
-    </section>
-
-    <section class="content-band">
-        <div class="section-head">
-            <h2>포인트 내역</h2>
-        </div>
-        <ul class="board-list">
-            <li th:each="h : ${pointHistory}">
-                <span>
-                    <span th:if="${h.type.name() == 'EARN'}" th:text="|적립 +${#numbers.formatInteger(h.amount, 0, 'COMMA')}P|">적립</span>
-                    <span th:if="${h.type.name() == 'USE'}" th:text="|사용 -${#numbers.formatInteger(h.amount, 0, 'COMMA')}P|">사용</span>
-                    <span class="muted" th:if="${h.memo}" th:text="' · ' + ${h.memo}"></span>
-                </span>
-                <time th:text="${#temporals.format(h.createdAt, 'yyyy-MM-dd HH:mm')}">일시</time>
-            </li>
-            <li th:if="${pointHistory.isEmpty()}">
-                <span>포인트 내역이 없습니다.</span>
-            </li>
-        </ul>
-    </section>
-
-    <section class="content-band">
-        <div class="section-head">
-            <h2>보유 쿠폰</h2>
-        </div>
-        <ul class="board-list">
-            <li th:each="uc : ${myCoupons}">
-                <span th:text="|${uc.coupon.name} (-${#numbers.formatInteger(uc.coupon.discountAmount, 0, 'COMMA')}원)|">쿠폰명</span>
-                <span class="state" th:text="${uc.used ? '사용완료' : '사용가능'}">상태</span>
-            </li>
-            <li th:if="${myCoupons.isEmpty()}">
-                <span>보유한 쿠폰이 없습니다.</span>
-            </li>
-        </ul>
     </section>
 
     <section class="content-band">

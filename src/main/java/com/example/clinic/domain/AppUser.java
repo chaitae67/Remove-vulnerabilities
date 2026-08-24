@@ -37,10 +37,10 @@ public class AppUser {
     private Role role = Role.USER;
 
     @Column(nullable = false)
-    private Integer points = 0;
+    private LocalDateTime createdAt;
 
     @Column(nullable = false)
-    private LocalDateTime createdAt;
+    private int pointBalance = 0;
 
     @PrePersist
     void prePersist() {
@@ -99,15 +99,15 @@ public class AppUser {
         this.role = role;
     }
 
-    public Integer getPoints() {
-        return points;
-    }
-
-    public void setPoints(Integer points) {
-        this.points = points;
-    }
-
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public int getPointBalance() {
+        return pointBalance;
+    }
+
+    public void setPointBalance(int pointBalance) {
+        this.pointBalance = pointBalance;
     }
 }

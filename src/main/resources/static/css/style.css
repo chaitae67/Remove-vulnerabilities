@@ -474,6 +474,42 @@ textarea {
     width: auto;
 }
 
+.profile-form {
+    margin-top: 24px;
+    gap: 18px;
+}
+
+.field {
+    display: grid;
+    gap: 6px;
+}
+
+.field span {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--muted);
+}
+
+.field input:focus {
+    outline: none;
+    border-color: var(--green);
+    box-shadow: 0 0 0 3px rgba(47, 111, 101, 0.14);
+}
+
+.field input:disabled {
+    background: var(--soft);
+    color: var(--muted);
+}
+
+.profile-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 8px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+}
+
 .site-footer {
     display: grid;
     grid-template-columns: 1fr minmax(280px, 620px);

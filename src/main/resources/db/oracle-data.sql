@@ -1,4 +1,4 @@
-INSERT INTO app_user (id, username, password, name, email, phone, role, points, created_at)
+INSERT INTO app_user (id, username, password, name, email, phone, role, point_balance, created_at)
 VALUES (
   1,
   'admin',
@@ -7,11 +7,11 @@ VALUES (
   'admin@clinic.local',
   '02-0000-0000',
   'ADMIN',
-  0,
+  10000,
   SYSTIMESTAMP
 );
 
-INSERT INTO app_user (id, username, password, name, email, phone, role, points, created_at)
+INSERT INTO app_user (id, username, password, name, email, phone, role, point_balance, created_at)
 VALUES (
   2,
   'user',
@@ -20,7 +20,7 @@ VALUES (
   'user@clinic.local',
   '010-1234-5678',
   'USER',
-  2000,
+  5000,
   SYSTIMESTAMP
 );
 
@@ -57,36 +57,6 @@ VALUES (
   1
 );
 
-INSERT INTO coupon (id, code, name, discount_amount, min_order_amount, expires_at, active, created_at)
-VALUES (
-  1,
-  'WELCOME5000',
-  '신규 상담 5,000원 할인 쿠폰',
-  5000,
-  30000,
-  NULL,
-  1,
-  SYSTIMESTAMP
-);
-
-INSERT INTO coupon (id, code, name, discount_amount, min_order_amount, expires_at, active, created_at)
-VALUES (
-  2,
-  'SUMMER10000',
-  '여름 시술 상담 10,000원 할인 쿠폰',
-  10000,
-  50000,
-  SYSTIMESTAMP + 90,
-  1,
-  SYSTIMESTAMP
-);
-
-INSERT INTO user_coupon (id, user_id, coupon_id, used, issued_at, used_at)
-VALUES (1, 2, 1, 0, SYSTIMESTAMP, NULL);
-
-INSERT INTO user_coupon (id, user_id, coupon_id, used, issued_at, used_at)
-VALUES (2, 2, 2, 0, SYSTIMESTAMP, NULL);
-
 INSERT INTO notice (id, title, content, author_id, created_at)
 VALUES (
   1,
@@ -121,6 +91,23 @@ VALUES (
   SYSTIMESTAMP
 );
 
+INSERT INTO review (id, title, content, rating, writer_id, procedure_product_id, created_at)
+VALUES (
+  1,
+  '상담부터 관리까지 꼼꼼하게 챙겨주셨어요',
+  '체형 분석부터 회복 케어 일정까지 자세히 안내해 주셔서 만족스러웠습니다.',
+  5,
+  2,
+  1,
+  SYSTIMESTAMP
+);
+
+INSERT INTO coupon (id, code, name, discount_amount, active, expires_at)
+VALUES (1, 'WELCOME10000', '신규 회원 1만원 할인', 10000, 1, SYSDATE + 365);
+
+INSERT INTO coupon (id, code, name, discount_amount, active, expires_at)
+VALUES (2, 'ADMIN50000', '관리자 전용 5만원 할인 (실습용)', 50000, 1, SYSDATE + 365);
+
 INSERT INTO quick_consultation (
   id, name, phone, area, preferred_contact, message, privacy_agreed, created_at
 )
@@ -136,8 +123,8 @@ VALUES (
 );
 
 INSERT INTO payment_order (
-  id, order_number, buyer_id, procedure_product_id, product_price, points_used, points_earned,
-  coupon_discount, user_coupon_id, amount, status, method, created_at, paid_at
+  id, order_number, buyer_id, procedure_product_id, amount, original_amount,
+  coupon_discount, points_used, earned_points, coupon_id, status, method, created_at, paid_at
 )
 VALUES (
   1,
@@ -145,18 +132,15 @@ VALUES (
   2,
   1,
   50000,
-  0,
-  0,
-  0,
-  NULL,
   50000,
+  0,
+  0,
+  500,
+  NULL,
   'PAID',
   'CARD',
   SYSTIMESTAMP,
   SYSTIMESTAMP
 );
-
-INSERT INTO point_history (id, user_id, type, amount, balance_after, order_id, memo, created_at)
-VALUES (1, 2, 'EARN', 2000, 2000, NULL, '회원가입 축하 포인트', SYSTIMESTAMP);
 
 COMMIT;

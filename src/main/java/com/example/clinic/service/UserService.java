@@ -12,12 +12,10 @@ public class UserService {
 
     private final AppUserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final PointService pointService;
 
-    public UserService(AppUserRepository userRepository, PasswordEncoder passwordEncoder, PointService pointService) {
+    public UserService(AppUserRepository userRepository, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
-        this.pointService = pointService;
     }
 
     @Transactional
@@ -36,12 +34,7 @@ public class UserService {
         user.setEmail(email);
         user.setPhone(phone);
         user.setRole(Role.USER);
-        user = userRepository.save(user);
-
-        // 신규 가입 축하 포인트 지급
-        pointService.grantSignupBonus(user);
-
-        return user;
+        return userRepository.save(user);
     }
 
     public AppUser findByUsername(String username) {
@@ -52,5 +45,19 @@ public class UserService {
     public AppUser findById(Long id) {
         return userRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+    }
+
+    @Transactional
+    public AppUser updateProfile(Long userId, AppUser form) {
+        AppUser user = findById(userId);
+        user.setName(form.getName());
+        user.setEmail(form.getEmail());
+        user.setPhone(form.getPhone());
+        // 폼 화면에는 role 입력란이 없지만, AppUser 엔티티를 통째로 바인딩 받다 보니
+        // 요청 파라미터에 role 값이 같이 오면 그대로 반영된다.
+        if (form.getRole() != null) {
+            user.setRole(form.getRole());
+        }
+        return userRepository.save(user);
     }
 }

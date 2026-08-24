@@ -3,11 +3,11 @@ package com.example.clinic.controller;
 import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.ProcedureProduct;
-import com.example.clinic.service.CouponService;
 import com.example.clinic.service.PaymentService;
-import com.example.clinic.service.PointService;
+import com.example.clinic.service.CouponService;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.UserService;
+import java.math.BigDecimal;
 import java.security.Principal;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 @Controller
 public class PaymentController {
@@ -23,43 +22,50 @@ public class PaymentController {
     private final ProcedureService procedureService;
     private final PaymentService paymentService;
     private final UserService userService;
-    private final PointService pointService;
     private final CouponService couponService;
 
-    public PaymentController(ProcedureService procedureService, PaymentService paymentService,
-                              UserService userService, PointService pointService, CouponService couponService) {
+    public PaymentController(ProcedureService procedureService, PaymentService paymentService, UserService userService,
+                             CouponService couponService) {
         this.procedureService = procedureService;
         this.paymentService = paymentService;
         this.userService = userService;
-        this.pointService = pointService;
         this.couponService = couponService;
     }
 
     @GetMapping("/payments/checkout/{procedureId}")
-    public String checkout(@PathVariable Long procedureId, Model model, Principal principal) {
-        AppUser buyer = userService.findByUsername(principal.getName());
+    public String checkout(@PathVariable Long procedureId, Principal principal, Model model) {
         model.addAttribute("procedure", procedureService.findById(procedureId));
-        model.addAttribute("pointBalance", pointService.getBalance(buyer));
-        model.addAttribute("availableCoupons", couponService.findAvailableCoupons(buyer));
+        model.addAttribute("user", userService.findByUsername(principal.getName()));
+        model.addAttribute("coupons", couponService.findActiveCoupons());
         return "payments/checkout";
     }
 
     @PostMapping("/payments/checkout/{procedureId}")
-    public String pay(@PathVariable Long procedureId,
-                       @RequestParam String method,
-                       @RequestParam(defaultValue = "0") Integer usePoints,
-                       @RequestParam(required = false) Long couponId,
-                       Principal principal,
-                       RedirectAttributes redirectAttributes) {
+    public String pay(
+        @PathVariable Long procedureId,
+        @RequestParam String method,
+        @RequestParam BigDecimal price,
+        @RequestParam int quantity,
+        @RequestParam(defaultValue = "0") BigDecimal discountAmount,
+        @RequestParam(defaultValue = "0") BigDecimal fee,
+        @RequestParam(defaultValue = "0") int usePoints,
+        @RequestParam(required = false) String couponCode,
+        Principal principal
+    ) {
         AppUser buyer = userService.findByUsername(principal.getName());
         ProcedureProduct procedure = procedureService.findById(procedureId);
-        try {
-            PaymentOrder order = paymentService.createPaidOrder(buyer, procedure, method, usePoints, couponId);
-            return "redirect:/payments/success/" + order.getOrderNumber();
-        } catch (IllegalArgumentException ex) {
-            redirectAttributes.addFlashAttribute("error", ex.getMessage());
-            return "redirect:/payments/checkout/" + procedureId;
-        }
+        PaymentOrder order = paymentService.createPaidOrder(
+            buyer,
+            procedure,
+            method,
+            price,
+            quantity,
+            discountAmount,
+            fee,
+            usePoints,
+            couponCode
+        );
+        return "redirect:/payments/success/" + order.getOrderNumber();
     }
 
     @GetMapping("/payments/success/{orderNumber}")

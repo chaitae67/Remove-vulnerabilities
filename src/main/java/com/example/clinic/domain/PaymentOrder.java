@@ -28,29 +28,23 @@ public class PaymentOrder {
     @ManyToOne(optional = false)
     private ProcedureProduct procedureProduct;
 
-    /** 할인 적용 전 상품 원가. */
-    @Column(nullable = false, precision = 12, scale = 0)
-    private BigDecimal productPrice;
-
-    /** 이번 결제에 사용한 포인트. */
-    @Column(nullable = false)
-    private Integer pointsUsed = 0;
-
-    /** 이번 결제로 새로 적립된 포인트. */
-    @Column(nullable = false)
-    private Integer pointsEarned = 0;
-
-    /** 쿠폰으로 할인된 금액. */
-    @Column(nullable = false, precision = 12, scale = 0)
-    private BigDecimal couponDiscount = BigDecimal.ZERO;
-
-    /** 이번 결제에 사용한 쿠폰 발급 건(없으면 null). */
-    @ManyToOne
-    private UserCoupon userCoupon;
-
-    /** 포인트·쿠폰 할인이 모두 반영된 최종 결제 금액. */
     @Column(nullable = false, precision = 12, scale = 0)
     private BigDecimal amount;
+
+    @Column(nullable = false, precision = 12, scale = 0)
+    private BigDecimal originalAmount;
+
+    @Column(nullable = false)
+    private int couponDiscount;
+
+    @Column(nullable = false)
+    private int pointsUsed;
+
+    @Column(nullable = false)
+    private int earnedPoints;
+
+    @ManyToOne
+    private Coupon coupon;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -97,46 +91,6 @@ public class PaymentOrder {
         this.procedureProduct = procedureProduct;
     }
 
-    public BigDecimal getProductPrice() {
-        return productPrice;
-    }
-
-    public void setProductPrice(BigDecimal productPrice) {
-        this.productPrice = productPrice;
-    }
-
-    public Integer getPointsUsed() {
-        return pointsUsed;
-    }
-
-    public void setPointsUsed(Integer pointsUsed) {
-        this.pointsUsed = pointsUsed;
-    }
-
-    public Integer getPointsEarned() {
-        return pointsEarned;
-    }
-
-    public void setPointsEarned(Integer pointsEarned) {
-        this.pointsEarned = pointsEarned;
-    }
-
-    public BigDecimal getCouponDiscount() {
-        return couponDiscount;
-    }
-
-    public void setCouponDiscount(BigDecimal couponDiscount) {
-        this.couponDiscount = couponDiscount;
-    }
-
-    public UserCoupon getUserCoupon() {
-        return userCoupon;
-    }
-
-    public void setUserCoupon(UserCoupon userCoupon) {
-        this.userCoupon = userCoupon;
-    }
-
     public BigDecimal getAmount() {
         return amount;
     }
@@ -144,6 +98,17 @@ public class PaymentOrder {
     public void setAmount(BigDecimal amount) {
         this.amount = amount;
     }
+
+    public BigDecimal getOriginalAmount() { return originalAmount; }
+    public void setOriginalAmount(BigDecimal originalAmount) { this.originalAmount = originalAmount; }
+    public int getCouponDiscount() { return couponDiscount; }
+    public void setCouponDiscount(int couponDiscount) { this.couponDiscount = couponDiscount; }
+    public int getPointsUsed() { return pointsUsed; }
+    public void setPointsUsed(int pointsUsed) { this.pointsUsed = pointsUsed; }
+    public int getEarnedPoints() { return earnedPoints; }
+    public void setEarnedPoints(int earnedPoints) { this.earnedPoints = earnedPoints; }
+    public Coupon getCoupon() { return coupon; }
+    public void setCoupon(Coupon coupon) { this.coupon = coupon; }
 
     public PaymentStatus getStatus() {
         return status;
