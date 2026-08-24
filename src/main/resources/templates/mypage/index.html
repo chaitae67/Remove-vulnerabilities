@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>마이페이지</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main>
+    <section class="page-title">
+        <p class="eyebrow">My Page</p>
+        <h1>마이페이지</h1>
+        <p th:text="${user.name} + '님의 이용 내역입니다.'">회원님의 이용 내역입니다.</p>
+    </section>
+
+    <section class="content-band">
+        <div class="section-head">
+            <h2>회원 정보</h2>
+        </div>
+        <article class="card">
+            <p>아이디: <strong th:text="${user.username}"></strong></p>
+            <p>이메일: <strong th:text="${user.email}"></strong></p>
+            <p>연락처: <strong th:text="${user.phone}"></strong></p>
+        </article>
+    </section>
+
+    <section class="content-band">
+        <div class="section-head">
+            <h2>결제 내역</h2>
+        </div>
+        <ul class="board-list">
+            <li th:each="payment : ${payments}">
+                <span th:text="${payment.procedureProduct.name}">패키지명</span>
+                <span th:text="|${#numbers.formatInteger(payment.amount, 0, 'COMMA')}원|">0원</span>
+                <span class="state" th:text="${payment.status}">상태</span>
+                <time th:text="${#temporals.format(payment.createdAt, 'yyyy-MM-dd HH:mm')}">일시</time>
+            </li>
+            <li th:if="${payments.isEmpty()}">
+                <span>결제 내역이 없습니다.</span>
+            </li>
+        </ul>
+    </section>
+
+    <section class="content-band">
+        <div class="section-head">
+            <h2>내가 작성한 Q&amp;A</h2>
+            <a th:href="@{/qna}">more</a>
+        </div>
+        <ul class="board-list">
+            <li th:each="post : ${qnaPosts}">
+                <a th:href="@{/qna/{id}(id=${post.id})}" th:text="${post.title}">제목</a>
+                <span class="state" th:text="${post.answered ? '답변완료' : '답변대기'}">대기</span>
+                <time th:text="${#temporals.format(post.createdAt, 'yyyy-MM-dd')}">작성일</time>
+            </li>
+            <li th:if="${qnaPosts.isEmpty()}">
+                <span>작성한 글이 없습니다.</span>
+            </li>
+        </ul>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>결제</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="narrow">
+    <section class="panel">
+        <p class="eyebrow">Mock Payment</p>
+        <h1 th:text="${procedure.name}">시술명</h1>
+        <p th:text="${procedure.summary}">설명</p>
+        <strong class="price" th:text="|${#numbers.formatInteger(procedure.price, 0, 'COMMA')}원|">0원</strong>
+        <form class="stack-form" th:action="@{/payments/checkout/{id}(id=${procedure.id})}" method="post">
+            <select name="method" required>
+                <option value="CARD">신용카드</option>
+                <option value="BANK_TRANSFER">무통장입금</option>
+                <option value="KAKAO_PAY">간편결제</option>
+            </select>
+            <input placeholder="카드번호 테스트 입력" value="4242-4242-4242-4242">
+            <button class="button" type="submit">테스트 결제 완료</button>
+        </form>
+        <p class="muted">실제 PG 연동 전까지 사용하는 모의 결제 화면입니다.</p>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

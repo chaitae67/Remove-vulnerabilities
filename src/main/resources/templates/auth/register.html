@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>회원가입</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="narrow">
+    <section class="panel">
+        <p class="eyebrow">Join</p>
+        <h1>회원가입</h1>
+        <div class="flash error" th:if="${error}" th:text="${error}"></div>
+        <form th:action="@{/register}" method="post" class="stack-form">
+            <input name="username" placeholder="아이디" required>
+            <input name="password" type="password" placeholder="비밀번호" required minlength="6">
+            <input name="name" placeholder="성함" required>
+            <input name="email" type="email" placeholder="이메일" required>
+            <input name="phone" placeholder="휴대전화번호">
+            <button class="button" type="submit">가입하기</button>
+        </form>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

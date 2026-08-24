@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>상담 작성</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="narrow-wide">
+    <section class="panel">
+        <p class="eyebrow">Q&A Upload</p>
+        <h1>상담 작성</h1>
+        <form class="stack-form" th:action="@{/qna}" method="post" enctype="multipart/form-data">
+            <input name="title" placeholder="제목" required>
+            <input name="phone" placeholder="연락처">
+            <textarea name="content" rows="10" placeholder="상담 내용을 입력해 주세요" required></textarea>
+            <input name="files" type="file" multiple>
+            <label class="check"><input type="checkbox" name="privatePost" value="true"> 비공개 상담으로 등록</label>
+            <button class="button" type="submit">등록하기</button>
+        </form>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

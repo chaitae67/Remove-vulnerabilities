@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<body>
+<header class="site-header" th:fragment="header">
+    <a class="brand" th:href="@{/}">
+        <span class="brand-mark">TL</span>
+        <span>
+            <strong>탑라인 성형외과</strong>
+            <small>Plastic Surgery Clinic</small>
+        </span>
+    </a>
+    <nav class="main-nav">
+        <a th:href="@{/procedures}">시술/패키지</a>
+        <a th:href="@{/qna}">온라인상담</a>
+        <a th:href="@{/notices}">공지사항</a>
+        <a sec:authorize="hasRole('ADMIN')" th:href="@{/admin}">관리자</a>
+    </nav>
+    <div class="auth-nav">
+        <a sec:authorize="isAnonymous()" th:href="@{/login}">로그인</a>
+        <a sec:authorize="isAnonymous()" class="button button-outline" th:href="@{/register}">회원가입</a>
+        <a sec:authorize="isAuthenticated()" class="hello" 
+           th:href="@{/mypage(userId=${currentUserId})}" sec:authentication="name"></a>
+        <form sec:authorize="isAuthenticated()" th:action="@{/logout}" method="post">
+            <button class="link-button" type="submit">로그아웃</button>
+        </form>
+    </div>
+</header>
+</body>
+</html>

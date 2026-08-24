@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>관리자</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main>
+    <section class="page-title">
+        <p class="eyebrow">Admin</p>
+        <h1>관리자 대시보드</h1>
+    </section>
+    <section class="content-band admin-grid">
+        <div class="panel">
+            <h2>최근 상담 신청</h2>
+            <ul class="mini-list">
+                <li th:each="item : ${consultations}">
+                    <strong th:text="${item.name}">이름</strong>
+                    <span th:text="|${item.phone} · ${item.area} · ${item.preferredContact}|">상담</span>
+                </li>
+            </ul>
+        </div>
+        <div class="panel">
+            <h2>최근 결제</h2>
+            <ul class="mini-list">
+                <li th:each="order : ${orders}">
+                    <strong th:text="${order.orderNumber}">주문번호</strong>
+                    <span th:text="|${order.buyer.name} · ${order.procedureProduct.name} · ${#numbers.formatInteger(order.amount, 0, 'COMMA')}원|">결제</span>
+                </li>
+            </ul>
+        </div>
+        <div class="panel">
+            <h2>Q&A 답변 관리</h2>
+            <ul class="mini-list">
+                <li th:each="post : ${qnas}">
+                    <a th:href="@{/qna/{id}(id=${post.id})}" th:text="${post.title}">상담</a>
+                    <span th:text="${post.answered ? '답변완료' : '대기'}">대기</span>
+                </li>
+            </ul>
+        </div>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>
