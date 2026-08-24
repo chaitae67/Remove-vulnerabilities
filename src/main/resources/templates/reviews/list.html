@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>이용 후기</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main>
+    <section class="page-title with-action">
+        <div>
+            <p class="eyebrow">Review</p>
+            <h1>이용 후기</h1>
+            <p>실제 이용 고객님들이 남겨주신 솔직한 후기입니다.</p>
+        </div>
+        <a sec:authorize="isAuthenticated()" class="button" th:href="@{/reviews/new}">후기 작성</a>
+    </section>
+    <div class="flash success" th:if="${message}" th:text="${message}"></div>
+    <section class="content-band">
+        <form th:action="@{/reviews/search}" method="get" class="search-form">
+            <input type="text" name="keyword" th:value="${keyword}" placeholder="제목으로 검색">
+            <button type="submit" class="button">검색</button>
+        </form>
+        <ul class="table-list">
+            <li th:each="review : ${reviews}">
+                <a th:href="@{/reviews/{id}(id=${review.id})}" th:utext="${review.title}">후기 제목</a>
+                <span th:text="${'★'.repeat(review.rating)}">★★★★★</span>
+                <span th:if="${review.procedureProduct != null}" class="muted" th:text="${review.procedureProduct.name}">시술명</span>
+                <time th:text="${#temporals.format(review.createdAt, 'yyyy.MM.dd')}">날짜</time>
+            </li>
+            <li th:if="${reviews.isEmpty()}">
+                <span>등록된 후기가 없습니다.</span>
+            </li>
+        </ul>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${review.title}">후기 상세</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="narrow-wide">
+    <div class="flash success" th:if="${message}" th:text="${message}"></div>
+    <article class="panel article">
+        <p class="eyebrow">Review</p>
+        <h1 th:utext="${review.title}">후기 제목</h1>
+        <p class="muted" th:text="|${review.writer.name} · ${#temporals.format(review.createdAt, 'yyyy.MM.dd HH:mm')}|">작성정보</p>
+        <p>
+            <span th:text="${'★'.repeat(review.rating)}">★★★★★</span>
+            <span th:if="${review.procedureProduct != null}" class="tag" th:text="${review.procedureProduct.name}">시술명</span>
+        </p>
+        <div class="article-body" th:utext="${review.content}">본문</div>
+
+        <div class="actions">
+            <a class="button button-outline" th:href="@{/reviews}">목록</a>
+            <a th:if="${canManage}" class="button button-outline" th:href="@{/reviews/{id}/edit(id=${review.id})}">수정</a>
+            <form th:if="${canManage}" th:action="@{/reviews/{id}/delete(id=${review.id})}" method="post">
+                <button class="button button-danger" type="submit">삭제</button>
+            </form>
+        </div>
+    </article>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>
