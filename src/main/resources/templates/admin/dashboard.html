@@ -28,7 +28,7 @@
             <ul class="mini-list">
                 <li th:each="order : ${orders}">
                     <strong th:text="${order.orderNumber}">주문번호</strong>
-                    <span th:text="|${order.buyer.name} · ${order.procedureProduct.name} · ${#numbers.formatInteger(order.amount, 0, 'COMMA')}원|">결제</span>
+                    <span th:text="|${order.buyer.name} · ${order.procedureProduct.name} · ${#numbers.formatInteger(order.amount, 0, 'COMMA')}원 · ${order.pointsUsed}P 사용|">결제</span>
                 </li>
             </ul>
         </div>
