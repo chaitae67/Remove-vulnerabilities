@@ -58,7 +58,7 @@ public class SearchController {
         model.addAttribute("keyword", keyword);
         return "reviews/list";
     }
-}
+
     private SQLException findSqlException(Throwable throwable) {
         Throwable current = throwable;
         while (current != null) {
