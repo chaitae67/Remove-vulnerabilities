@@ -18,12 +18,14 @@ import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.PaymentStatus;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.repository.PaymentOrderRepository;
+import com.example.clinic.repository.AppUserRepository;
 import com.example.clinic.service.CouponService;
 import com.example.clinic.service.PaymentService;
 
 class PaymentServiceTests {
     private PaymentOrderRepository orderRepository;
     private CouponService couponService;
+    private AppUserRepository appUserRepository;
     private PaymentService paymentService;
     private AppUser buyer;
     private ProcedureProduct product;
@@ -33,7 +35,8 @@ class PaymentServiceTests {
     void setUp() {
         orderRepository = mock(PaymentOrderRepository.class);
         couponService = mock(CouponService.class);
-        paymentService = new PaymentService(orderRepository, couponService);
+        appUserRepository = mock(AppUserRepository.class);
+        paymentService = new PaymentService(orderRepository, couponService, appUserRepository);
         buyer = new AppUser();
         buyer.setPointBalance(5000);
         product = new ProcedureProduct();
@@ -64,5 +67,23 @@ class PaymentServiceTests {
         assertThatThrownBy(() -> paymentService.createPaidOrder(buyer, product, "CARD", 1, 0, "WELCOME10000", LocalDate.now().plusDays(1)))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("이미 사용한 쿠폰입니다.");
+    }
+
+    @Test
+    void persistsPointBalanceAfterUsingAndEarningPoints() {
+        PaymentOrder order = paymentService.createPaidOrder(
+            buyer,
+            product,
+            "CARD",
+            1,
+            5000,
+            null,
+            LocalDate.now().plusDays(1)
+        );
+
+        assertThat(order.getPointsUsed()).isEqualTo(5000);
+        assertThat(order.getEarnedPoints()).isEqualTo(1150);
+        assertThat(buyer.getPointBalance()).isEqualTo(1150);
+        org.mockito.Mockito.verify(appUserRepository).save(buyer);
     }
 }
