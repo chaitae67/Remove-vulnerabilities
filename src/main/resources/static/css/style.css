@@ -161,6 +161,47 @@
     text-align: center;
 }
 
+.form-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.button.secondary {
+    border: 1px solid #b9ced9;
+    background: #fff;
+    color: #28546a;
+}
+
+.user-content-preview {
+    padding: 16px;
+    border: 1px solid #dbe4ea;
+    border-radius: 12px;
+    background: #f8fbfc;
+    line-height: 1.7;
+}
+
+.review-preview-card {
+    padding: 20px;
+    border: 1px solid #dbe4ea;
+    border-radius: 16px;
+    background: linear-gradient(145deg, #fff, #f5f9fa);
+    box-shadow: 0 10px 28px rgba(31, 56, 70, 0.08);
+}
+
+.review-preview-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.review-preview-head h2 {
+    margin: 0;
+}
+
 .chatbot-mode.fallback {
     color: #a15b25;
 }
