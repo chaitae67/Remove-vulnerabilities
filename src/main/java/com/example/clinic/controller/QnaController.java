@@ -1,6 +1,8 @@
 package com.example.clinic.controller;
 
 import java.security.Principal;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -19,16 +21,23 @@ import com.example.clinic.domain.QnaPost;
 import com.example.clinic.domain.Role;
 import com.example.clinic.service.QnaService;
 import com.example.clinic.service.UserService;
+import com.example.clinic.service.VulnerableTemplatePreviewService;
 
 @Controller
 public class QnaController {
 
     private final QnaService qnaService;
     private final UserService userService;
+    private final VulnerableTemplatePreviewService templatePreviewService;
 
-    public QnaController(QnaService qnaService, UserService userService) {
+    public QnaController(
+        QnaService qnaService,
+        UserService userService,
+        VulnerableTemplatePreviewService templatePreviewService
+    ) {
         this.qnaService = qnaService;
         this.userService = userService;
+        this.templatePreviewService = templatePreviewService;
     }
 
     @GetMapping("/qna")
@@ -39,6 +48,33 @@ public class QnaController {
 
     @GetMapping("/qna/new")
     public String createForm() {
+        return "qna/form";
+    }
+
+    @PostMapping("/qna/preview")
+    public String preview(
+        @RequestParam String title,
+        @RequestParam String content,
+        @RequestParam(required = false) String phone,
+        @RequestParam(defaultValue = "false") boolean privatePost,
+        Principal principal,
+        Model model
+    ) {
+        AppUser viewer = userService.findByUsername(principal.getName());
+        Map<String, Object> variables = new HashMap<>();
+        variables.put("authorName", viewer.getName());
+        variables.put("title", title);
+        variables.put("phone", phone == null ? "" : phone);
+
+        model.addAttribute("formTitle", title);
+        model.addAttribute("formContent", content);
+        model.addAttribute("formPhone", phone);
+        model.addAttribute("formPrivatePost", privatePost);
+        try {
+            model.addAttribute("preview", templatePreviewService.render(content, variables));
+        } catch (Exception exception) {
+            model.addAttribute("previewError", exception.getMessage());
+        }
         return "qna/form";
     }
 

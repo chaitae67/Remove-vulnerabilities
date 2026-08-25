@@ -24,7 +24,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/", "/login", "/register", "/api/chat", "/css/**", "/js/**", "/uploads/**", "/h2-console/**","/error").permitAll()
                 .requestMatchers("/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/qna/*/answer").hasRole("ADMIN")
-                .requestMatchers("/qna/new", "/payments/**").authenticated()
+                .requestMatchers("/qna/new", "/qna/preview", "/reviews/preview", "/payments/**").authenticated()
                 .requestMatchers("/procedures","procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/consultations").permitAll()
                 // 리뷰 작성/수정/삭제는 로그인 여부와 상관없이 전부 허용 (인증 누락)
                 .requestMatchers("/reviews/**").permitAll()

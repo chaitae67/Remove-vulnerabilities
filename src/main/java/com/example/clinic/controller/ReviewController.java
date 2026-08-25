@@ -1,6 +1,8 @@
 package com.example.clinic.controller;
 
 import java.security.Principal;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -17,6 +19,7 @@ import com.example.clinic.domain.Role;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.ReviewService;
 import com.example.clinic.service.UserService;
+import com.example.clinic.service.VulnerableTemplatePreviewService;
 
 @Controller
 public class ReviewController {
@@ -24,11 +27,18 @@ public class ReviewController {
     private final ReviewService reviewService;
     private final UserService userService;
     private final ProcedureService procedureService;
+    private final VulnerableTemplatePreviewService templatePreviewService;
 
-    public ReviewController(ReviewService reviewService, UserService userService, ProcedureService procedureService) {
+    public ReviewController(
+        ReviewService reviewService,
+        UserService userService,
+        ProcedureService procedureService,
+        VulnerableTemplatePreviewService templatePreviewService
+    ) {
         this.reviewService = reviewService;
         this.userService = userService;
         this.procedureService = procedureService;
+        this.templatePreviewService = templatePreviewService;
     }
 
     @GetMapping("/reviews")
@@ -40,6 +50,34 @@ public class ReviewController {
     @GetMapping("/reviews/new")
     public String createForm(Model model) {
         model.addAttribute("products", procedureService.findActiveProcedures());
+        return "reviews/form";
+    }
+
+    @PostMapping("/reviews/preview")
+    public String preview(
+        @RequestParam String title,
+        @RequestParam String content,
+        @RequestParam int rating,
+        @RequestParam(required = false) Long procedureProductId,
+        Principal principal,
+        Model model
+    ) {
+        AppUser viewer = userService.findByUsername(principal.getName());
+        Map<String, Object> variables = new HashMap<>();
+        variables.put("authorName", viewer.getName());
+        variables.put("title", title);
+        variables.put("rating", rating);
+
+        model.addAttribute("products", procedureService.findActiveProcedures());
+        model.addAttribute("formTitle", title);
+        model.addAttribute("formContent", content);
+        model.addAttribute("formRating", rating);
+        model.addAttribute("formProcedureProductId", procedureProductId);
+        try {
+            model.addAttribute("preview", templatePreviewService.render(content, variables));
+        } catch (Exception exception) {
+            model.addAttribute("previewError", exception.getMessage());
+        }
         return "reviews/form";
     }
 
