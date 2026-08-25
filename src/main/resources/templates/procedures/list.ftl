@@ -14,7 +14,7 @@
         <h1>시술/상담 패키지</h1>
     </section>
     <section class="content-band">
-        <form action="/procedures/search" method="get" class="search-form">
+        <form action="/procedures/search" method="get" class="search-form program-search">
             <input type="text" name="keyword" value="${keyword!}" placeholder="패키지명으로 검색">
             <button type="submit" class="button">검색</button>
         </form>

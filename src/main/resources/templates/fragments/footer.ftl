@@ -3,6 +3,10 @@
         <strong>제로데이클리닉</strong>
         <p>경기도 성남시 분당구 판교로227번길 23 | 대표번호 010-9268-8539</p>
     </div>
+    <form class="footer-search" action="/search" method="get" role="search">
+        <label for="footer-search-keyword">전체 검색</label>
+        <div><input id="footer-search-keyword" name="keyword" type="search" placeholder="프로그램, 공지, 후기 검색" required><button type="submit" aria-label="검색">→</button></div>
+    </form>
     <p class="medical-note">수술 및 시술 후 출혈, 감염, 염증 등의 합병증이 발생할 수 있으며 결과와 만족도는 개인에 따라 다를 수 있습니다. 온라인 상담은 진료를 대체하지 않습니다.</p>
 </footer>
 

@@ -10,6 +10,7 @@
 <div><#include "/fragments/header.ftl"></div>
 <main class="narrow">
     <section class="panel">
+        <#if error??><div class="flash error">${error}</div></#if>
         <p class="eyebrow">Mock Payment</p>
         <h1>${procedure.name}</h1>
         <p>${procedure.summary}</p>
@@ -18,6 +19,9 @@
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <label for="quantity">수량</label>
             <input id="quantity" name="quantity" type="number" value="1" min="1" required>
+
+            <label for="reservationDate">예약 날짜</label>
+            <input id="reservationDate" name="reservationDate" type="date" min="${minReservationDate}" required>
 
             <p>보유 포인트: <strong>${numbers.formatInteger(user.pointBalance)}P</strong></p>
             <label for="usePoints">사용할 포인트</label>
@@ -29,7 +33,7 @@
             <select id="couponCode" name="couponCode">
                 <option value="">쿠폰 사용 안 함</option>
                 <#list coupons as coupon>
-                <option value="${coupon.code}" data-discount="${coupon.discountAmount}">${coupon.name} (${numbers.formatInteger(coupon.discountAmount)}원)</option>
+                <option value="${coupon.code}" data-discount="${coupon.discountAmount?c}">${coupon.name} (${numbers.formatInteger(coupon.discountAmount)}원)</option>
                 </#list>
             </select>
             <select name="method" required>
@@ -44,9 +48,8 @@
                 <div><dt>결제 금액</dt><dd id="total">0원</dd></div>
             </dl>
 
-            <input id="price" name="price" type="hidden" value="${procedure.price}">
+            <input id="price" type="hidden" value="${procedure.price?c}">
             <input id="discountAmount" name="discountAmount" type="hidden" value="0">
-            <input id="fee" name="fee" type="hidden" value="0">
             <button class="button" type="submit">테스트 결제 완료</button>
         </form>
     </section>
@@ -58,7 +61,6 @@
     const quantityInput = document.getElementById('quantity');
     const couponInput = document.getElementById('couponCode');
     const discountInput = document.getElementById('discountAmount');
-    const feeInput = document.getElementById('fee');
     const pointsInput = document.getElementById('usePoints');
 
     function formatWon(value) {
@@ -69,13 +71,12 @@
         const price = Number(priceInput.value);
         const quantity = Number(quantityInput.value);
         const discount = Number(discountInput.value);
-        const fee = Number(feeInput.value);
         const points = Number(pointsInput.value);
         const subtotal = price * quantity;
 
         document.getElementById('subtotal').textContent = formatWon(subtotal);
         document.getElementById('discount-display').textContent = formatWon(discount);
-        document.getElementById('total').textContent = formatWon(subtotal - discount - points + fee);
+        document.getElementById('total').textContent = formatWon(Math.max(0, subtotal - discount - points));
     }
 
     couponInput.addEventListener('change', () => {

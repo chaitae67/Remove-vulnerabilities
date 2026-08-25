@@ -7,6 +7,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 
 @Entity
 public class QuickConsultation {
@@ -29,6 +30,8 @@ public class QuickConsultation {
 
     @Column(length = 1000)
     private String message;
+
+    private LocalDate preferredDate;
 
     @Column(nullable = false)
     private boolean privacyAgreed;
@@ -84,6 +87,9 @@ public class QuickConsultation {
     public void setMessage(String message) {
         this.message = message;
     }
+
+    public LocalDate getPreferredDate() { return preferredDate; }
+    public void setPreferredDate(LocalDate preferredDate) { this.preferredDate = preferredDate; }
 
     public boolean isPrivacyAgreed() {
         return privacyAgreed;
