@@ -1,7 +1,7 @@
 <footer class="site-footer">
     <div>
-        <strong>탑라인 성형외과</strong>
-        <p>서울특별시 강남구 테헤란로 000 | 대표번호 02-0000-0000</p>
+        <strong>제로데이클리닉</strong>
+        <p>경기도 성남시 분당구 판교로227번길 23 | 대표번호 010-9268-8539</p>
     </div>
     <p class="medical-note">수술 및 시술 후 출혈, 감염, 염증 등의 합병증이 발생할 수 있으며 결과와 만족도는 개인에 따라 다를 수 있습니다. 온라인 상담은 진료를 대체하지 않습니다.</p>
 </footer>
@@ -12,7 +12,7 @@
 <section id="chatbot-panel" class="chatbot-panel" aria-label="상담 챗봇" hidden>
     <header class="chatbot-header">
         <div>
-            <strong>탑라인 안내 챗봇</strong>
+                <strong>제로데이클리닉 안내 챗봇</strong>
             <span>병원 이용 정보를 안내해 드려요.</span>
         </div>
         <button id="chatbot-close" type="button" aria-label="챗봇 닫기">×</button>
@@ -30,6 +30,6 @@
         <input id="chatbot-input" maxlength="500" placeholder="질문을 입력하세요" autocomplete="off" required>
         <button type="submit">전송</button>
     </form>
-    <p class="chatbot-disclaimer">챗봇 안내는 의료진의 진료를 대체하지 않습니다. 취약점 진단 실습용 기능입니다.</p>
+    <p class="chatbot-disclaimer">챗봇 안내는 의료진의 진료를 대체하지 않습니다.</p>
 </section>
 <script src="/js/chatbot.js"></script>

@@ -1,9 +1,9 @@
 <header class="site-header">
     <a class="brand" href="/">
-        <span class="brand-mark">TL</span>
+        <img class="brand-logo" src="/images/zero-day-clinic-logo.svg" alt="제로데이클리닉 로고">
         <span>
-            <strong>탑라인 성형외과</strong>
-            <small>Plastic Surgery Clinic</small>
+            <strong>제로데이클리닉</strong>
+            <small>ZERO DAY CLINIC</small>
         </span>
     </a>
     <nav class="main-nav">

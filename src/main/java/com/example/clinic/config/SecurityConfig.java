@@ -22,7 +22,7 @@ public class SecurityConfig {
     SecurityFilterChain securityFilterChain(HttpSecurity http, CookieAutoLoginFilter cookieAutoLoginFilter) throws Exception {
         http
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/", "/login", "/register", "/forgot-password", "/api/chat", "/css/**", "/js/**", "/uploads/**", "/browse/**", "/backup/**", "/manual.html", "/h2-console/**","/error").permitAll()
+                .requestMatchers("/", "/login", "/register", "/forgot-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**", "/browse/**", "/backup/**", "/manual.html", "/h2-console/**","/error").permitAll()
                 .requestMatchers("/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/qna/*/answer").hasRole("ADMIN")
                 .requestMatchers("/qna/new", "/qna/preview", "/reviews/preview", "/payments/**").authenticated()
                 .requestMatchers("/procedures","procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/consultations").permitAll()

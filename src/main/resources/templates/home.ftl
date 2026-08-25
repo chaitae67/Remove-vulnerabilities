@@ -3,23 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>탑라인 성형외과</title>
+    <title>제로데이클리닉</title>
     <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
 <#include "/fragments/header.ftl">
 
 <main>
-    <section class="hero">
-        <div class="hero-copy">
-            <p class="eyebrow">1:1 맞춤 상담 · 안전 중심 진료</p>
-            <h1>탑라인 성형외과</h1>
-            <p>바디라인, 얼굴 윤곽, 수술 후 케어까지 상담부터 예약 결제, Q&A까지 한 곳에서 관리하는 병원 홈페이지 샘플입니다.</p>
-            <div class="hero-actions">
-                <a class="button" href="/procedures">패키지 보기</a>
-                <a class="button button-light" href="/qna/new">온라인 상담</a>
-            </div>
-        </div>
+    <section class="hero" aria-label="제로데이클리닉 의료진 소개">
+        <img class="hero-image" src="/images/seohyun-main-hero.png"
+             alt="성형의 기준을 세우다 - 정확한 진단, 안전한 수술, 독보적 결과">
     </section>
 
     <#if message??>
