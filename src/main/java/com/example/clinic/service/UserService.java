@@ -66,4 +66,16 @@ public class UserService {
         }
         return userRepository.save(user);
     }
+
+    @Transactional
+    public void withdraw(String username, String rawPassword) {
+        AppUser user = findByUsername(username);
+        if (user.isWithdrawn()) {
+            throw new IllegalArgumentException("이미 탈퇴한 회원입니다.");
+        }
+        if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
+            throw new IllegalArgumentException("비밀번호가 일치하지 않습니다.");
+        }
+        user.withdraw();
+    }
 }

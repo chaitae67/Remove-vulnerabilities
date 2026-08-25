@@ -1,5 +1,9 @@
 package com.example.clinic.controller;
 
+import java.security.Principal;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -7,6 +11,8 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
 
 import com.example.clinic.domain.AppUser;
 import com.example.clinic.repository.AppUserRepository;
@@ -59,5 +65,25 @@ public class MyPageController {
         userService.updateProfile(userId, form);
         redirectAttributes.addFlashAttribute("message", "회원정보가 수정되었습니다.");
         return "redirect:/mypage?userId=" + userId;
+    }
+
+    @PostMapping("/mypage/withdraw")
+    public String withdraw(@RequestParam String password,
+                           Principal principal,
+                           Authentication authentication,
+                           HttpServletRequest request,
+                           HttpServletResponse response,
+                           RedirectAttributes redirectAttributes) {
+        try {
+            userService.withdraw(principal.getName(), password);
+        } catch (IllegalArgumentException exception) {
+            redirectAttributes.addFlashAttribute("withdrawError", exception.getMessage());
+            AppUser user = userService.findByUsername(principal.getName());
+            return "redirect:/mypage?userId=" + user.getId();
+        }
+
+        new SecurityContextLogoutHandler().logout(request, response, authentication);
+        redirectAttributes.addFlashAttribute("message", "회원 탈퇴가 완료되었습니다.");
+        return "redirect:/";
     }
 }

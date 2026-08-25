@@ -1,4 +1,4 @@
-INSERT INTO app_user (username, password, name, email, phone, role, point_balance, created_at)
+INSERT INTO app_user (username, password, name, email, phone, role, point_balance, withdrawn, created_at)
 VALUES (
   'admin',
   '$2a$10$sem8oIPJ4v.cKjqvLrimceXFRluuk0mXNFfqZusBxMMBLZ8/cxmv.',
@@ -7,10 +7,11 @@ VALUES (
   '02-0000-0000',
   'ADMIN',
   10000,
+  0,
   SYSTIMESTAMP
 );
 
-INSERT INTO app_user (username, password, name, email, phone, role, point_balance, created_at)
+INSERT INTO app_user (username, password, name, email, phone, role, point_balance, withdrawn, created_at)
 VALUES (
   'user',
   '$2a$10$gS3FTadAfVWW4gKHvlUW8.8V9.M95tf.gNEuy58UT40fcZe75XNNq',
@@ -19,6 +20,7 @@ VALUES (
   '010-1234-5678',
   'USER',
   5000,
+  0,
   SYSTIMESTAMP
 );
 
