@@ -6,8 +6,9 @@
     <p class="medical-note">수술 및 시술 후 출혈, 감염, 염증 등의 합병증이 발생할 수 있으며 결과와 만족도는 개인에 따라 다를 수 있습니다. 온라인 상담은 진료를 대체하지 않습니다.</p>
 </footer>
 
-<button id="chatbot-toggle" class="chatbot-toggle" type="button" aria-expanded="false" aria-controls="chatbot-panel">
-    상담 챗봇
+<button id="chatbot-toggle" class="chatbot-toggle" type="button" aria-label="상담 챗봇 열기" aria-expanded="false" aria-controls="chatbot-panel">
+    <span class="chatbot-toggle-label" aria-hidden="true">상담 챗봇</span>
+    <span class="chatbot-toggle-icon" aria-hidden="true"><img src="/images/chatbot-robot-v2.png" alt=""></span>
 </button>
 <section id="chatbot-panel" class="chatbot-panel" aria-label="상담 챗봇" hidden
          data-csrf-token="${_csrf.token}" data-csrf-header="${_csrf.headerName}">

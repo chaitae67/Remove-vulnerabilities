@@ -8,8 +8,8 @@
 </head>
 <body>
 <div><#include "/fragments/header.ftl"></div>
-<main>
-    <section class="page-title with-action">
+<main class="listing-page review-listing-page">
+    <section class="listing-hero with-action">
         <div>
             <p class="eyebrow">Review</p>
             <h1>이용 후기</h1>
@@ -18,17 +18,18 @@
         <#if isAuthenticated><a class="button" href="/reviews/new">후기 작성</a></#if>
     </section>
     <#if message??><div class="flash success">${message}</div></#if>
-    <section class="content-band">
-        <form action="/reviews/search" method="get" class="search-form">
+    <section class="listing-content">
+        <form action="/reviews/search" method="get" class="search-form listing-search">
             <input type="text" name="keyword" value="${keyword!}" placeholder="제목으로 검색">
             <button type="submit" class="button">검색</button>
         </form>
-        <ul class="table-list">
+        <ul class="table-list editorial-list review-editorial-list">
             <#list reviews as review>
             <li>
-                <a href="/reviews/${review.id}">${review.title}</a>
-                <span>${strings.repeat("★", review.rating)}</span>
-                <#if review.procedureProduct??><span class="muted">${review.procedureProduct.name}</span></#if>
+                <span class="list-index">${review?index + 1}</span>
+                <a class="list-title" href="/reviews/${review.id}">${review.title}<small>고객님의 솔직한 경험을 확인해 보세요.</small></a>
+                <span class="review-stars">${strings.repeat("★", review.rating)}</span>
+                <#if review.procedureProduct??><span class="list-category">${review.procedureProduct.name}</span></#if>
                 <time>${temporals.format(review.createdAt, 'yyyy.MM.dd')}</time>
             </li>
             </#list>

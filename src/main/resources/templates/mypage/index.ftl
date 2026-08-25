@@ -8,26 +8,29 @@
 </head>
 <body>
 <div><#include "/fragments/header.ftl"></div>
-<main>
-    <section class="page-title">
+<main class="mypage-page">
+    <section class="mypage-hero">
         <p class="eyebrow">My Page</p>
-        <h1>마이페이지</h1>
-        <p>${user.name}님의 이용 내역입니다.</p>
+        <h1><strong>${user.name}</strong>님,<br>반갑습니다.</h1>
+        <p>예약과 상담, 작성하신 후기를 한곳에서 편하게 확인하세요.</p>
     </section>
 
-    <section class="content-band">
-        <div class="section-head">
-            <h2>회원 정보</h2>
-            <a href="/mypage/edit?userId=${user.id}">수정</a>
+    <section class="mypage-dashboard">
+      <aside class="mypage-profile">
+        <div class="profile-monogram">${user.name?substring(0, 1)}</div>
+        <p class="eyebrow">Member Profile</p>
+        <h2>${user.name}</h2>
+        <dl><div><dt>아이디</dt><dd>${user.username}</dd></div><div><dt>이메일</dt><dd>${user.email}</dd></div><div><dt>연락처</dt><dd>${user.phone!'-'}</dd></div></dl>
+        <a class="profile-edit-link" href="/mypage/edit?userId=${user.id}">회원정보 수정 <span>→</span></a>
+      </aside>
+      <div class="mypage-main">
+        <div class="mypage-summary">
+            <a href="#payments"><span>PAYMENT</span><strong>${payments?size}</strong><small>결제 내역</small></a>
+            <a href="#my-qna"><span>CONSULT</span><strong>${qnaPosts?size}</strong><small>작성한 상담</small></a>
+            <a href="#my-reviews"><span>REVIEW</span><strong>${myReviews?size}</strong><small>작성한 후기</small></a>
         </div>
-        <article class="card">
-            <p>아이디: <strong>${user.username}</strong></p>
-            <p>이메일: <strong>${user.email}</strong></p>
-            <p>연락처: <strong>${user.phone!}</strong></p>
-        </article>
-    </section>
 
-    <section class="content-band">
+    <section id="payments" class="mypage-section">
         <div class="section-head">
             <h2>결제 내역</h2>
         </div>
@@ -48,7 +51,7 @@
         </ul>
     </section>
 
-    <section class="content-band">
+    <section id="my-qna" class="mypage-section">
         <div class="section-head">
             <h2>내가 작성한 Q&amp;A</h2>
             <a href="/qna">more</a>
@@ -69,7 +72,7 @@
         </ul>
     </section>
 
-    <section class="content-band">
+    <section id="my-reviews" class="mypage-section">
         <div class="section-head">
             <h2>내가 작성한 후기</h2>
             <a href="/reviews">more</a>
@@ -90,7 +93,7 @@
         </ul>
     </section>
 
-    <section class="content-band">
+    <section class="mypage-section withdraw-section">
         <div class="section-head">
             <h2>회원 탈퇴</h2>
         </div>
@@ -106,6 +109,8 @@
                 <button class="button button-outline" type="submit">회원 탈퇴</button>
             </form>
         </article>
+    </section>
+      </div>
     </section>
 </main>
 <div><#include "/fragments/footer.ftl"></div>

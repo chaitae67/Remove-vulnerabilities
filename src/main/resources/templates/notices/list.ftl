@@ -8,25 +8,26 @@
 </head>
 <body>
 <div><#include "/fragments/header.ftl"></div>
-<main>
-    <section class="page-title with-action">
+<main class="listing-page notice-listing-page">
+    <section class="listing-hero with-action">
         <div>
             <p class="eyebrow">Notice</p>
-            <h1>공지사항</h1>
+            <h1>공지사항</h1><p>제로데이클리닉의 새로운 소식과 진료 안내를 전해드립니다.</p>
         </div>
         <#if isAdmin><a class="button" href="/notices/new">공지 작성</a></#if>
     </section>
     <#if message??><div class="flash success">${message}</div></#if>
-    <section class="content-band">
-        <form action="/notices/search" method="get" class="search-form">
+    <section class="listing-content">
+        <form action="/notices/search" method="get" class="search-form listing-search">
             <input type="text" name="keyword" value="${keyword!}" placeholder="제목으로 검색">
             <button type="submit" class="button">검색</button>
         </form>
-        <ul class="table-list">
+        <ul class="table-list editorial-list notice-editorial-list">
             <#list notices as notice>
             <li>
-                <a href="/notices/${notice.id}">${notice.title}</a>
-                <span>${temporals.format(notice.createdAt, 'yyyy.MM.dd')}</span>
+                <span class="list-index">${notice?index + 1}</span>
+                <a class="list-title" href="/notices/${notice.id}">${notice.title}<small>공지 내용을 자세히 확인해 주세요.</small></a>
+                <time>${temporals.format(notice.createdAt, 'yyyy.MM.dd')}</time>
             </li>
             </#list>
             <#if notices?size == 0>
