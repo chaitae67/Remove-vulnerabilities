@@ -23,6 +23,15 @@
             </form>
         </div>
         <div class="panel">
+            <h2>상담 이미지 URL 가져오기 (SSRF)</h2>
+            <form th:action="@{/admin/ssrf-fetch}" method="post" class="stack-form">
+                <input name="url" placeholder="http://..." required>
+                <button class="button" type="submit">가져오기</button>
+            </form>
+            <p th:if="${ssrfStatus != null}" class="muted" th:text="'HTTP ' + ${ssrfStatus}"></p>
+            <pre th:if="${ssrfBody != null}" th:text="${ssrfBody}" style="max-height:200px;overflow:auto;"></pre>
+        </div>
+        <div class="panel">
             <h2>최근 상담 신청</h2>
             <ul class="mini-list">
                 <li th:each="item : ${consultations}">

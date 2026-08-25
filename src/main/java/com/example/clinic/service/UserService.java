@@ -68,6 +68,25 @@ public class UserService {
     }
 
     @Transactional
+    public void resetPassword(String username, String rawPassword) {
+        AppUser user = findByUsername(username);
+        // VULNERABLE LAB - PR: 복잡도/이전 비밀번호 검증 없이 임의 비밀번호로 재설정
+        user.setPassword(passwordEncoder.encode(rawPassword));
+    }
+
+    @Transactional
+    public void deleteUser(Long id) {
+        // VULNERABLE LAB - WM/IN: 권한 검증 없이 사용자 삭제
+        userRepository.deleteById(id);
+    }
+
+    @Transactional
+    public AppUser save(AppUser user) {
+        // VULNERABLE LAB - WM/IN: 권한 검증 없이 사용자 저장
+        return userRepository.save(user);
+    }
+
+    @Transactional
     public void withdraw(String username, String rawPassword) {
         AppUser user = findByUsername(username);
         if (user.isWithdrawn()) {

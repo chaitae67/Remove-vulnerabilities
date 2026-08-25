@@ -1,13 +1,26 @@
 server:
   port: 8081
+  # VULNERABLE LAB: 서버 종류/버전 노출 (WEB-16)
+  server-header: Apache-Coyote/1.1
+  servlet:
+    session:
+      # VULNERABLE LAB: 세션 만료 미설정(사실상 무제한) (IS)
+      timeout: 31536000s
+  error:
+    # VULNERABLE LAB: 에러 페이지에 스택트레이스/메시지 노출 (EP/WEB-22)
+    include-message: always
+    include-stacktrace: always
+    include-binding-errors: always
+    include-exception: true
 
 spring:
   application:
     name: clinic-site
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 30MB
+      # VULNERABLE LAB: 파일 업로드/다운로드 용량 제한 미설정 (WEB-08)
+      max-file-size: -1
+      max-request-size: -1
   datasource:
     url: ${ORACLE_URL:jdbc:oracle:thin:@localhost:1521/FREEPDB1}
     username: ${ORACLE_USERNAME:clinic}
@@ -32,6 +45,11 @@ app:
       enabled: ${OLLAMA_ENABLED:true}
       model: ${OLLAMA_MODEL:gemma3:1b}
       endpoint: ${OLLAMA_CHAT_URL:http://localhost:11434/api/chat}
+
+logging:
+  file:
+    # VULNERABLE LAB - WEB-26: 로그 파일을 웹 서빙 경로(uploads)에 기록하여 /uploads/logs/ 로 노출
+    name: uploads/logs/app.log
 
 ---
 spring:

@@ -1,0 +1,13 @@
+server:
+  port: 8081
+  server-header: Apache-Coyote/1.1
+spring:
+  application:
+    name: clinic-site
+  datasource:
+    url: jdbc:oracle:thin:@localhost:1521/FREEPDB1
+    username: clinic
+    password: clinic
+    driver-class-name: oracle.jdbc.OracleDriver
+app:
+  upload-dir: uploads

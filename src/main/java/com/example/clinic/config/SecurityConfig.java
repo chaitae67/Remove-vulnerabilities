@@ -19,10 +19,10 @@ import com.example.clinic.repository.AppUserRepository;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, CookieAutoLoginFilter cookieAutoLoginFilter) throws Exception {
         http
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/", "/login", "/register", "/api/chat", "/css/**", "/js/**", "/uploads/**", "/h2-console/**","/error").permitAll()
+                .requestMatchers("/", "/login", "/register", "/forgot-password", "/api/chat", "/css/**", "/js/**", "/uploads/**", "/browse/**", "/h2-console/**","/error").permitAll()
                 .requestMatchers("/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/qna/*/answer").hasRole("ADMIN")
                 .requestMatchers("/qna/new", "/qna/preview", "/reviews/preview", "/payments/**").authenticated()
                 .requestMatchers("/procedures","procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/consultations").permitAll()
@@ -38,8 +38,15 @@ public class SecurityConfig {
                 .logoutRequestMatcher(new AntPathRequestMatcher("/logout"))
                 .logoutSuccessUrl("/")
                 .permitAll())
-            .csrf(csrf -> csrf.ignoringRequestMatchers("/h2-console/**"))
-            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
+            // VULNERABLE LAB: CSRF 보호 완전 비활성화 (CF - 크로스사이트 요청 위조)
+            .csrf(csrf -> csrf.disable())
+            // VULNERABLE LAB: 세션 고정 보호 해제 (IS - 불충분한 세션 관리)
+            .sessionManagement(session -> session
+                .sessionFixation(fixation -> fixation.none()))
+            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
+            // VULNERABLE LAB: 쿠키 값으로 자동 로그인(쿠키 변조 - CC)
+            .addFilterBefore(cookieAutoLoginFilter,
+                org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

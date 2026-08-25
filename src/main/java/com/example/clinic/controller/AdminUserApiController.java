@@ -5,9 +5,12 @@ import com.example.clinic.domain.Role;
 import com.example.clinic.service.UserService;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -30,6 +33,27 @@ public class AdminUserApiController {
     @GetMapping("/{id}")
     public UserDetailResponse findById(@PathVariable Long id) {
         return UserDetailResponse.from(userService.findById(id));
+    }
+
+    // VULNERABLE LAB - WM/WEB-18: 불필요한 PUT 메소드 허용 + 권한 검증 없음
+    @PutMapping("/{id}")
+    public UserDetailResponse update(@PathVariable Long id,
+                                     @RequestParam(required = false) String name,
+                                     @RequestParam(required = false) Integer pointBalance) {
+        AppUser user = userService.findById(id);
+        if (name != null) {
+            user.setName(name);
+        }
+        if (pointBalance != null) {
+            user.setPointBalance(pointBalance);
+        }
+        return UserDetailResponse.from(userService.save(user));
+    }
+
+    // VULNERABLE LAB - WM/WEB-18: 불필요한 DELETE 메소드 허용 + 권한 검증 없음
+    @DeleteMapping("/{id}")
+    public void delete(@PathVariable Long id) {
+        userService.deleteUser(id);
     }
 
     /*
