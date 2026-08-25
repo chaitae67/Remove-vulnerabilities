@@ -16,10 +16,12 @@
         <#if param.error??><div class="flash error">아이디 또는 비밀번호를 확인해 주세요.</div></#if>
         <form action="/login" method="post" class="stack-form">
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
+            <#if param.redirect??><input type="hidden" name="redirect" value="${param.redirect[0]}"></#if>
             <input name="username" placeholder="아이디" required>
             <input name="password" type="password" placeholder="비밀번호" required>
             <button class="button" type="submit">로그인</button>
         </form>
+        <p class="muted"><a href="/forgot-password">비밀번호를 잊으셨나요?</a></p>
         <p class="muted">테스트 계정: admin / admin1234, user / user1234</p>
     </section>
 </main>

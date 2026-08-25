@@ -41,9 +41,15 @@ public class NoticeController {
     }
 
     @PostMapping("/notices")
-    public String create(@RequestParam String title, @RequestParam String content, Principal principal, RedirectAttributes redirectAttributes) {
+    public String create(
+        @RequestParam String title,
+        @RequestParam String content,
+        @RequestParam(required = false) String imageUrl,
+        Principal principal,
+        RedirectAttributes redirectAttributes
+    ) {
         AppUser author = userService.findByUsername(principal.getName());
-        noticeService.create(title, content, author);
+        noticeService.create(title, content, imageUrl, author);
         redirectAttributes.addFlashAttribute("message", "공지사항이 등록되었습니다.");
         return "redirect:/notices";
     }
@@ -55,10 +61,34 @@ public class NoticeController {
     }
 
     @PostMapping("/notices/{id}/edit")
-    public String update(@PathVariable Long id, @RequestParam String title, @RequestParam String content, RedirectAttributes redirectAttributes) {
-        noticeService.update(id, title, content);
+    public String update(
+        @PathVariable Long id,
+        @RequestParam String title,
+        @RequestParam String content,
+        @RequestParam(required = false) String imageUrl,
+        RedirectAttributes redirectAttributes
+    ) {
+        noticeService.update(id, title, content, imageUrl);
         redirectAttributes.addFlashAttribute("message", "공지사항이 수정되었습니다.");
         return "redirect:/notices/" + id;
+    }
+
+    @PostMapping("/notices/fetch-image")
+    public String fetchImage(
+        @RequestParam String imageUrl,
+        @RequestParam(required = false) String title,
+        @RequestParam(required = false) String content,
+        Model model
+    ) {
+        model.addAttribute("formTitle", title);
+        model.addAttribute("formContent", content);
+        model.addAttribute("formImageUrl", imageUrl);
+        try {
+            model.addAttribute("imagePreview", noticeService.fetchImageAsDataUrl(imageUrl));
+        } catch (Exception ex) {
+            model.addAttribute("previewError", "이미지를 불러오지 못했습니다: " + ex.getMessage());
+        }
+        return "notices/form";
     }
 
     @PostMapping("/notices/{id}/delete")
