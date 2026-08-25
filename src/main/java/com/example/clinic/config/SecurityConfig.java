@@ -25,7 +25,7 @@ public class SecurityConfig {
                 .requestMatchers("/", "/search", "/clinic", "/eye", "/nose", "/contour", "/lifting", "/body", "/aftercare", "/events", "/login", "/register", "/forgot-password", "/reset-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**", "/h2-console/**","/error").permitAll()
                 .requestMatchers("/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/notices/fetch-image", "/qna/*/answer").hasRole("ADMIN")
                 .requestMatchers("/qna/new", "/qna/preview", "/reviews/preview", "/payments/**").authenticated()
-                .requestMatchers("/procedures","procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/consultations").permitAll()
+                .requestMatchers("/procedures","procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/qna/*/attachments/*", "/consultations").permitAll()
                 // 리뷰 작성/수정/삭제는 로그인 여부와 상관없이 전부 허용 (인증 누락)
                 .requestMatchers("/reviews/**").permitAll()
                 // VULNERABLE LAB: /api/admin/users/** 별칭은 이 관리자 매처에 포함되지 않는다.

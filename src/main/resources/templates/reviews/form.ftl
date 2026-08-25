@@ -88,7 +88,9 @@
         objectUrls = [];
         imagePreview.replaceChildren();
 
-        Array.from(photos.files).filter(file => file.type.startsWith('image/')).forEach(file => {
+        Array.from(photos.files).filter(file =>
+            file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(file.name)
+        ).forEach(file => {
             const url = URL.createObjectURL(file);
             objectUrls.push(url);
             const image = document.createElement('img');

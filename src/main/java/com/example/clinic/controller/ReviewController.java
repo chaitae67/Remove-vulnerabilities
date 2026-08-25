@@ -1,10 +1,16 @@
 package com.example.clinic.controller;
 
 import java.security.Principal;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.stereotype.Controller;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +21,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.Review;
+import com.example.clinic.domain.ReviewAttachment;
 import com.example.clinic.domain.Role;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.ReviewService;
@@ -108,6 +115,30 @@ public class ReviewController {
         model.addAttribute("review", review);
         model.addAttribute("canManage", admin || owner);
         return "reviews/detail";
+    }
+
+    @GetMapping("/reviews/{reviewId}/attachments/{attachmentId}")
+    public ResponseEntity<Resource> downloadAttachment(
+        @PathVariable Long reviewId,
+        @PathVariable Long attachmentId
+    ) {
+        Review review = reviewService.findById(reviewId);
+        ReviewAttachment attachment = reviewService.findAttachment(review, attachmentId);
+        Resource resource = reviewService.loadAttachment(attachment);
+        return ResponseEntity.ok()
+            .contentType(resolveMediaType(attachment.getContentType()))
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename(attachment.getOriginalFilename(), StandardCharsets.UTF_8)
+                .build().toString())
+            .body(resource);
+    }
+
+    private MediaType resolveMediaType(String contentType) {
+        try {
+            return contentType == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(contentType);
+        } catch (IllegalArgumentException ex) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
     }
 
     // No ownership or role check here: any visitor who knows (or guesses) a review id

@@ -17,8 +17,7 @@
         <strong class="price">${numbers.formatInteger(procedure.price)}원</strong>
         <form id="payment-form" class="stack-form" action="/payments/checkout/${procedure.id}" method="post">
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
-            <label for="quantity">수량</label>
-            <input id="quantity" name="quantity" type="number" value="1" min="1" required>
+            <input name="quantity" type="hidden" value="1">
 
             <label for="reservationDate">예약 날짜</label>
             <input id="reservationDate" name="reservationDate" type="date" min="${minReservationDate}" required>
@@ -59,7 +58,6 @@
 <script>
     const priceInput = document.getElementById('price');
     const paymentForm = document.getElementById('payment-form');
-    const quantityInput = document.getElementById('quantity');
     const couponInput = document.getElementById('couponCode');
     const discountInput = document.getElementById('discountAmount');
     const pointsInput = document.getElementById('usePoints');
@@ -73,11 +71,10 @@
 
     function updateAmount() {
         const price = toNumber(priceInput.value);
-        const quantity = toNumber(quantityInput.value);
         const discount = toNumber(discountInput.value);
         const points = toNumber(pointsInput.value);
         const maxPoints = toNumber(pointsInput.max);
-        const subtotal = price * quantity;
+        const subtotal = price;
         const pointsExceeded = points > maxPoints;
 
         pointsInput.setCustomValidity(pointsExceeded ? '보유 포인트보다 많은 포인트를 사용할 수 없습니다.' : '');
@@ -94,9 +91,6 @@
         updateAmount();
     });
 
-    quantityInput.addEventListener('input', () => {
-        updateAmount();
-    });
     pointsInput.addEventListener('input', updateAmount);
     paymentForm.addEventListener('submit', event => {
         updateAmount();

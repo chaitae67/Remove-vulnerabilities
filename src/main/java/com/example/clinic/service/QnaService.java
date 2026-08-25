@@ -79,9 +79,10 @@ public class QnaService {
 
     public Resource loadAttachment(String filename) {
         try {
-            // 취약점: 사용자가 보낸 filename을 업로드 경로에 그대로 붙이고
-            // normalize() / 상위 경로(..) 검증을 하지 않음 -> Path Traversal
-            Path filePath = qnaUploadPath.resolve(filename);
+            Path filePath = qnaUploadPath.resolve(filename).normalize();
+            if (!filePath.startsWith(qnaUploadPath)) {
+                throw new IllegalArgumentException("잘못된 파일 경로입니다.");
+            }
             Resource resource = new UrlResource(filePath.toUri());
             if (resource.exists() && resource.isReadable()) {
                 return resource;
@@ -90,6 +91,13 @@ public class QnaService {
         } catch (MalformedURLException ex) {
             throw new IllegalStateException("파일을 불러오는 중 오류가 발생했습니다.", ex);
         }
+    }
+
+    public QnaAttachment findAttachment(QnaPost post, Long attachmentId) {
+        return post.getAttachments().stream()
+            .filter(attachment -> attachment.getId().equals(attachmentId))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("첨부파일을 찾을 수 없습니다."));
     }
 
     private QnaAttachment store(MultipartFile file) {
