@@ -336,13 +336,9 @@ textarea {
 }
 
 .brand-logo {
-    width: 68px;
-    height: 48px;
-    border-radius: 8px;
-    object-fit: cover;
-    object-position: center;
-    background: #08090c;
-    filter: brightness(1.55) contrast(1.08);
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
 }
 
 .brand strong,
