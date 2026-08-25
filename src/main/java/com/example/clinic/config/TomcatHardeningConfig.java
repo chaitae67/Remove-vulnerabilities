@@ -29,7 +29,7 @@ public class TomcatHardeningConfig {
             });
             factory.addContextCustomizers(context -> {
                 // VULNERABLE LAB - WEB-12: 심볼릭 링크(allowLinking) 허용
-                context.setAllowLinking(true);
+                // context.setAllowLinking(true);
             });
         };
     }
