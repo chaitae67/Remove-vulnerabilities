@@ -2,7 +2,7 @@ package com.example.clinic.controller;
 
 import com.example.clinic.service.EmailService;
 import com.example.clinic.service.UserService;
-import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,10 +15,16 @@ public class AuthController {
 
     private final UserService userService;
     private final EmailService emailService;
+    private final String baseUrl;
 
-    public AuthController(UserService userService, EmailService emailService) {
+    public AuthController(
+        UserService userService,
+        EmailService emailService,
+        @Value("${app.base-url}") String baseUrl
+    ) {
         this.userService = userService;
         this.emailService = emailService;
+        this.baseUrl = baseUrl;
     }
 
     @GetMapping("/login")
@@ -60,7 +66,6 @@ public class AuthController {
     public String forgotPassword(
         @RequestParam String username,
         @RequestParam String email,
-        HttpServletRequest request,
         Model model
     ) {
         String token = userService.issuePasswordResetToken(username, email);
@@ -70,8 +75,7 @@ public class AuthController {
             model.addAttribute("error", "아이디와 이메일이 일치하는 계정을 찾을 수 없습니다.");
             return "auth/forgot-password";
         }
-        String resetLink = request.getScheme() + "://" + request.getServerName() + ":" + request.getServerPort()
-            + "/reset-password?token=" + token;
+        String resetLink = baseUrl + "/reset-password?token=" + token;
         try {
             emailService.send(email, "[클리닉] 비밀번호 재설정 안내", "아래 링크를 눌러 비밀번호를 재설정해 주세요.\n" + resetLink);
             model.addAttribute("message", "입력하신 이메일로 비밀번호 재설정 링크를 발송했습니다.");

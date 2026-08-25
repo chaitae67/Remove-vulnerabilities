@@ -41,6 +41,8 @@ spring:
     open-in-view: false
 
 app:
+  base-url: ${APP_BASE_URL:http://localhost:8081}
+  mail-from-name: ${MAIL_FROM_NAME:zeroday_clinic}
   upload-dir: uploads
   chatbot:
     ai:
