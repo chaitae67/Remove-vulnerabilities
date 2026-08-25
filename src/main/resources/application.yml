@@ -13,6 +13,17 @@ spring:
     username: ${ORACLE_USERNAME:clinic}
     password: ${ORACLE_PASSWORD:clinic}
     driver-class-name: oracle.jdbc.OracleDriver
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME:alxkahzld0@gmail.com}
+    password: ${MAIL_PASSWORD:sapjmeonxmosufks}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
   h2:
     console:
       enabled: false
@@ -30,6 +41,8 @@ spring:
     open-in-view: false
 
 app:
+  base-url: ${APP_BASE_URL:http://localhost:8081}
+  mail-from-name: ${MAIL_FROM_NAME:zeroday_clinic}
   upload-dir: uploads
   chatbot:
     ai:
