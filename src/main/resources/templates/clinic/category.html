@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="|${title} - 제로데이클리닉|">진료 안내 - 제로데이클리닉</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="category-page">
+    <section class="category-hero">
+        <div>
+            <p class="eyebrow" th:text="${eyebrow}">CATEGORY</p>
+            <h1 th:text="${title}">진료 분야</h1>
+            <p th:text="${description}">진료 분야 설명</p>
+            <a class="category-cta" th:href="@{/#quick-consultation}">상담 신청하기 <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="category-mark" aria-hidden="true" th:text="${eyebrow}">CATEGORY</div>
+    </section>
+
+    <section class="category-content">
+        <div class="category-heading">
+            <p class="eyebrow">Personalized Consultation</p>
+            <h2>한 사람을 위한<br>세심한 상담.</h2>
+        </div>
+        <div class="category-card-grid">
+            <article th:each="card, stat : ${cards}">
+                <b th:text="|0${stat.count}|"></b>
+                <h3 th:text="${card.title}">상담 항목</h3>
+                <p th:text="${card.description}">상담 설명</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="category-bottom-cta">
+        <div><p>ZERO DAY CLINIC</p><h2>정확한 진단에서<br>좋은 결과가 시작됩니다.</h2></div>
+        <div><a th:href="@{/procedures}">전체 시술·패키지 보기</a><a th:href="@{/qna/new}">온라인 상담 작성하기</a></div>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

@@ -1,29 +1,14 @@
 <header class="site-header">
-    <a class="brand" href="/">
-        <img class="brand-logo" src="/images/zero-day-clinic-logo.svg" alt="제로데이클리닉 로고">
-        <span>
-            <strong>제로데이클리닉</strong>
-            <small>ZERO DAY CLINIC</small>
-        </span>
-    </a>
-    <nav class="main-nav">
-        <a href="/procedures">시술/패키지</a>
-        <a href="/reviews">이용후기</a>
-        <a href="/qna">온라인상담</a>
-        <a href="/notices">공지사항</a>
-        <#if isAdmin><a href="/admin">관리자</a></#if>
+    <a class="brand" href="/"><img class="brand-logo" src="/images/zero-day-clinic-logo.svg" alt="제로데이클리닉 로고"><span><strong>제로데이클리닉</strong><small>ZERO DAY CLINIC</small></span></a>
+    <nav class="main-nav" aria-label="주요 메뉴">
+        <div class="nav-group"><a class="nav-root" href="/clinic"><span>제로데이</span><small>ABOUT</small></a><div class="nav-dropdown"><p><strong>ZERO DAY</strong><span>처음부터 끝까지 한결같은 진료 원칙</span></p><div><a href="/clinic">병원소개</a><a href="/clinic#philosophy">진료철학</a><a href="/clinic#location">오시는 길</a></div></div></div>
+        <div class="nav-group nav-group-wide"><a class="nav-root" href="/eye"><span>성형센터</span><small>SURGERY</small></a><div class="nav-dropdown surgery-dropdown"><p><strong>SURGERY CENTER</strong><span>개인의 비율과 균형을 고려한 분야별 상담</span></p><div><a href="/eye"><b>눈성형</b><small>쌍꺼풀 · 눈매교정 · 트임</small></a><a href="/nose"><b>코성형</b><small>콧대 · 코끝 · 재수술</small></a><a href="/contour"><b>얼굴윤곽</b><small>광대 · 턱선 · 턱끝</small></a><a href="/lifting"><b>리프팅</b><small>수술 · 비수술 리프팅</small></a><a href="/body"><b>바디성형</b><small>지방흡입 · 바디라인</small></a><a href="/aftercare"><b>사후관리</b><small>경과 · 회복 · 케어</small></a></div></div></div>
+        <div class="nav-group"><a class="nav-root" href="/procedures"><span>시술·예약</span><small>PROGRAM</small></a><div class="nav-dropdown"><p><strong>PROGRAM</strong><span>상담 패키지와 예약을 한곳에서</span></p><div><a href="/procedures">전체 프로그램</a><a href="/procedures/search">프로그램 검색</a></div></div></div>
+        <div class="nav-group"><a class="nav-root" href="/reviews"><span>리얼스토리</span><small>REVIEW</small></a><div class="nav-dropdown"><p><strong>REAL STORY</strong><span>직접 경험한 솔직한 이야기</span></p><div><a href="/reviews">전체 후기</a><#if isAuthenticated><a href="/reviews/new">후기 작성</a></#if></div></div></div>
+        <div class="nav-group"><a class="nav-root" href="/qna"><span>상담</span><small>CONSULT</small></a><div class="nav-dropdown"><p><strong>CONSULT</strong><span>궁금한 내용을 편하게 남겨주세요</span></p><div><a href="/qna">온라인 상담</a><#if isAuthenticated><a href="/qna/new">상담 작성</a></#if><a href="/#quick-consultation">빠른 상담</a></div></div></div>
+        <div class="nav-group"><a class="nav-root" href="/events"><span>소식·혜택</span><small>EVENT</small></a><div class="nav-dropdown"><p><strong>NEWS & BENEFIT</strong><span>새로운 소식과 현재 프로그램</span></p><div><a href="/events">이벤트</a><a href="/notices">공지사항</a></div></div></div>
+        <#if isAuthenticated><a href="/mypage?userId=${currentUserId}"><span>마이페이지</span><small>MY PAGE</small></a></#if>
+        <#if isAdmin><a href="/admin"><span>관리자</span><small>ADMIN</small></a></#if>
     </nav>
-    <div class="auth-nav">
-        <#if !isAuthenticated>
-        <a href="/login">로그인</a>
-        <a class="button button-outline" href="/register">회원가입</a>
-        </#if>
-        <#if isAuthenticated>
-        <a class="hello" href="/mypage?userId=${currentUserId}">${currentUsername}</a>
-        <form action="/logout" method="post">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
-            <button class="link-button" type="submit">로그아웃</button>
-        </form>
-        </#if>
-    </div>
+    <div class="auth-nav"><a class="header-consult" href="/#quick-consultation">빠른 상담</a><#if !isAuthenticated><a class="header-account" href="/login">로그인</a><a class="header-account" href="/register">회원가입</a></#if><#if isAuthenticated><a class="hello" href="/mypage?userId=${currentUserId}">${currentUsername}</a><form action="/logout" method="post"><input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}"><button class="link-button" type="submit">로그아웃</button></form></#if></div>
 </header>
