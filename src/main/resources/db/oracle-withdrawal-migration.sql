@@ -14,7 +14,21 @@ END;
 /
 
 UPDATE app_user SET withdrawn = 0 WHERE withdrawn IS NULL;
-ALTER TABLE app_user MODIFY withdrawn DEFAULT 0 NOT NULL;
+
+DECLARE
+    column_nullable VARCHAR2(1);
+BEGIN
+    SELECT nullable INTO column_nullable
+      FROM user_tab_columns
+     WHERE table_name = 'APP_USER' AND column_name = 'WITHDRAWN';
+
+    IF column_nullable = 'Y' THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE app_user MODIFY withdrawn DEFAULT 0 NOT NULL';
+    ELSE
+        EXECUTE IMMEDIATE 'ALTER TABLE app_user MODIFY withdrawn DEFAULT 0';
+    END IF;
+END;
+/
 
 DECLARE
     column_count NUMBER;
