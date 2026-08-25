@@ -10,7 +10,7 @@
 <div><#include "/fragments/header.ftl"></div>
 <main class="narrow">
     <section class="panel">
-        <p class="eyebrow">Mock Payment</p>
+        <p class="eyebrow">Payment</p>
         <h1>${procedure.name}</h1>
         <p>${procedure.summary}</p>
         <strong class="price">${numbers.formatInteger(procedure.price)}원</strong>
@@ -29,7 +29,7 @@
             <select id="couponCode" name="couponCode">
                 <option value="">쿠폰 사용 안 함</option>
                 <#list coupons as coupon>
-                <option value="${coupon.code}" data-discount="${coupon.discountAmount}">${coupon.name} (${numbers.formatInteger(coupon.discountAmount)}원)</option>
+                <option value="${coupon.code}" data-discount="${coupon.discountAmount?c}">${coupon.name} (${numbers.formatInteger(coupon.discountAmount)}원)</option>
                 </#list>
             </select>
             <select name="method" required>
@@ -37,17 +37,17 @@
                 <option value="BANK_TRANSFER">무통장입금</option>
                 <option value="KAKAO_PAY">간편결제</option>
             </select>
-            <input placeholder="카드번호 테스트 입력" value="4242-4242-4242-4242">
+            <input placeholder="카드번호 입력" value="4242-4242-4242-4242">
             <dl class="summary-list">
                 <div><dt>상품 금액</dt><dd id="subtotal">0원</dd></div>
                 <div><dt>할인 금액</dt><dd id="discount-display">0원</dd></div>
                 <div><dt>결제 금액</dt><dd id="total">0원</dd></div>
             </dl>
 
-            <input id="price" name="price" type="hidden" value="${procedure.price}">
+            <input id="price" name="price" type="hidden" value="${procedure.price?c}">
             <input id="discountAmount" name="discountAmount" type="hidden" value="0">
             <input id="fee" name="fee" type="hidden" value="0">
-            <button class="button" type="submit">테스트 결제 완료</button>
+            <button class="button" type="submit">결제 완료</button>
         </form>
     </section>
 </main>
@@ -62,15 +62,17 @@
     const pointsInput = document.getElementById('usePoints');
 
     function formatWon(value) {
-        return `${Number(value).toLocaleString('ko-KR')}원`;
+        const amount = Number(String(value || 0).replace(/,/g, ''));
+        return `${Number.isFinite(amount) ? amount.toLocaleString('ko-KR') : '0'}원`;
     }
 
     function updateAmount() {
-        const price = Number(priceInput.value);
-        const quantity = Number(quantityInput.value);
-        const discount = Number(discountInput.value);
-        const fee = Number(feeInput.value);
-        const points = Number(pointsInput.value);
+        const toNumber = value => Number(String(value || 0).replace(/,/g, '')) || 0;
+        const price = toNumber(priceInput.value);
+        const quantity = toNumber(quantityInput.value);
+        const discount = toNumber(discountInput.value);
+        const fee = toNumber(feeInput.value);
+        const points = toNumber(pointsInput.value);
         const subtotal = price * quantity;
 
         document.getElementById('subtotal').textContent = formatWon(subtotal);
