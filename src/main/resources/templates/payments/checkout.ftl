@@ -15,7 +15,6 @@
         <p>${procedure.summary}</p>
         <strong class="price">${numbers.formatInteger(procedure.price)}원</strong>
         <form id="payment-form" class="stack-form" action="/payments/checkout/${procedure.id}" method="post">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <label for="quantity">수량</label>
             <input id="quantity" name="quantity" type="number" value="1" min="1" required>
 

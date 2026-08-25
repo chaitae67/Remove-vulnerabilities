@@ -46,7 +46,6 @@
 
         <#if canAnswer>
         <form class="stack-form answer-form" action="/qna/${post.id}/answer" method="post">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <textarea name="answer" rows="6" placeholder="관리자 답변" required>${post.answer!}</textarea>
             <button class="button" type="submit">답변 저장</button>
         </form>
@@ -56,7 +55,6 @@
             <a class="button button-outline" href="/qna">목록</a>
             <#if canManage>
             <form action="/qna/${post.id}/delete" method="post">
-                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <button class="button button-danger" type="submit">삭제</button>
             </form>
             </#if>

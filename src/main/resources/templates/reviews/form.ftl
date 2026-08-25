@@ -13,7 +13,6 @@
         <p class="eyebrow">Review</p>
         <h1>${(!review??)?then('후기 작성', '후기 수정')}</h1>
         <form class="stack-form" action="<#if !review??>/reviews<#else>/reviews/${review.id}/edit</#if>" method="post" enctype="multipart/form-data">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <#if !review??><input type="hidden" name="writerId" value="${currentUserId}"></#if>
             <input name="title" placeholder="제목" required value="<#if formTitle??>${formTitle}<#elseif review??>${review.title}</#if>">
             <select name="procedureProductId">

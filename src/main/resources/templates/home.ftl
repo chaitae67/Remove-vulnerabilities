@@ -39,7 +39,6 @@
             <p class="eyebrow">Quick Contact</p>
             <h2>빠른 비용 문의</h2>
             <form action="/consultations" method="post">
-                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <input name="name" placeholder="성함" required>
                 <input name="phone" placeholder="휴대전화번호" required>
                 <select name="area" required>

@@ -18,7 +18,6 @@
         <div class="panel">
             <h2>시술 상품 일괄 등록 (XML)</h2>
             <form action="/admin/procedures/import" method="post" enctype="multipart/form-data" class="stack-form">
-                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <input name="file" type="file" accept=".xml" required>
                 <button class="button" type="submit">XML 등록</button>
             </form>

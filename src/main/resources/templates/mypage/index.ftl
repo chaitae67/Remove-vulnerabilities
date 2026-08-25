@@ -99,7 +99,6 @@
             <#if withdrawError??><p class="form-error">${withdrawError}</p></#if>
             <form class="stack-form" action="/mypage/withdraw" method="post"
                   onsubmit="return confirm('정말 회원 탈퇴를 진행하시겠습니까?');">
-                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <label for="withdrawPassword">비밀번호 확인</label>
                 <input id="withdrawPassword" name="password" type="password" required
                        autocomplete="current-password" placeholder="현재 비밀번호를 입력하세요">

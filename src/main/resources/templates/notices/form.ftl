@@ -13,7 +13,6 @@
         <p class="eyebrow">Admin Notice</p>
         <h1>${(!notice??)?then('공지 작성', '공지 수정')}</h1>
         <form class="stack-form" action="<#if !notice??>/notices<#else>/notices/${notice.id}/edit</#if>" method="post">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input name="title" placeholder="제목" required value="<#if formTitle??>${formTitle}<#elseif notice??>${notice.title}</#if>">
             <textarea name="content" rows="12" placeholder="내용" required><#if formContent??>${formContent}<#elseif notice??>${notice.content}</#if></textarea>
             <input name="imageUrl" placeholder="이미지 URL (선택)" value="<#if formImageUrl??>${formImageUrl}<#elseif notice??>${notice.imageUrl!}</#if>">

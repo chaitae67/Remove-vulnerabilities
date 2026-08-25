@@ -33,7 +33,6 @@
             <#if canManage>
             <a class="button button-outline" href="/reviews/${review.id}/edit">수정</a>
             <form action="/reviews/${review.id}/delete" method="post">
-                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <button class="button button-danger" type="submit">삭제</button>
             </form>
             </#if>

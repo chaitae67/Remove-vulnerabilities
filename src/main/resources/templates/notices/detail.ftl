@@ -20,7 +20,6 @@
             <#if isAdmin>
             <a class="button button-outline" href="/notices/${notice.id}/edit">수정</a>
             <form action="/notices/${notice.id}/delete" method="post">
-                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <button class="button button-danger" type="submit">삭제</button>
             </form>
             </#if>

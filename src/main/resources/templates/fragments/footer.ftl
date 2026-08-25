@@ -9,8 +9,7 @@
 <button id="chatbot-toggle" class="chatbot-toggle" type="button" aria-expanded="false" aria-controls="chatbot-panel">
     상담 챗봇
 </button>
-<section id="chatbot-panel" class="chatbot-panel" aria-label="상담 챗봇" hidden
-         data-csrf-token="${_csrf.token}" data-csrf-header="${_csrf.headerName}">
+<section id="chatbot-panel" class="chatbot-panel" aria-label="상담 챗봇" hidden>
     <header class="chatbot-header">
         <div>
             <strong>제로데이클리닉 안내 챗봇</strong>

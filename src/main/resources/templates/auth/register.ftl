@@ -14,7 +14,6 @@
         <h1>회원가입</h1>
         <#if error??><div class="flash error">${error}</div></#if>
         <form action="/register" method="post" class="stack-form">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input name="username" placeholder="아이디" required>
             <input name="password" type="password" placeholder="비밀번호" required minlength="6">
             <input name="name" placeholder="성함" required>

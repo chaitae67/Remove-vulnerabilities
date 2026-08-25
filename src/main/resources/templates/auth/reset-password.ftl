@@ -14,7 +14,6 @@
         <h1>비밀번호 재설정</h1>
         <#if error??><div class="flash error">${error}</div></#if>
         <form action="/reset-password" method="post" class="stack-form">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input type="hidden" name="token" value="${token}">
             <input name="newPassword" type="password" placeholder="새 비밀번호" required minlength="6">
             <button class="button" type="submit">비밀번호 변경</button>

@@ -21,7 +21,6 @@
         <#if isAuthenticated>
         <a class="hello" href="/mypage?userId=${currentUserId}">${currentUsername}</a>
         <form action="/logout" method="post">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <button class="link-button" type="submit">로그아웃</button>
         </form>
         </#if>

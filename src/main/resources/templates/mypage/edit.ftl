@@ -15,7 +15,6 @@
         <p class="muted">${user.name}님, 정보를 최신 상태로 유지해 주세요.</p>
 
         <form action="/mypage/edit" method="post" class="stack-form profile-form">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input type="hidden" name="userId" value="${user.id}">
 
             <label class="field">

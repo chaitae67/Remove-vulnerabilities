@@ -15,7 +15,6 @@
         <#if message??><div class="flash success">${message}</div></#if>
         <#if param.error??><div class="flash error">아이디 또는 비밀번호를 확인해 주세요.</div></#if>
         <form action="/login" method="post" class="stack-form">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <#if param.redirect??><input type="hidden" name="redirect" value="${param.redirect[0]}"></#if>
             <input name="username" placeholder="아이디" required>
             <input name="password" type="password" placeholder="비밀번호" required>

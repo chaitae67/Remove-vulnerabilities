@@ -13,7 +13,6 @@
         <p class="eyebrow">Q&A Upload</p>
         <h1>상담 작성</h1>
         <form class="stack-form" action="/qna" method="post" enctype="multipart/form-data">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input name="title" placeholder="제목" required value="${formTitle!}">
             <input name="phone" placeholder="연락처" value="${formPhone!}">
             <textarea name="content" rows="10" placeholder="상담 내용을 입력해 주세요" required>${formContent!}</textarea>
