@@ -13,6 +13,17 @@ spring:
     username: ${ORACLE_USERNAME:clinic}
     password: ${ORACLE_PASSWORD:clinic}
     driver-class-name: oracle.jdbc.OracleDriver
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
   h2:
     console:
       enabled: false

@@ -1,6 +1,8 @@
 package com.example.clinic.controller;
 
+import com.example.clinic.service.EmailService;
 import com.example.clinic.service.UserService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,9 +14,11 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 public class AuthController {
 
     private final UserService userService;
+    private final EmailService emailService;
 
-    public AuthController(UserService userService) {
+    public AuthController(UserService userService, EmailService emailService) {
         this.userService = userService;
+        this.emailService = emailService;
     }
 
     @GetMapping("/login")
@@ -56,6 +60,7 @@ public class AuthController {
     public String forgotPassword(
         @RequestParam String username,
         @RequestParam String email,
+        HttpServletRequest request,
         Model model
     ) {
         String token = userService.issuePasswordResetToken(username, email);
@@ -65,9 +70,14 @@ public class AuthController {
             model.addAttribute("error", "아이디와 이메일이 일치하는 계정을 찾을 수 없습니다.");
             return "auth/forgot-password";
         }
-        // VULNERABLE LAB: 실제 서비스라면 이메일로만 전달해야 할 재설정 링크를 화면에 그대로 노출한다.
-        model.addAttribute("message", "비밀번호 재설정 링크가 발급되었습니다.");
-        model.addAttribute("resetLink", "/reset-password?token=" + token);
+        String resetLink = request.getScheme() + "://" + request.getServerName() + ":" + request.getServerPort()
+            + "/reset-password?token=" + token;
+        try {
+            emailService.send(email, "[클리닉] 비밀번호 재설정 안내", "아래 링크를 눌러 비밀번호를 재설정해 주세요.\n" + resetLink);
+            model.addAttribute("message", "입력하신 이메일로 비밀번호 재설정 링크를 발송했습니다.");
+        } catch (Exception ex) {
+            model.addAttribute("error", "메일 발송에 실패했습니다: " + ex.getMessage());
+        }
         return "auth/forgot-password";
     }
 
