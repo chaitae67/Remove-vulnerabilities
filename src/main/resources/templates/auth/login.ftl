@@ -22,7 +22,6 @@
             <button class="button" type="submit">로그인</button>
         </form>
         <p class="muted"><a href="/forgot-password">비밀번호를 잊으셨나요?</a></p>
-        <p class="muted">테스트 계정: admin / admin1234, user / user1234</p>
     </section>
 </main>
 <div><#include "/fragments/footer.ftl"></div>

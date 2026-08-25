@@ -21,8 +21,8 @@
             <p>보유 포인트: <strong th:text="|${#numbers.formatInteger(user.pointBalance, 0, 'COMMA')}P|">0P</strong></p>
             <label for="usePoints">사용할 포인트</label>
             <input id="usePoints" name="usePoints" type="number" value="0" min="0"
-                   th:max="${user.pointBalance}" required
-                   oninput="this.setCustomValidity(Number(this.value) > Number(this.max) ? '보유 포인트보다 많은 포인트를 입력할 수 없습니다.' : '')">
+                   th:max="${user.pointBalance}" required>
+            <p id="points-error" class="form-error" hidden>보유 포인트보다 많은 포인트를 사용할 수 없습니다.</p>
 
             <label for="couponCode">쿠폰</label>
             <select id="couponCode" name="couponCode">
@@ -53,31 +53,37 @@
 </main>
 <div th:replace="~{fragments/footer :: footer}"></div>
 <script>
-    const priceInput = document.getElementById('price');
-    const quantityInput = document.getElementById('quantity');
-    const couponInput = document.getElementById('couponCode');
-    const discountInput = document.getElementById('discountAmount');
-    const feeInput = document.getElementById('fee');
-    const pointsInput = document.getElementById('usePoints');
+	    const priceInput = document.getElementById('price');
+	    const paymentForm = document.getElementById('payment-form');
+	    const quantityInput = document.getElementById('quantity');
+	    const couponInput = document.getElementById('couponCode');
+	    const discountInput = document.getElementById('discountAmount');
+	    const feeInput = document.getElementById('fee');
+	    const pointsInput = document.getElementById('usePoints');
+	    const pointsError = document.getElementById('points-error');
+	    const toNumber = value => Number(String(value || 0).replace(/,/g, '')) || 0;
 
     function formatWon(value) {
         const amount = Number(String(value || 0).replace(/,/g, ''));
         return `${Number.isFinite(amount) ? amount.toLocaleString('ko-KR') : '0'}원`;
     }
 
-    function updateAmount() {
-        const toNumber = value => Number(String(value || 0).replace(/,/g, '')) || 0;
-        const price = toNumber(priceInput.value);
-        const quantity = toNumber(quantityInput.value);
-        const discount = toNumber(discountInput.value);
-        const fee = toNumber(feeInput.value);
-        const points = toNumber(pointsInput.value);
-        const subtotal = price * quantity;
+	    function updateAmount() {
+	        const price = toNumber(priceInput.value);
+	        const quantity = toNumber(quantityInput.value);
+	        const discount = toNumber(discountInput.value);
+	        const fee = toNumber(feeInput.value);
+	        const points = toNumber(pointsInput.value);
+	        const maxPoints = toNumber(pointsInput.max);
+	        const subtotal = price * quantity;
+	        const pointsExceeded = points > maxPoints;
+	        pointsInput.setCustomValidity(pointsExceeded ? '보유 포인트보다 많은 포인트를 사용할 수 없습니다.' : '');
+	        pointsError.hidden = !pointsExceeded;
 
-        document.getElementById('subtotal').textContent = formatWon(subtotal);
-        document.getElementById('discount-display').textContent = formatWon(discount);
-        document.getElementById('total').textContent = formatWon(subtotal - discount - points + fee);
-    }
+	        document.getElementById('subtotal').textContent = formatWon(subtotal);
+	        document.getElementById('discount-display').textContent = formatWon(discount);
+	        document.getElementById('total').textContent = formatWon(subtotal - discount - points + fee);
+	    }
 
     couponInput.addEventListener('change', () => {
         const option = couponInput.options[couponInput.selectedIndex];
@@ -88,9 +94,16 @@
     quantityInput.addEventListener('input', () => {
         updateAmount();
     });
-    pointsInput.addEventListener('input', updateAmount);
+	    pointsInput.addEventListener('input', updateAmount);
+	    paymentForm.addEventListener('submit', event => {
+	        updateAmount();
+	        if (!paymentForm.checkValidity()) {
+	            event.preventDefault();
+	            pointsInput.reportValidity();
+	        }
+	    });
 
-    updateAmount();
+	    updateAmount();
 </script>
 </body>
 </html>
