@@ -51,6 +51,7 @@ public class SecurityConfig {
                 .withUsername(user.getUsername())
                 .password(user.getPassword())
                 .roles(user.getRole().name())
+                .disabled(user.isWithdrawn())
                 .build())
             .orElseThrow(() -> new UsernameNotFoundException("사용자를 찾을 수 없습니다."));
     }

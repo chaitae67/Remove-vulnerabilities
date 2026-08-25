@@ -7,12 +7,15 @@ CREATE TABLE app_user (
     phone VARCHAR2(30 CHAR),
     role VARCHAR2(20 CHAR) DEFAULT 'USER' NOT NULL,
     point_balance NUMBER(10) DEFAULT 0 NOT NULL,
+    withdrawn NUMBER(1) DEFAULT 0 NOT NULL,
+    withdrawn_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
 
     CONSTRAINT pk_app_user PRIMARY KEY (id),
     CONSTRAINT uk_app_user_username UNIQUE (username),
     CONSTRAINT uk_app_user_email UNIQUE (email),
-    CONSTRAINT ck_app_user_role CHECK (role IN ('USER', 'ADMIN'))
+    CONSTRAINT ck_app_user_role CHECK (role IN ('USER', 'ADMIN')),
+    CONSTRAINT ck_app_user_withdrawn CHECK (withdrawn IN (0, 1))
 );
 
 

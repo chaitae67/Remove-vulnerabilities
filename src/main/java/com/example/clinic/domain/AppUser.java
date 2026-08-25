@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import java.time.LocalDateTime;
+import org.hibernate.annotations.ColumnDefault;
 
 @Entity
 public class AppUser {
@@ -41,6 +42,12 @@ public class AppUser {
 
     @Column(nullable = false)
     private int pointBalance = 0;
+
+    @Column(nullable = false)
+    @ColumnDefault("0")
+    private boolean withdrawn = false;
+
+    private LocalDateTime withdrawnAt;
 
     @PrePersist
     void prePersist() {
@@ -109,5 +116,18 @@ public class AppUser {
 
     public void setPointBalance(int pointBalance) {
         this.pointBalance = pointBalance;
+    }
+
+    public boolean isWithdrawn() {
+        return withdrawn;
+    }
+
+    public LocalDateTime getWithdrawnAt() {
+        return withdrawnAt;
+    }
+
+    public void withdraw() {
+        this.withdrawn = true;
+        this.withdrawnAt = LocalDateTime.now();
     }
 }
