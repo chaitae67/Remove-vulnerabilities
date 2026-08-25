@@ -18,7 +18,10 @@ public class AuthController {
     }
 
     @GetMapping("/login")
-    public String login() {
+    public String login(@RequestParam(required = false) String error, Model model) {
+        if (error != null) {
+            model.addAttribute("error", "아이디 또는 비밀번호를 확인해 주세요.");
+        }
         return "auth/login";
     }
 
