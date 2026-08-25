@@ -15,6 +15,7 @@
         <dl class="summary-list">
             <div><dt>주문번호</dt><dd>${order.orderNumber}</dd></div>
             <div><dt>상품</dt><dd>${order.procedureProduct.name}</dd></div>
+            <div><dt>예약 날짜</dt><dd>${temporals.format(order.reservationDate, 'yyyy년 MM월 dd일')}</dd></div>
             <div><dt>상품금액</dt><dd>${numbers.formatInteger(order.originalAmount)}원</dd></div>
             <div><dt>쿠폰 할인</dt><dd>-${numbers.formatInteger(order.couponDiscount)}원</dd></div>
             <div><dt>포인트 사용</dt><dd>-${numbers.formatInteger(order.pointsUsed)}P</dd></div>

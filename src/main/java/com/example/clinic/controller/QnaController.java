@@ -1,11 +1,14 @@
 package com.example.clinic.controller;
 
 import java.security.Principal;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Controller;
@@ -19,6 +22,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.QnaPost;
+import com.example.clinic.domain.QnaAttachment;
 import com.example.clinic.domain.Role;
 import com.example.clinic.service.QnaService;
 import com.example.clinic.service.UserService;
@@ -129,11 +133,34 @@ public class QnaController {
         return "redirect:/qna/" + id;
     }
 
-    @GetMapping("/qna/download")
-    public ResponseEntity<Resource> download(@RequestParam String filename) {
-        Resource resource = qnaService.loadAttachment(filename);
+    @GetMapping("/qna/{postId}/attachments/{attachmentId}")
+    public ResponseEntity<Resource> download(
+        @PathVariable Long postId,
+        @PathVariable Long attachmentId,
+        Principal principal
+    ) {
+        QnaPost post = qnaService.findByIdWithAttachments(postId);
+        AppUser viewer = principal == null ? null : userService.findByUsername(principal.getName());
+        boolean admin = viewer != null && viewer.getRole() == Role.ADMIN;
+        boolean owner = viewer != null && post.getWriter().getUsername().equals(viewer.getUsername());
+        if (post.isPrivatePost() && !admin && !owner) {
+            throw new AccessDeniedException("첨부파일을 내려받을 권한이 없습니다.");
+        }
+        QnaAttachment attachment = qnaService.findAttachment(post, attachmentId);
+        Resource resource = qnaService.loadAttachment(attachment.getStoredFilename());
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
+            .contentType(resolveMediaType(attachment.getContentType()))
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename(attachment.getOriginalFilename(), StandardCharsets.UTF_8)
+                .build().toString())
             .body(resource);
+    }
+
+    private MediaType resolveMediaType(String contentType) {
+        try {
+            return contentType == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(contentType);
+        } catch (IllegalArgumentException ex) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
     }
 }

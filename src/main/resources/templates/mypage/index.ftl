@@ -37,7 +37,7 @@
         <ul class="board-list">
             <#list payments as payment>
             <li>
-                <span>${payment.procedureProduct.name}</span>
+                <a class="payment-detail-link" href="/payments/${payment.orderNumber}">${payment.procedureProduct.name}<small>${payment.orderNumber}</small></a>
                 <span>${numbers.formatInteger(payment.amount)}원</span>
                 <span class="state">${payment.status}</span>
                 <time>${temporals.format(payment.createdAt, 'yyyy-MM-dd HH:mm')}</time>
@@ -93,7 +93,7 @@
         </ul>
     </section>
 
-    <section class="mypage-section withdraw-section">
+    <#if user.role != 'ADMIN'><section class="mypage-section withdraw-section">
         <div class="section-head">
             <h2>회원 탈퇴</h2>
         </div>
@@ -109,7 +109,7 @@
                 <button class="button button-outline" type="submit">회원 탈퇴</button>
             </form>
         </article>
-    </section>
+    </section></#if>
       </div>
     </section>
 </main>

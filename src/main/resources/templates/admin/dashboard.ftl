@@ -29,7 +29,7 @@
                 <#list consultations as item>
                 <li>
                     <strong>${item.name}</strong>
-                    <span>${item.phone} · ${item.area} · ${item.preferredContact}</span>
+                    <span>${item.phone} · ${item.area} · ${item.preferredContact}<#if item.preferredDate??> · 희망일 ${temporals.format(item.preferredDate, 'yyyy.MM.dd')}</#if></span>
                 </li>
                 </#list>
             </ul>

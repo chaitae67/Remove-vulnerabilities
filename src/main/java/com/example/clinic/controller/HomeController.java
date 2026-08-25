@@ -1,6 +1,8 @@
 package com.example.clinic.controller;
 
 import java.security.Principal;
+import java.time.LocalDate;
+import org.springframework.format.annotation.DateTimeFormat;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -37,6 +39,7 @@ public class HomeController {
         model.addAttribute("procedures", procedureService.findActiveProcedures());
         model.addAttribute("notices", noticeService.findLatest());
         model.addAttribute("qnas", qnaService.findLatest());
+        model.addAttribute("minConsultationDate", LocalDate.now().toString());
 
         if (principal != null) {
             var currentUser = userService.findByUsername(principal.getName());
@@ -52,12 +55,13 @@ public class HomeController {
         @RequestParam String phone,
         @RequestParam String area,
         @RequestParam String preferredContact,
+        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate preferredDate,
         @RequestParam(required = false) String message,
         @RequestParam(defaultValue = "false") boolean privacyAgreed,
         RedirectAttributes redirectAttributes
     ) {
         try {
-            consultationService.create(name, phone, area, preferredContact, message, privacyAgreed);
+            consultationService.create(name, phone, area, preferredContact, preferredDate, message, privacyAgreed);
             redirectAttributes.addFlashAttribute("message", "상담 신청이 접수되었습니다.");
         } catch (IllegalArgumentException ex) {
             redirectAttributes.addFlashAttribute("error", ex.getMessage());

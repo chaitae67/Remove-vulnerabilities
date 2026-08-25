@@ -53,13 +53,13 @@ class UserWithdrawalTests {
 
     @Test
     @WithMockUser(username = "admin", roles = "ADMIN")
-    void wrongPasswordDoesNotWithdrawUser() throws Exception {
+    void adminAccountCannotWithdraw() throws Exception {
         mockMvc.perform(post("/mypage/withdraw")
                 .with(csrf())
                 .param("password", "wrong-password"))
             .andExpect(status().is3xxRedirection())
             .andExpect(redirectedUrl("/mypage?userId=1"))
-            .andExpect(flash().attribute("withdrawError", "비밀번호가 일치하지 않습니다."));
+            .andExpect(flash().attribute("withdrawError", "관리자 계정은 회원 탈퇴할 수 없습니다."));
 
         assertThat(userRepository.findByUsername("admin").orElseThrow().isWithdrawn()).isFalse();
     }

@@ -21,7 +21,7 @@
         <div class="attachments">
             <h2>첨부파일</h2>
             <#list post.attachments as file>
-            <a href="/qna/download?filename=${file.storedFilename?url}" target="_blank">${file.originalFilename}</a>
+            <a href="/qna/${post.id}/attachments/${file.id}" download>${file.originalFilename}</a>
             </#list>
         </div>
         </#if>

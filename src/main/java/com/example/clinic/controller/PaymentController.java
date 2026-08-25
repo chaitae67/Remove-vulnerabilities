@@ -4,18 +4,18 @@ import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.service.PaymentService;
-import com.example.clinic.service.CouponService;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.UserService;
-import java.math.BigDecimal;
 import java.security.Principal;
+import java.time.LocalDate;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+import org.springframework.format.annotation.DateTimeFormat;
 
 @Controller
 public class PaymentController {
@@ -23,21 +23,20 @@ public class PaymentController {
     private final ProcedureService procedureService;
     private final PaymentService paymentService;
     private final UserService userService;
-    private final CouponService couponService;
 
-    public PaymentController(ProcedureService procedureService, PaymentService paymentService, UserService userService,
-                             CouponService couponService) {
+    public PaymentController(ProcedureService procedureService, PaymentService paymentService, UserService userService) {
         this.procedureService = procedureService;
         this.paymentService = paymentService;
         this.userService = userService;
-        this.couponService = couponService;
     }
 
     @GetMapping("/payments/checkout/{procedureId}")
     public String checkout(@PathVariable Long procedureId, Principal principal, Model model) {
+        AppUser user = userService.findByUsername(principal.getName());
         model.addAttribute("procedure", procedureService.findById(procedureId));
-        model.addAttribute("user", userService.findByUsername(principal.getName()));
-        model.addAttribute("coupons", couponService.findActiveCoupons());
+        model.addAttribute("user", user);
+        model.addAttribute("coupons", paymentService.findAvailableCoupons(user));
+        model.addAttribute("minReservationDate", LocalDate.now().toString());
         return "payments/checkout";
     }
 
@@ -45,49 +44,35 @@ public class PaymentController {
     public String pay(
         @PathVariable Long procedureId,
         @RequestParam String method,
-        @RequestParam String price,
         @RequestParam int quantity,
-        @RequestParam(defaultValue = "0") String discountAmount,
-        @RequestParam(defaultValue = "0") String fee,
         @RequestParam(defaultValue = "0") int usePoints,
         @RequestParam(required = false) String couponCode,
-        @CookieValue(name = "VIP_DISCOUNT", defaultValue = "0") String vipDiscount,
-        Principal principal
+        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate reservationDate,
+        Principal principal,
+        RedirectAttributes redirectAttributes
     ) {
         AppUser buyer = userService.findByUsername(principal.getName());
         ProcedureProduct procedure = procedureService.findById(procedureId);
-        /*
-         * VULNERABLE LAB - CC/PV:
-         * 클라이언트가 마음대로 바꿀 수 있는 쿠키 값을 서버 검증 없이 결제 할인에 반영한다.
-         * 결제 금액도 요청 파라미터 price/discountAmount/fee를 그대로 신뢰하므로 프로세스 검증이 누락된다.
-         */
-        BigDecimal trustedClientPrice = parseClientAmount(price);
-        BigDecimal trustedClientDiscount = parseClientAmount(discountAmount).add(parseClientAmount(vipDiscount));
-        BigDecimal trustedClientFee = parseClientAmount(fee);
-        PaymentOrder order = paymentService.createPaidOrder(
-            buyer,
-            procedure,
-            method,
-            trustedClientPrice,
-            quantity,
-            trustedClientDiscount,
-            trustedClientFee,
-            usePoints,
-            couponCode
-        );
-        return "redirect:/payments/success/" + order.getOrderNumber();
-    }
-
-    private BigDecimal parseClientAmount(String amount) {
-        if (amount == null || amount.isBlank()) {
-            return BigDecimal.ZERO;
+        try {
+            PaymentOrder order = paymentService.createPaidOrder(buyer, procedure, method, quantity, usePoints, couponCode, reservationDate);
+            return "redirect:/payments/success/" + order.getOrderNumber();
+        } catch (IllegalArgumentException ex) {
+            redirectAttributes.addFlashAttribute("error", ex.getMessage());
+            return "redirect:/payments/checkout/" + procedureId;
         }
-        return new BigDecimal(amount.replace(",", "").trim());
     }
 
     @GetMapping("/payments/success/{orderNumber}")
-    public String success(@PathVariable String orderNumber, Model model) {
-        model.addAttribute("order", paymentService.findByOrderNumber(orderNumber));
+    public String success(@PathVariable String orderNumber, Principal principal, Model model) {
+        AppUser buyer = userService.findByUsername(principal.getName());
+        model.addAttribute("order", paymentService.findByOrderNumberAndBuyer(orderNumber, buyer));
         return "payments/success";
+    }
+
+    @GetMapping("/payments/{orderNumber}")
+    public String detail(@PathVariable String orderNumber, Principal principal, Model model) {
+        AppUser buyer = userService.findByUsername(principal.getName());
+        model.addAttribute("order", paymentService.findByOrderNumberAndBuyer(orderNumber, buyer));
+        return "payments/detail";
     }
 }

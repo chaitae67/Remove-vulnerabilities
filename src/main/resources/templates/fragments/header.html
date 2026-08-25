@@ -24,10 +24,7 @@
                 <div><a th:href="@{/eye}"><b>눈성형</b><small>쌍꺼풀 · 눈매교정 · 트임</small></a><a th:href="@{/nose}"><b>코성형</b><small>콧대 · 코끝 · 재수술</small></a><a th:href="@{/contour}"><b>얼굴윤곽</b><small>광대 · 턱선 · 턱끝</small></a><a th:href="@{/lifting}"><b>리프팅</b><small>수술 · 비수술 리프팅</small></a><a th:href="@{/body}"><b>바디성형</b><small>지방흡입 · 바디라인</small></a><a th:href="@{/aftercare}"><b>사후관리</b><small>경과 · 회복 · 케어</small></a></div>
             </div>
         </div>
-        <div class="nav-group">
-            <a class="nav-root" th:href="@{/procedures}"><span>시술·예약</span><small>PROGRAM</small></a>
-            <div class="nav-dropdown"><p><strong>PROGRAM</strong><span>상담 패키지와 예약을 한곳에서</span></p><div><a th:href="@{/procedures}">전체 프로그램</a><a th:href="@{/procedures/search}">프로그램 검색</a></div></div>
-        </div>
+        <a th:href="@{/procedures}"><span>시술·예약</span><small>PROGRAM</small></a>
         <div class="nav-group"><a class="nav-root" th:href="@{/reviews}"><span>리얼스토리</span><small>REVIEW</small></a><div class="nav-dropdown"><p><strong>REAL STORY</strong><span>직접 경험한 솔직한 이야기</span></p><div><a th:href="@{/reviews}">전체 후기</a><a sec:authorize="isAuthenticated()" th:href="@{/reviews/new}">후기 작성</a></div></div></div>
         <div class="nav-group"><a class="nav-root" th:href="@{/qna}"><span>상담</span><small>CONSULT</small></a><div class="nav-dropdown"><p><strong>CONSULT</strong><span>궁금한 내용을 편하게 남겨주세요</span></p><div><a th:href="@{/qna}">온라인 상담</a><a sec:authorize="isAuthenticated()" th:href="@{/qna/new}">상담 작성</a><a th:href="@{/#quick-consultation}">빠른 상담</a></div></div></div>
         <div class="nav-group"><a class="nav-root" th:href="@{/events}"><span>소식·혜택</span><small>EVENT</small></a><div class="nav-dropdown"><p><strong>NEWS & BENEFIT</strong><span>새로운 소식과 현재 프로그램</span></p><div><a th:href="@{/events}">이벤트</a><a th:href="@{/notices}">공지사항</a></div></div></div>

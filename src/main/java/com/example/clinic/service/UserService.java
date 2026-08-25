@@ -99,6 +99,9 @@ public class UserService {
     @Transactional
     public void withdraw(String username, String rawPassword) {
         AppUser user = findByUsername(username);
+        if (user.getRole() == Role.ADMIN) {
+            throw new IllegalArgumentException("관리자 계정은 회원 탈퇴할 수 없습니다.");
+        }
         if (user.isWithdrawn()) {
             throw new IllegalArgumentException("이미 탈퇴한 회원입니다.");
         }

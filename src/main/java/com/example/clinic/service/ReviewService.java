@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -45,6 +47,29 @@ public class ReviewService {
     public Review findById(Long id) {
         return reviewRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("후기를 찾을 수 없습니다."));
+    }
+
+    public ReviewAttachment findAttachment(Review review, Long attachmentId) {
+        return review.getAttachments().stream()
+            .filter(attachment -> attachment.getId().equals(attachmentId))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("첨부파일을 찾을 수 없습니다."));
+    }
+
+    public Resource loadAttachment(ReviewAttachment attachment) {
+        try {
+            Path filePath = reviewUploadPath.resolve(attachment.getStoredFilename()).normalize();
+            if (!filePath.startsWith(reviewUploadPath)) {
+                throw new IllegalArgumentException("잘못된 파일 경로입니다.");
+            }
+            Resource resource = new UrlResource(filePath.toUri());
+            if (resource.exists() && resource.isReadable()) {
+                return resource;
+            }
+            throw new IllegalArgumentException("파일을 찾을 수 없습니다.");
+        } catch (java.net.MalformedURLException ex) {
+            throw new IllegalStateException("파일을 불러오는 중 오류가 발생했습니다.", ex);
+        }
     }
 
     @Transactional

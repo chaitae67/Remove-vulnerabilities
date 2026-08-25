@@ -11,6 +11,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 
 @Entity
 public class PaymentOrder {
@@ -57,6 +58,8 @@ public class PaymentOrder {
     private LocalDateTime createdAt;
 
     private LocalDateTime paidAt;
+
+    private LocalDate reservationDate;
 
     @PrePersist
     void prePersist() {
@@ -137,4 +140,7 @@ public class PaymentOrder {
     public void setPaidAt(LocalDateTime paidAt) {
         this.paidAt = paidAt;
     }
+
+    public LocalDate getReservationDate() { return reservationDate; }
+    public void setReservationDate(LocalDate reservationDate) { this.reservationDate = reservationDate; }
 }
