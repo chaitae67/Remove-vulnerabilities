@@ -65,6 +65,11 @@ public class QnaService {
     }
 
     @Transactional
+    public void delete(Long id) {
+        qnaPostRepository.deleteById(id);
+    }
+
+    @Transactional
     public void answer(Long id, String answer) {
         QnaPost post = findByIdWithAttachments(id);
         post.setAnswer(answer);

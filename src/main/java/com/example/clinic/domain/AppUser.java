@@ -49,6 +49,10 @@ public class AppUser {
 
     private LocalDateTime withdrawnAt;
 
+    private String resetToken;
+
+    private LocalDateTime resetTokenExpiresAt;
+
     @PrePersist
     void prePersist() {
         createdAt = LocalDateTime.now();
@@ -129,5 +133,21 @@ public class AppUser {
     public void withdraw() {
         this.withdrawn = true;
         this.withdrawnAt = LocalDateTime.now();
+    }
+
+    public String getResetToken() {
+        return resetToken;
+    }
+
+    public void setResetToken(String resetToken) {
+        this.resetToken = resetToken;
+    }
+
+    public LocalDateTime getResetTokenExpiresAt() {
+        return resetTokenExpiresAt;
+    }
+
+    public void setResetTokenExpiresAt(LocalDateTime resetTokenExpiresAt) {
+        this.resetTokenExpiresAt = resetTokenExpiresAt;
     }
 }
