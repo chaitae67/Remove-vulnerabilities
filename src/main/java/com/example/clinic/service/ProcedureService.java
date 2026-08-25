@@ -33,6 +33,13 @@ public class ProcedureService {
     }
 
     @Transactional
+    public void delete(Long id) {
+        ProcedureProduct product = findById(id);
+        product.setActive(false);
+        procedureRepository.save(product);
+    }
+
+    @Transactional
     public int importFromXml(String xml) throws Exception {
         Document document = parseXml(xml);
         NodeList procedureNodes = document.getElementsByTagName("procedure");

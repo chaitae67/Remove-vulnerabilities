@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
@@ -33,7 +34,22 @@ public class AdminController {
         model.addAttribute("consultations", consultationService.findRecentConsultations());
         model.addAttribute("orders", paymentService.findRecentOrders());
         model.addAttribute("qnas", qnaService.findAll());
+        model.addAttribute("procedures", procedureService.findActiveProcedures());
         return "admin/dashboard";
+    }
+
+    @PostMapping("/admin/procedures/{id}/delete")
+    public String deleteProcedure(
+        @PathVariable Long id,
+        RedirectAttributes redirectAttributes
+    ) {
+        try {
+            procedureService.delete(id);
+            redirectAttributes.addFlashAttribute("message", "시술/상담 패키지가 삭제되었습니다.");
+        } catch (IllegalArgumentException e) {
+            redirectAttributes.addFlashAttribute("message", e.getMessage());
+        }
+        return "redirect:/admin";
     }
 
     @PostMapping("/admin/procedures/import")
