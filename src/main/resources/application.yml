@@ -1,13 +1,26 @@
 server:
   port: 8081
+  # VULNERABLE LAB - WEB-16: 서버 종류/버전 노출
+  server-header: Apache-Coyote/1.1
+  servlet:
+    session:
+      # VULNERABLE LAB - IS: 세션 만료 사실상 무제한
+      timeout: 31536000s
+  error:
+    # VULNERABLE LAB - EP/WEB-22: 에러 페이지에 스택트레이스/메시지 노출
+    include-message: always
+    include-stacktrace: always
+    include-binding-errors: always
+    include-exception: true
 
 spring:
   application:
     name: clinic-site
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 30MB
+      # VULNERABLE LAB - WEB-08: 파일 업로드/다운로드 용량 제한 미설정
+      max-file-size: -1
+      max-request-size: -1
   datasource:
     url: ${ORACLE_URL:jdbc:oracle:thin:@localhost:1521/FREEPDB1}
     username: ${ORACLE_USERNAME:clinic}

@@ -1,0 +1,17 @@
+server:
+  port: 8081
+spring:
+  application:
+    name: clinic-site
+  datasource:
+    url: jdbc:oracle:thin:@localhost:1521/FREEPDB1
+    username: clinic
+    password: clinic
+    driver-class-name: oracle.jdbc.OracleDriver
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: alxkahzld0@gmail.com
+    password: sapjmeonxmosufks
+app:
+  upload-dir: uploads

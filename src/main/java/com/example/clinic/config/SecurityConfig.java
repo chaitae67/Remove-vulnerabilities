@@ -19,10 +19,10 @@ import com.example.clinic.repository.AppUserRepository;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, CookieAutoLoginFilter cookieAutoLoginFilter) throws Exception {
         http
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/", "/login", "/register", "/forgot-password", "/reset-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**", "/h2-console/**","/error").permitAll()
+                .requestMatchers("/", "/login", "/register", "/forgot-password", "/reset-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**", "/browse/**", "/backup/**", "/manual.html", "/h2-console/**","/error").permitAll()
                 .requestMatchers("/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/notices/fetch-image", "/qna/*/answer").hasRole("ADMIN")
                 .requestMatchers("/qna/new", "/qna/preview", "/reviews/preview", "/payments/**").authenticated()
                 .requestMatchers("/procedures","procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/consultations").permitAll()
@@ -47,8 +47,14 @@ public class SecurityConfig {
                 .logoutRequestMatcher(new AntPathRequestMatcher("/logout"))
                 .logoutSuccessUrl("/")
                 .permitAll())
-            .csrf(csrf -> csrf.ignoringRequestMatchers("/h2-console/**"))
-            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
+            // VULNERABLE LAB - CF: CSRF 보호 완전 비활성화
+            .csrf(csrf -> csrf.disable())
+            // VULNERABLE LAB - IS: 세션 고정 보호 해제
+            .sessionManagement(session -> session.sessionFixation(fixation -> fixation.none()))
+            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
+            // VULNERABLE LAB - CC: 쿠키 값으로 자동 로그인(쿠키 변조)
+            .addFilterBefore(cookieAutoLoginFilter,
+                org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
