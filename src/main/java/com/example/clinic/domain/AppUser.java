@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import java.time.LocalDateTime;
+import org.hibernate.annotations.ColumnDefault;
 
 @Entity
 public class AppUser {
@@ -43,6 +44,7 @@ public class AppUser {
     private int pointBalance = 0;
 
     @Column(nullable = false)
+    @ColumnDefault("0")
     private boolean withdrawn = false;
 
     private LocalDateTime withdrawnAt;
