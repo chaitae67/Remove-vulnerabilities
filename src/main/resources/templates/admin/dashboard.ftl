@@ -23,6 +23,27 @@
                 <button class="button" type="submit">XML 등록</button>
             </form>
         </div>
+        <div class="panel admin-procedure-panel">
+            <h2>시술/상담 패키지 관리</h2>
+            <#if procedures?has_content>
+            <ul class="mini-list admin-procedure-list">
+                <#list procedures as procedure>
+                <li>
+                    <div>
+                        <strong>${procedure.name}</strong>
+                        <span>${procedure.category} · ${numbers.formatInteger(procedure.price)}원</span>
+                    </div>
+                    <form action="/admin/procedures/${procedure.id}/delete" method="post" onsubmit="return confirm('이 패키지를 삭제하시겠습니까? 기존 결제내역은 유지됩니다.');">
+                        <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
+                        <button class="button button-danger button-small" type="submit">삭제</button>
+                    </form>
+                </li>
+                </#list>
+            </ul>
+            <#else>
+            <p class="muted">등록된 시술/상담 패키지가 없습니다.</p>
+            </#if>
+        </div>
         <div class="panel">
             <h2>최근 상담 신청</h2>
             <ul class="mini-list">

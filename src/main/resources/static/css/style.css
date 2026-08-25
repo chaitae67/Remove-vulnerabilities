@@ -772,6 +772,29 @@ textarea {
     border-bottom: 1px solid var(--line);
 }
 
+.admin-procedure-panel {
+    grid-column: 1 / -1;
+}
+
+.admin-procedure-list li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 18px;
+}
+
+.admin-procedure-list li > div {
+    display: grid;
+    gap: 4px;
+}
+
+.admin-procedure-list span {
+    color: var(--muted);
+}
+
+.admin-procedure-list form {
+    margin: 0;
+}
+
 .article-body {
     margin: 28px 0;
     white-space: pre-line;
