@@ -6,6 +6,7 @@ import com.example.clinic.domain.PaymentOrder;
 import com.example.clinic.domain.PaymentStatus;
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.repository.PaymentOrderRepository;
+import com.example.clinic.repository.AppUserRepository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
@@ -19,10 +20,16 @@ public class PaymentService {
 
     private final PaymentOrderRepository paymentOrderRepository;
     private final CouponService couponService;
+    private final AppUserRepository appUserRepository;
 
-    public PaymentService(PaymentOrderRepository paymentOrderRepository, CouponService couponService) {
+    public PaymentService(
+        PaymentOrderRepository paymentOrderRepository,
+        CouponService couponService,
+        AppUserRepository appUserRepository
+    ) {
         this.paymentOrderRepository = paymentOrderRepository;
         this.couponService = couponService;
+        this.appUserRepository = appUserRepository;
     }
 
     @Transactional
@@ -64,6 +71,7 @@ public class PaymentService {
             .max(BigDecimal.ZERO);
         int earnedPoints = finalAmount.intValue() / 100;
         buyer.setPointBalance(buyer.getPointBalance() - usePoints + earnedPoints);
+        appUserRepository.save(buyer);
 
         PaymentOrder order = new PaymentOrder();
         order.setOrderNumber("CLINIC-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());

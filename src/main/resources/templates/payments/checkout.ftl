@@ -43,7 +43,7 @@
             <input placeholder="카드번호 입력" value="4242-4242-4242-4242">
             <dl class="summary-list">
                 <div><dt>상품 금액</dt><dd id="subtotal">0원</dd></div>
-                <div><dt>할인 금액</dt><dd id="discount-display">0원</dd></div>
+                <div><dt>총 할인 금액</dt><dd id="discount-display">0원</dd></div>
                 <div><dt>결제 금액</dt><dd id="total">0원</dd></div>
             </dl>
 
@@ -81,7 +81,7 @@
         pointsError.hidden = !pointsExceeded;
 
         document.getElementById('subtotal').textContent = formatWon(subtotal);
-        document.getElementById('discount-display').textContent = formatWon(discount);
+        document.getElementById('discount-display').textContent = formatWon(discount + points);
         document.getElementById('total').textContent = formatWon(Math.max(0, subtotal - discount - points));
     }
 
