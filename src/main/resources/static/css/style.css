@@ -335,15 +335,10 @@ textarea {
     min-width: 190px;
 }
 
-.brand-mark {
-    display: grid;
-    place-items: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
-    background: var(--green);
-    color: #fff;
-    font-weight: 800;
+.brand-logo {
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
 }
 
 .brand strong,
@@ -431,29 +426,15 @@ textarea {
 }
 
 .hero {
-    min-height: 560px;
-    display: flex;
-    align-items: center;
-    padding: 80px clamp(20px, 7vw, 90px);
-    background:
-        linear-gradient(90deg, rgba(18, 35, 34, 0.82), rgba(18, 35, 34, 0.56), rgba(18, 35, 34, 0.12)),
-        url("https://images.unsplash.com/photo-1631217868264-e5b90bb7e133?auto=format&fit=crop&fm=jpg&q=70&w=1800") center/cover;
-    color: #fff;
+    width: 100%;
+    background: #f7f8f8;
+    overflow: hidden;
 }
 
-.hero-copy {
-    max-width: 680px;
-}
-
-.hero h1 {
-    margin: 8px 0 16px;
-    font-size: 56px;
-    line-height: 1.08;
-}
-
-.hero p {
-    max-width: 620px;
-    font-size: 18px;
+.hero-image {
+    display: block;
+    width: 100%;
+    height: auto;
 }
 
 .hero-actions,
@@ -801,15 +782,6 @@ textarea {
         justify-content: flex-start;
     }
 
-    .hero {
-        min-height: 500px;
-        padding-block: 64px;
-    }
-
-    .hero h1 {
-        font-size: 42px;
-    }
-
     .split,
     .columns,
     .admin-grid,
@@ -829,19 +801,6 @@ textarea {
     .narrow,
     .narrow-wide {
         width: min(100% - 28px, 1180px);
-    }
-
-    .hero {
-        min-height: 460px;
-        padding: 48px 18px;
-    }
-
-    .hero h1 {
-        font-size: 34px;
-    }
-
-    .hero p {
-        font-size: 16px;
     }
 
     .with-action,
