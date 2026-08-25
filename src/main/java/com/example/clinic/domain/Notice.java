@@ -26,6 +26,9 @@ public class Notice {
     @ManyToOne(optional = false)
     private AppUser author;
 
+    @Column(length = 500)
+    private String imageUrl;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
@@ -67,6 +70,14 @@ public class Notice {
 
     public void setAuthor(AppUser author) {
         this.author = author;
+    }
+
+    public String getImageUrl() {
+        return imageUrl;
+    }
+
+    public void setImageUrl(String imageUrl) {
+        this.imageUrl = imageUrl;
     }
 
     public LocalDateTime getCreatedAt() {

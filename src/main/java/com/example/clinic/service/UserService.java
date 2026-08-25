@@ -4,7 +4,9 @@ import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.Role;
 import com.example.clinic.repository.AppUserRepository;
 import jakarta.transaction.Transactional;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -65,6 +67,33 @@ public class UserService {
             user.setRole(form.getRole());
         }
         return userRepository.save(user);
+    }
+
+    // VULNERABLE LAB: 재설정 토큰을 UUID 같은 예측 불가능한 값이 아니라
+    // 타임스탬프(System.currentTimeMillis())로 발급한다 -> 토큰 추측/무차별 대입이 가능하다.
+    @Transactional
+    public String issuePasswordResetToken(String username, String email) {
+        Optional<AppUser> found = userRepository.findByUsernameAndEmail(username, email);
+        if (found.isEmpty()) {
+            return null;
+        }
+        AppUser user = found.get();
+        String token = String.valueOf(System.currentTimeMillis());
+        user.setResetToken(token);
+        user.setResetTokenExpiresAt(LocalDateTime.now().plusMinutes(30));
+        return token;
+    }
+
+    @Transactional
+    public void resetPassword(String token, String newPassword) {
+        AppUser user = userRepository.findByResetToken(token)
+            .orElseThrow(() -> new IllegalArgumentException("유효하지 않거나 만료된 링크입니다."));
+        if (user.getResetTokenExpiresAt() == null || user.getResetTokenExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new IllegalArgumentException("유효하지 않거나 만료된 링크입니다.");
+        }
+        user.setPassword(passwordEncoder.encode(newPassword));
+        user.setResetToken(null);
+        user.setResetTokenExpiresAt(null);
     }
 
     @Transactional

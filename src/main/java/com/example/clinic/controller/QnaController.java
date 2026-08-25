@@ -7,6 +7,7 @@ import java.util.Map;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -103,7 +104,22 @@ public class QnaController {
         model.addAttribute("post", post);
         model.addAttribute("canReadPrivate", !post.isPrivatePost() || admin || owner);
         model.addAttribute("canAnswer", admin);
+        model.addAttribute("canManage", admin || owner);
         return "qna/detail";
+    }
+
+    @PostMapping("/qna/{id}/delete")
+    public String delete(@PathVariable Long id, Principal principal, RedirectAttributes redirectAttributes) {
+        QnaPost post = qnaService.findByIdWithAttachments(id);
+        AppUser viewer = principal == null ? null : userService.findByUsername(principal.getName());
+        boolean admin = viewer != null && viewer.getRole() == Role.ADMIN;
+        boolean owner = viewer != null && post.getWriter().getUsername().equals(viewer.getUsername());
+        if (!admin && !owner) {
+            throw new AccessDeniedException("삭제 권한이 없습니다.");
+        }
+        qnaService.delete(id);
+        redirectAttributes.addFlashAttribute("message", "상담 글이 삭제되었습니다.");
+        return "redirect:/qna";
     }
 
     @PostMapping("/qna/{id}/answer")
