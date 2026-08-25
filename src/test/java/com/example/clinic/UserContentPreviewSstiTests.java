@@ -40,7 +40,7 @@ class UserContentPreviewSstiTests {
         mockMvc.perform(post("/qna/preview")
                 .with(csrf())
                 .param("title", "SSTI 테스트")
-                .param("content", "SSTI 계산 결과: [[${7 * 7}]]"))
+                .param("content", "SSTI 계산 결과: ${7 * 7}"))
             .andExpect(status().isOk())
             .andExpect(content().string(org.hamcrest.Matchers.containsString(
                 "SSTI 계산 결과: 49"
@@ -54,7 +54,7 @@ class UserContentPreviewSstiTests {
                 .with(csrf())
                 .param("title", "후기 SSTI 테스트")
                 .param("rating", "5")
-                .param("content", "SSTI 계산 결과: [[${7 * 7}]]"))
+                .param("content", "SSTI 계산 결과: ${7 * 7}"))
             .andExpect(status().isOk())
             .andExpect(content().string(org.hamcrest.Matchers.containsString(
                 "SSTI 계산 결과: 49"

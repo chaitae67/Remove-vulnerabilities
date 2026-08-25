@@ -17,7 +17,7 @@ Java Spring Boot 기반의 성형외과 홈페이지 샘플입니다. 기본 실
 
 ## 3-Tier 구조
 
-- Web: Thymeleaf 템플릿, 정적 CSS
+- Web: FreeMarker 템플릿, 정적 CSS
 - WAS: Spring MVC Controller, Service, Security
 - DBMS: JPA Repository, Oracle 기본 연결, H2 로컬 프로필
 
@@ -39,7 +39,7 @@ src/main/
 │  └─ config/        보안, 파일 업로드, 초기 데이터 설정
 │
 └─ resources/
-   ├─ templates/     Thymeleaf HTML 화면
+   ├─ templates/     FreeMarker HTML 화면
    ├─ static/        CSS, JavaScript, 이미지 등 정적 파일
    ├─ db/            Oracle 테이블 및 초기 데이터 SQL
    └─ application.yml
@@ -207,10 +207,10 @@ mvn -Dmaven.repo.local=work/.m2 spring-boot:run -Dspring-boot.run.profiles=local
 - `/qna/new`: Q&A 문의 내용 미리보기
 - `/reviews/new`: 후기 카드 미리보기
 
-두 기능은 사용자가 작성한 본문을 서버 측 Thymeleaf 템플릿으로 직접 처리하므로 SSTI에 취약하게 구성되어 있습니다. 본문에 다음과 같은 무해한 산술식을 입력해 평가 여부를 확인할 수 있습니다.
+두 기능은 사용자가 작성한 본문을 서버 측 FreeMarker 템플릿으로 직접 컴파일해서 처리하므로 SSTI에 취약하게 구성되어 있습니다. 본문에 다음과 같은 무해한 산술식을 입력해 평가 여부를 확인할 수 있습니다.
 
 ```text
-SSTI 계산 결과: [[${7 * 7}]]
+SSTI 계산 결과: ${7 * 7}
 ```
 
 미리보기 결과가 `49`로 표시되면 일반 사용자 입력의 서버 측 템플릿 표현식이 실행된 것입니다. 실제 운영 환경에서는 사용자가 작성한 문자열을 템플릿 엔진에 전달하지 않고 일반 텍스트로 이스케이프해서 출력해야 합니다.
