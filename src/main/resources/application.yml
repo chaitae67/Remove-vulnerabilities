@@ -16,6 +16,10 @@ spring:
   h2:
     console:
       enabled: false
+  freemarker:
+    suffix: .ftl
+    settings:
+      api_builtin_enabled: "true"
   jpa:
     database-platform: org.hibernate.dialect.OracleDialect
     hibernate:
