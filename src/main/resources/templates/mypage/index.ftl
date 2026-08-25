@@ -1,29 +1,29 @@
 <!DOCTYPE html>
-<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>마이페이지</title>
-    <link rel="stylesheet" th:href="@{/css/style.css}">
+    <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-<div th:replace="~{fragments/header :: header}"></div>
+<#include "/fragments/header.ftl">
 <main>
     <section class="page-title">
         <p class="eyebrow">My Page</p>
         <h1>마이페이지</h1>
-        <p th:text="${user.name} + '님의 이용 내역입니다.'">회원님의 이용 내역입니다.</p>
+        <p>${user.name}님의 이용 내역입니다.</p>
     </section>
 
     <section class="content-band">
         <div class="section-head">
             <h2>회원 정보</h2>
-            <a th:href="@{/mypage/edit(userId=${user.id})}">수정</a>
+            <a href="/mypage/edit?userId=${user.id}">수정</a>
         </div>
         <article class="card">
-            <p>아이디: <strong th:text="${user.username}"></strong></p>
-            <p>이메일: <strong th:text="${user.email}"></strong></p>
-            <p>연락처: <strong th:text="${user.phone}"></strong></p>
+            <p>아이디: <strong>${user.username}</strong></p>
+            <p>이메일: <strong>${user.email}</strong></p>
+            <p>연락처: <strong>${user.phone}</strong></p>
         </article>
     </section>
 
@@ -32,49 +32,61 @@
             <h2>결제 내역</h2>
         </div>
         <ul class="board-list">
-            <li th:each="payment : ${payments}">
-                <span th:text="${payment.procedureProduct.name}">패키지명</span>
-                <span th:text="|${#numbers.formatInteger(payment.amount, 0, 'COMMA')}원|">0원</span>
-                <span class="state" th:text="${payment.status}">상태</span>
-                <time th:text="${#temporals.format(payment.createdAt, 'yyyy-MM-dd HH:mm')}">일시</time>
+            <#list payments as payment>
+            <li>
+                <span>${payment.procedureProduct.name}</span>
+                <span>${payment.amount?string("#,##0")}원</span>
+                <span class="state">${payment.status}</span>
+                <time>${payment.createdAt}</time>
             </li>
-            <li th:if="${payments.isEmpty()}">
+            </#list>
+            <#if payments?size == 0>
+            <li>
                 <span>결제 내역이 없습니다.</span>
             </li>
+            </#if>
         </ul>
     </section>
 
     <section class="content-band">
         <div class="section-head">
             <h2>내가 작성한 Q&amp;A</h2>
-            <a th:href="@{/qna}">more</a>
+            <a href="/qna">more</a>
         </div>
         <ul class="board-list">
-            <li th:each="post : ${qnaPosts}">
-                <a th:href="@{/qna/{id}(id=${post.id})}" th:text="${post.title}">제목</a>
-                <span class="state" th:text="${post.answered ? '답변완료' : '답변대기'}">대기</span>
-                <time th:text="${#temporals.format(post.createdAt, 'yyyy-MM-dd')}">작성일</time>
+            <#list qnaPosts as post>
+            <li>
+                <a href="/qna/${post.id}">${post.title}</a>
+                <span class="state">${post.answered?then('답변완료', '답변대기')}</span>
+                <time>${post.createdAt}</time>
             </li>
-            <li th:if="${qnaPosts.isEmpty()}">
+            </#list>
+            <#if qnaPosts?size == 0>
+            <li>
                 <span>작성한 글이 없습니다.</span>
             </li>
+            </#if>
         </ul>
     </section>
 
     <section class="content-band">
         <div class="section-head">
             <h2>내가 작성한 후기</h2>
-            <a th:href="@{/reviews}">more</a>
+            <a href="/reviews">more</a>
         </div>
         <ul class="board-list">
-            <li th:each="review : ${myReviews}">
-                <a th:href="@{/reviews/{id}(id=${review.id})}" th:utext="${review.title}">제목</a>
-                <span class="state" th:text="${'★'.repeat(review.rating)}">★★★★★</span>
-                <time th:text="${#temporals.format(review.createdAt, 'yyyy-MM-dd')}">작성일</time>
+            <#list myReviews as review>
+            <li>
+                <a href="/reviews/${review.id}">${review.title}</a>
+                <span class="state"><#list 1..review.rating as i>★</#list></span>
+                <time>${review.createdAt}</time>
             </li>
-            <li th:if="${myReviews.isEmpty()}">
+            </#list>
+            <#if myReviews?size == 0>
+            <li>
                 <span>작성한 후기가 없습니다.</span>
             </li>
+            </#if>
         </ul>
     </section>
 
@@ -84,8 +96,10 @@
         </div>
         <article class="card">
             <p class="muted">탈퇴 후에는 로그인할 수 없으며, 작성한 게시글과 결제 내역은 보관됩니다.</p>
-            <p class="form-error" th:if="${withdrawError}" th:text="${withdrawError}"></p>
-            <form class="stack-form" th:action="@{/mypage/withdraw}" method="post"
+            <#if withdrawError??>
+            <p class="form-error">${withdrawError}</p>
+            </#if>
+            <form class="stack-form" action="/mypage/withdraw" method="post"
                   onsubmit="return confirm('정말 회원 탈퇴를 진행하시겠습니까?');">
                 <label for="withdrawPassword">비밀번호 확인</label>
                 <input id="withdrawPassword" name="password" type="password" required
@@ -95,6 +109,6 @@
         </article>
     </section>
 </main>
-<div th:replace="~{fragments/footer :: footer}"></div>
+<#include "/fragments/footer.ftl">
 </body>
 </html>

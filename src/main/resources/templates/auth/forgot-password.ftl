@@ -1,32 +1,37 @@
 <!DOCTYPE html>
-<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>비밀번호 찾기</title>
-    <link rel="stylesheet" th:href="@{/css/style.css}">
+    <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-<div th:replace="~{fragments/header :: header}"></div>
+<#include "/fragments/header.ftl">
 <main class="narrow">
     <section class="panel">
         <p class="eyebrow">Password Reset</p>
         <h1>비밀번호 찾기</h1>
-        <div class="flash error" th:if="${error}" th:text="${error}"></div>
-        <form th:action="@{/forgot-password}" method="post" class="stack-form">
+        <#if error??>
+        <div class="flash error">${error}</div>
+        </#if>
+        <form action="/forgot-password" method="post" class="stack-form">
             <input name="username" placeholder="아이디" required>
             <button class="button" type="submit">인증번호 발급</button>
         </form>
-        <!-- VULNERABLE LAB - PR: 발급된 4자리 인증번호가 화면에 그대로 노출된다 -->
-        <div class="flash success" th:if="${issuedCode}" th:text="'인증번호: ' + ${issuedCode}"></div>
-        <form th:action="@{/forgot-password/reset}" method="post" class="stack-form" th:if="${username}">
-            <input type="hidden" name="username" th:value="${username}">
+        <#if issuedCode??>
+        <div class="flash success">인증번호: ${issuedCode}</div>
+        </#if>
+        <#if username??>
+        <form action="/forgot-password/reset" method="post" class="stack-form">
+            <input type="hidden" name="username" value="${username}">
             <input name="code" placeholder="인증번호(4자리)" required maxlength="4">
             <input name="newPassword" type="password" placeholder="새 비밀번호" required>
             <button class="button" type="submit">비밀번호 변경</button>
         </form>
+        </#if>
     </section>
 </main>
-<div th:replace="~{fragments/footer :: footer}"></div>
+<#include "/fragments/footer.ftl">
 </body>
 </html>

@@ -1,34 +1,35 @@
 <!DOCTYPE html>
-<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>결제</title>
-    <link rel="stylesheet" th:href="@{/css/style.css}">
+    <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-<div th:replace="~{fragments/header :: header}"></div>
+<#include "/fragments/header.ftl">
 <main class="narrow">
     <section class="panel">
         <p class="eyebrow">Mock Payment</p>
-        <h1 th:text="${procedure.name}">시술명</h1>
-        <p th:text="${procedure.summary}">설명</p>
-        <strong class="price" th:text="|${#numbers.formatInteger(procedure.price, 0, 'COMMA')}원|">0원</strong>
-        <form id="payment-form" class="stack-form" th:action="@{/payments/checkout/{id}(id=${procedure.id})}" method="post">
+        <h1>${procedure.name}</h1>
+        <p>${procedure.summary}</p>
+        <strong class="price">${procedure.price?string("#,##0")}원</strong>
+        <form id="payment-form" class="stack-form" action="/payments/checkout/${procedure.id}" method="post">
             <label for="quantity">수량</label>
             <input id="quantity" name="quantity" type="number" value="1" min="1" required>
 
-            <p>보유 포인트: <strong th:text="|${#numbers.formatInteger(user.pointBalance, 0, 'COMMA')}P|">0P</strong></p>
+            <p>보유 포인트: <strong>${user.pointBalance?string("#,##0")}P</strong></p>
             <label for="usePoints">사용할 포인트</label>
             <input id="usePoints" name="usePoints" type="number" value="0" min="0"
-                   th:max="${user.pointBalance}" required
+                   max="${user.pointBalance}" required
                    oninput="this.setCustomValidity(Number(this.value) > Number(this.max) ? '보유 포인트보다 많은 포인트를 입력할 수 없습니다.' : '')">
 
             <label for="couponCode">쿠폰</label>
             <select id="couponCode" name="couponCode">
                 <option value="">쿠폰 사용 안 함</option>
-                <option th:each="coupon : ${coupons}" th:value="${coupon.code}" th:data-discount="${coupon.discountAmount}"
-                        th:text="|${coupon.name} (${#numbers.formatInteger(coupon.discountAmount, 0, 'COMMA')}원)|">쿠폰</option>
+                <#list coupons as coupon>
+                <option value="${coupon.code}" data-discount="${coupon.discountAmount}">${coupon.name} (${coupon.discountAmount?string("#,##0")}원)</option>
+                </#list>
             </select>
             <select name="method" required>
                 <option value="CARD">신용카드</option>
@@ -42,7 +43,7 @@
                 <div><dt>결제 금액</dt><dd id="total">0원</dd></div>
             </dl>
 
-            <input id="price" name="price" type="hidden" th:value="${procedure.price}">
+            <input id="price" name="price" type="hidden" value="${procedure.price}">
             <input id="discountAmount" name="discountAmount" type="hidden" value="0">
             <input id="fee" name="fee" type="hidden" value="0">
             <button class="button" type="submit">테스트 결제 완료</button>
@@ -51,7 +52,7 @@
         <p class="muted">취약점 진단 실습: 결제 요청의 포인트와 쿠폰 파라미터를 관찰해 보세요.</p>
     </section>
 </main>
-<div th:replace="~{fragments/footer :: footer}"></div>
+<#include "/fragments/footer.ftl">
 <script>
     const priceInput = document.getElementById('price');
     const quantityInput = document.getElementById('quantity');

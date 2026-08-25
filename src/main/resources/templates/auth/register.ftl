@@ -1,19 +1,21 @@
 <!DOCTYPE html>
-<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>회원가입</title>
-    <link rel="stylesheet" th:href="@{/css/style.css}">
+    <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-<div th:replace="~{fragments/header :: header}"></div>
+<#include "/fragments/header.ftl">
 <main class="narrow">
     <section class="panel">
         <p class="eyebrow">Join</p>
         <h1>회원가입</h1>
-        <div class="flash error" th:if="${error}" th:text="${error}"></div>
-        <form th:action="@{/register}" method="post" class="stack-form">
+        <#if error??>
+        <div class="flash error">${error}</div>
+        </#if>
+        <form action="/register" method="post" class="stack-form">
             <input name="username" placeholder="아이디" required>
             <input name="password" type="password" placeholder="비밀번호" required minlength="6">
             <input name="name" placeholder="성함" required>
@@ -23,6 +25,6 @@
         </form>
     </section>
 </main>
-<div th:replace="~{fragments/footer :: footer}"></div>
+<#include "/fragments/footer.ftl">
 </body>
 </html>
