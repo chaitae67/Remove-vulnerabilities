@@ -47,7 +47,17 @@ public class SecurityConfig {
                 .logoutRequestMatcher(new AntPathRequestMatcher("/logout"))
                 .logoutSuccessUrl("/")
                 .permitAll())
-            .csrf(csrf -> csrf.ignoringRequestMatchers("/h2-console/**"))
+            .requiresChannel(channel -> channel
+                // VULNERABLE LAB - SN:
+                // 모든 요청을 HTTP 평문 채널로 허용/유도한다. 운영 환경에서는 HTTPS 강제가 필요하다.
+                .anyRequest().requiresInsecure())
+            .sessionManagement(session -> session
+                // VULNERABLE LAB - IS:
+                // 세션 고정 보호를 끄고, 별도 동시 세션/유휴 시간 제한도 두지 않는다.
+                .sessionFixation(sessionFixation -> sessionFixation.none()))
+            // VULNERABLE LAB - CF:
+            // 상태 변경 요청 전반에서 CSRF 토큰 검증을 비활성화한다.
+            .csrf(csrf -> csrf.disable())
             .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
 
         return http.build();

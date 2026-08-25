@@ -14,7 +14,9 @@ public class CouponService {
     }
 
     public List<Coupon> findActiveCoupons() {
-        return couponRepository.findByActiveTrueOrderByIdAsc();
+        return couponRepository.findByActiveTrueOrderByIdAsc().stream()
+            .filter(coupon -> !"ADMIN50000".equals(coupon.getCode()))
+            .toList();
     }
 
     public Coupon findByCode(String code) {

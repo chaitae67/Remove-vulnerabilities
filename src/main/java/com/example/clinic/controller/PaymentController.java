@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 import java.security.Principal;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -44,28 +45,44 @@ public class PaymentController {
     public String pay(
         @PathVariable Long procedureId,
         @RequestParam String method,
-        @RequestParam BigDecimal price,
+        @RequestParam String price,
         @RequestParam int quantity,
-        @RequestParam(defaultValue = "0") BigDecimal discountAmount,
-        @RequestParam(defaultValue = "0") BigDecimal fee,
+        @RequestParam(defaultValue = "0") String discountAmount,
+        @RequestParam(defaultValue = "0") String fee,
         @RequestParam(defaultValue = "0") int usePoints,
         @RequestParam(required = false) String couponCode,
+        @CookieValue(name = "VIP_DISCOUNT", defaultValue = "0") String vipDiscount,
         Principal principal
     ) {
         AppUser buyer = userService.findByUsername(principal.getName());
         ProcedureProduct procedure = procedureService.findById(procedureId);
+        /*
+         * VULNERABLE LAB - CC/PV:
+         * 클라이언트가 마음대로 바꿀 수 있는 쿠키 값을 서버 검증 없이 결제 할인에 반영한다.
+         * 결제 금액도 요청 파라미터 price/discountAmount/fee를 그대로 신뢰하므로 프로세스 검증이 누락된다.
+         */
+        BigDecimal trustedClientPrice = parseClientAmount(price);
+        BigDecimal trustedClientDiscount = parseClientAmount(discountAmount).add(parseClientAmount(vipDiscount));
+        BigDecimal trustedClientFee = parseClientAmount(fee);
         PaymentOrder order = paymentService.createPaidOrder(
             buyer,
             procedure,
             method,
-            price,
+            trustedClientPrice,
             quantity,
-            discountAmount,
-            fee,
+            trustedClientDiscount,
+            trustedClientFee,
             usePoints,
             couponCode
         );
         return "redirect:/payments/success/" + order.getOrderNumber();
+    }
+
+    private BigDecimal parseClientAmount(String amount) {
+        if (amount == null || amount.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        return new BigDecimal(amount.replace(",", "").trim());
     }
 
     @GetMapping("/payments/success/{orderNumber}")

@@ -64,13 +64,6 @@ public class DataSeeder {
                 welcome.setDiscountAmount(10000);
                 welcome.setExpiresAt(java.time.LocalDate.now().plusYears(1));
                 couponRepository.save(welcome);
-
-                Coupon secret = new Coupon();
-                secret.setCode("ADMIN50000");
-                secret.setName("관리자 전용 5만원 할인 (실습용)");
-                secret.setDiscountAmount(50000);
-                secret.setExpiresAt(java.time.LocalDate.now().plusYears(1));
-                couponRepository.save(secret);
             }
 
             if (procedureRepository.count() == 0) {

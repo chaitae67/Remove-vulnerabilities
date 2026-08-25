@@ -98,9 +98,6 @@ VALUES (
 INSERT INTO coupon (code, name, discount_amount, active, expires_at)
 VALUES ('WELCOME10000', '신규 회원 1만원 할인', 10000, 1, SYSDATE + 365);
 
-INSERT INTO coupon (code, name, discount_amount, active, expires_at)
-VALUES ('ADMIN50000', '관리자 전용 5만원 할인 (실습용)', 50000, 1, SYSDATE + 365);
-
 INSERT INTO quick_consultation (
   name, phone, area, preferred_contact, message, privacy_agreed, created_at
 )
