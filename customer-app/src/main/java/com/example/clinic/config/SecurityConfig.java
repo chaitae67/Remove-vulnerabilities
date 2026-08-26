@@ -22,17 +22,15 @@ public class SecurityConfig {
         http
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/", "/search", "/clinic", "/eye", "/nose", "/contour", "/lifting", "/body", "/aftercare", "/events",
-                    "/login", "/register", "/forgot-password", "/reset-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**", "/debug/**", "/tools/**", "/error").permitAll()
-                // 관리자 전용 변경 기능은 고객 WAS에서 아예 접근하지 못하게 막는다.
+                    "/login", "/register", "/forgot-password", "/reset-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**",
+                    "/support/**", "/assets/download", "/account/preferences", "/staff/console", "/error").permitAll()
                 .requestMatchers("/admin/**", "/api/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/notices/fetch-image", "/qna/*/answer").denyAll()
                 .requestMatchers("/qna/new", "/qna/preview", "/reviews/preview", "/payments/**", "/mypage/**").authenticated()
                 .requestMatchers("/procedures", "/procedures/*", "/notices", "/notices/*", "/qna", "/qna/*", "/qna/*/attachments/*", "/consultations").permitAll()
-                // 취약점 진단 실습을 위해 기존 프로젝트의 리뷰 인증 누락 설정을 유지한다.
                 .requestMatchers("/reviews/**").permitAll()
                 .anyRequest().authenticated())
             .formLogin(form -> form
                 .loginPage("/login")
-                // 기존 실습 취약점(Open Redirect)을 고객 앱에 유지한다.
                 .successHandler((request, response, authentication) -> {
                     String redirectUrl = request.getParameter("redirect");
                     if (redirectUrl != null && !redirectUrl.isBlank()) {
@@ -46,7 +44,6 @@ public class SecurityConfig {
                 .logoutRequestMatcher(new AntPathRequestMatcher("/logout"))
                 .logoutSuccessUrl("/")
                 .permitAll())
-            // 취약점 진단 실습용 기존 설정 유지
             .requiresChannel(channel -> channel.anyRequest().requiresInsecure())
             .sessionManagement(session -> session.sessionFixation(sessionFixation -> sessionFixation.none()))
             .csrf(csrf -> csrf.disable())
