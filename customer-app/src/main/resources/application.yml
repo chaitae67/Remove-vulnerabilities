@@ -42,7 +42,9 @@ spring:
 
 app:
   base-url: ${APP_BASE_URL:http://localhost:8081}
-  admin-url: ${ADMIN_APP_URL:http://localhost:8081/admin}
+  admin-url: ${ADMIN_APP_URL:https://admin.zerodayclinic.p-e.kr:443/admin/sso}
+  local-admin-url: ${LOCAL_ADMIN_APP_URL:http://localhost:8081/admin/sso}
+  admin-login-secret: ${ADMIN_LOGIN_SECRET:clinic-admin-login}
   mail-from-name: ${MAIL_FROM_NAME:zeroday_clinic}
   upload-dir: uploads
   chatbot:

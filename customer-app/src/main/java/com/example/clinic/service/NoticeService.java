@@ -53,8 +53,6 @@ public class NoticeService {
         notice.setImageUrl(imageUrl);
     }
 
-    // VULNERABLE LAB: 관리자가 입력한 URL로 서버가 직접 HTTP 요청을 보내 이미지를 가져온다.
-    // 내부망 주소(localhost, 169.254.169.254 등)에 대한 차단/허용목록이 전혀 없어 SSRF에 노출된다.
     public String fetchImageAsDataUrl(String imageUrl) throws IOException {
         URL url = URI.create(imageUrl).toURL();
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
