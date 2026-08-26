@@ -54,12 +54,6 @@ public class GlobalModelAdvice {
         if (token != null) {
             return token;
         }
-        /*
-         * VULNERABLE LAB:
-         * SecurityConfig에서 CSRF 검증을 비활성화하면 Spring이 CsrfToken을 만들지 않는다.
-         * 기존 FreeMarker 폼은 _csrf 값을 참조하므로 렌더링 오류만 피하기 위해 검증되지 않는
-         * 더미 토큰을 노출한다.
-         */
         return new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "csrf-disabled");
     }
 

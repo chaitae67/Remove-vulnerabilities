@@ -22,7 +22,6 @@
         const message = document.createElement('div');
         message.className = `chatbot-message ${type}`;
         if (renderHtml) {
-            // VULNERABLE LAB: 서버 답변을 정화하지 않고 HTML로 렌더링해 반사형 XSS가 가능하다.
             message.innerHTML = text;
         } else {
             message.textContent = text;
@@ -93,7 +92,6 @@
             }
 
             const data = await response.json();
-            // VULNERABLE LAB: ChatbotService가 질문을 그대로 반사한 응답을 HTML로 해석한다.
             const formattedAnswer = formatAssistantAnswer(data.answer);
             const modeLabel = data.mode === 'AI'
                 ? '<small class="chatbot-mode">AI 답변</small>'

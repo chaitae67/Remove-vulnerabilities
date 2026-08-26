@@ -44,14 +44,6 @@ public class AdminUserApiController {
         return UserDetailResponse.from(userService.findById(id));
     }
 
-    /*
-     * VULNERABLE LAB:
-     * SecurityConfig는 /admin/**만 ADMIN으로 제한한다. 같은 컨트롤러에 실수로
-     * 추가된 /api/admin/users/** 별칭은 anyRequest().authenticated()만 적용되어
-     * 일반 로그인 사용자도 관리자용 회원 목록과 상세 정보를 조회할 수 있다.
-     * 서비스 계층에도 관리자 권한 검사가 없으므로 이 라우팅 실수가 그대로 우회가 된다.
-     */
-
     public record UserSummaryResponse(
         Long id,
         String username,
