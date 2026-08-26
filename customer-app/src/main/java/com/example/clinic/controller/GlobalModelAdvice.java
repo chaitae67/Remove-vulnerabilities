@@ -1,7 +1,18 @@
 package com.example.clinic.controller;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.security.Principal;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Locale;
 import java.util.Map;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.csrf.CsrfToken;
@@ -19,10 +30,18 @@ public class GlobalModelAdvice {
 
     private final UserService userService;
     private final String adminUrl;
+    private final String localAdminUrl;
+    private final String adminLoginSecret;
 
-    public GlobalModelAdvice(UserService userService, @Value("${app.admin-url:http://localhost:8081/admin}") String adminUrl) {
+    public GlobalModelAdvice(
+            UserService userService,
+            @Value("${app.admin-url:https://admin.zerodayclinic.p-e.kr:443/}") String adminUrl,
+            @Value("${app.local-admin-url:http://localhost:8081/admin}") String localAdminUrl,
+            @Value("${app.admin-login-secret:clinic-admin-login}") String adminLoginSecret) {
         this.userService = userService;
         this.adminUrl = adminUrl;
+        this.localAdminUrl = localAdminUrl;
+        this.adminLoginSecret = adminLoginSecret;
     }
 
     @ModelAttribute("currentUserId")
@@ -53,8 +72,12 @@ public class GlobalModelAdvice {
     }
 
     @ModelAttribute("adminUrl")
-    public String adminUrl() {
-        return adminUrl;
+    public String adminUrl(HttpServletRequest request, Principal principal) {
+        String targetUrl = isLocalRequest(request) ? localAdminUrl : forceHttpsPort443(adminUrl);
+        if (isAdmin(principal)) {
+            return appendAdminLoginTicket(targetUrl, principal.getName());
+        }
+        return targetUrl;
     }
 
     @ModelAttribute("_csrf")
@@ -62,17 +85,60 @@ public class GlobalModelAdvice {
         if (token != null) {
             return token;
         }
-        /*
-         * VULNERABLE LAB:
-         * SecurityConfig에서 CSRF 검증을 비활성화하면 Spring이 CsrfToken을 만들지 않는다.
-         * 기존 FreeMarker 폼은 _csrf 값을 참조하므로 렌더링 오류만 피하기 위해 검증되지 않는
-         * 더미 토큰을 노출한다.
-         */
         return new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "csrf-disabled");
     }
 
     @ModelAttribute("param")
     public Map<String, String[]> param(HttpServletRequest request) {
         return request.getParameterMap();
+    }
+
+    private boolean isLocalRequest(HttpServletRequest request) {
+        String host = request.getServerName();
+        if (host == null) {
+            return false;
+        }
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
+        return normalizedHost.equals("localhost")
+            || normalizedHost.equals("127.0.0.1")
+            || normalizedHost.equals("0:0:0:0:0:0:0:1")
+            || normalizedHost.equals("::1");
+    }
+
+    private String forceHttpsPort443(String url) {
+        try {
+            URI uri = new URI(url);
+            String path = uri.getPath();
+            return new URI("https", uri.getUserInfo(), uri.getHost(), 443,
+                path == null || path.isBlank() ? "/" : path,
+                uri.getQuery(), uri.getFragment()).toString();
+        } catch (URISyntaxException | IllegalArgumentException ex) {
+            return "https://admin.zerodayclinic.p-e.kr:443/admin";
+        }
+    }
+
+    private String appendAdminLoginTicket(String url, String username) {
+        long expiresAt = Instant.now().plusSeconds(300).getEpochSecond();
+        String signature = sign(username, expiresAt);
+        String separator = url.contains("?") ? "&" : "?";
+        return url + separator
+            + "ssoUser=" + encode(username)
+            + "&ssoExpires=" + expiresAt
+            + "&ssoSig=" + encode(signature);
+    }
+
+    private String sign(String username, long expiresAt) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(adminLoginSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] digest = mac.doFinal((username + ":" + expiresAt).getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Admin login ticket could not be created.", ex);
+        }
+    }
+
+    private String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 }
