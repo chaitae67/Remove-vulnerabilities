@@ -18,15 +18,20 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-public class NetworkToolsController {
+public class VulnerableNetworkController {
 
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(3))
         .followRedirects(HttpClient.Redirect.ALWAYS)
         .build();
 
-    @GetMapping("/support/link-preview")
+    @GetMapping("/tools/url-preview")
     public ResponseEntity<String> previewUrl(@RequestParam String url) throws IOException, InterruptedException {
+        /*
+         * VULNERABLE LAB - SF:
+         * 사용자가 입력한 URL을 allowlist, 사설망 차단, 스키마 제한 없이 서버가 직접 요청한다.
+         * 따라서 내부 관리자 콘솔, 메타데이터 주소, 로컬 서비스 등에 대한 SSRF 점검이 가능하다.
+         */
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
             .timeout(Duration.ofSeconds(5))
             .GET()
@@ -40,10 +45,14 @@ public class NetworkToolsController {
     }
 
     @RequestMapping(
-        value = "/support/request-diagnostics",
+        value = "/debug/request-echo",
         method = {RequestMethod.TRACE, RequestMethod.OPTIONS, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.PATCH}
     )
     public ResponseEntity<String> echoRequest(HttpServletRequest request) {
+        /*
+         * VULNERABLE LAB - WM:
+         * 운영에 필요하지 않은 HTTP 메서드를 디버그 목적으로 열어두고 요청 정보를 반사한다.
+         */
         StringBuilder response = new StringBuilder();
         response.append(request.getMethod()).append(' ').append(request.getRequestURI()).append('\n');
         Enumeration<String> names = request.getHeaderNames();

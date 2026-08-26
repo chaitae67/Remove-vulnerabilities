@@ -50,6 +50,7 @@ public class UserService {
             .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
     }
 
+    // VULNERABLE LAB: 관리자용 조회지만 서비스 계층에서는 호출자의 권한을 확인하지 않는다.
     public List<AppUser> findAllUsers() {
         return userRepository.findAll();
     }
@@ -68,6 +69,8 @@ public class UserService {
         return userRepository.save(user);
     }
 
+    // VULNERABLE LAB: 재설정 토큰을 UUID 같은 예측 불가능한 값이 아니라
+    // 타임스탬프(System.currentTimeMillis())로 발급한다 -> 토큰 추측/무차별 대입이 가능하다.
     @Transactional
     public String issuePasswordResetToken(String username, String email) {
         Optional<AppUser> found = userRepository.findByUsernameAndEmail(username, email);

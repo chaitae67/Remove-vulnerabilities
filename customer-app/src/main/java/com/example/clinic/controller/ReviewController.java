@@ -26,7 +26,7 @@ import com.example.clinic.domain.Role;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.ReviewService;
 import com.example.clinic.service.UserService;
-import com.example.clinic.service.TemplatePreviewService;
+import com.example.clinic.service.VulnerableTemplatePreviewService;
 
 @Controller
 public class ReviewController {
@@ -34,13 +34,13 @@ public class ReviewController {
     private final ReviewService reviewService;
     private final UserService userService;
     private final ProcedureService procedureService;
-    private final TemplatePreviewService templatePreviewService;
+    private final VulnerableTemplatePreviewService templatePreviewService;
 
     public ReviewController(
         ReviewService reviewService,
         UserService userService,
         ProcedureService procedureService,
-        TemplatePreviewService templatePreviewService
+        VulnerableTemplatePreviewService templatePreviewService
     ) {
         this.reviewService = reviewService;
         this.userService = userService;
@@ -141,6 +141,8 @@ public class ReviewController {
         }
     }
 
+    // No ownership or role check here: any visitor who knows (or guesses) a review id
+    // can open its edit form, regardless of who actually wrote it.
     @GetMapping("/reviews/{id}/edit")
     public String editForm(@PathVariable Long id, Model model) {
         model.addAttribute("review", reviewService.findById(id));

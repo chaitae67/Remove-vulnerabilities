@@ -71,13 +71,13 @@ mvn -pl customer-app -Dspring-boot.run.profiles=local spring-boot:run
 mvn -pl admin-app -Dspring-boot.run.profiles=local spring-boot:run
 ```
 
-## 기본 테스트 계정
+## 기본 실습 계정
 
 - 관리자: `admin / admin1234`
 - 고객 테스트: `user / user1234`
 
-외부에 공개되는 환경에서는 반드시 비밀번호를 변경하십시오.
+실습 환경 이외에서는 반드시 비밀번호를 변경하십시오.
 
 ## 주의
 
-이 프로젝트는 교육과 검증 목적의 샘플 애플리케이션입니다. 공개 운영 서비스에 그대로 사용하지 마십시오.
+이 프로젝트에는 취약점 진단 실습을 위한 의도적인 취약 설정과 코드가 남아 있습니다. 공개 운영 서비스에 그대로 사용하지 마십시오.

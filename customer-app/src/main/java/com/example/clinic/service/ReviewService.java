@@ -84,6 +84,7 @@ public class ReviewService {
         return reviewRepository.save(review);
     }
 
+    // No ownership check: any caller can rewrite any review by id (IDOR).
     @Transactional
     public void update(Long id, String title, String content, int rating, Long procedureProductId, MultipartFile[] files) {
         Review review = findById(id);
@@ -94,6 +95,7 @@ public class ReviewService {
         attachFiles(review, files);
     }
 
+    // No ownership check: any caller can delete any review by id (IDOR).
     @Transactional
     public void delete(Long id) {
         reviewRepository.delete(findById(id));
@@ -110,6 +112,8 @@ public class ReviewService {
         }
     }
 
+    // 이미지만 첨부 가능하다고 안내하지만 확장자/콘텐츠 타입 검증이 없어
+    // .php 등 어떤 파일이든 그대로 저장되고 /uploads/reviews 로 서빙된다.
     private ReviewAttachment store(MultipartFile file) {
         try {
             Files.createDirectories(reviewUploadPath);

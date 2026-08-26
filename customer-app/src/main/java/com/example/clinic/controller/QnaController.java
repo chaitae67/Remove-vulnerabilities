@@ -26,19 +26,19 @@ import com.example.clinic.domain.QnaAttachment;
 import com.example.clinic.domain.Role;
 import com.example.clinic.service.QnaService;
 import com.example.clinic.service.UserService;
-import com.example.clinic.service.TemplatePreviewService;
+import com.example.clinic.service.VulnerableTemplatePreviewService;
 
 @Controller
 public class QnaController {
 
     private final QnaService qnaService;
     private final UserService userService;
-    private final TemplatePreviewService templatePreviewService;
+    private final VulnerableTemplatePreviewService templatePreviewService;
 
     public QnaController(
         QnaService qnaService,
         UserService userService,
-        TemplatePreviewService templatePreviewService
+        VulnerableTemplatePreviewService templatePreviewService
     ) {
         this.qnaService = qnaService;
         this.userService = userService;

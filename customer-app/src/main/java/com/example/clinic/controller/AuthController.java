@@ -70,6 +70,8 @@ public class AuthController {
     ) {
         String token = userService.issuePasswordResetToken(username, email);
         if (token == null) {
+            // VULNERABLE LAB: 계정이 없을 때와 있을 때 응답 메시지가 달라 계정 존재 여부를
+            // 추측할 수 있다 (User Enumeration).
             model.addAttribute("error", "아이디와 이메일이 일치하는 계정을 찾을 수 없습니다.");
             return "auth/forgot-password";
         }

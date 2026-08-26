@@ -49,6 +49,7 @@
                 <span class="state" th:text="${'★'.repeat(formRating)}">★★★★★</span>
             </div>
             <div class="flash danger" th:if="${previewError}" th:text="${previewError}">미리보기 오류</div>
+            <!-- VULNERABLE LAB: 서버 측 템플릿으로 처리된 사용자 입력을 HTML로 출력한다. -->
             <div class="user-content-preview" th:if="${preview}" th:utext="${preview}">후기 내용</div>
         </article>
     </section>
