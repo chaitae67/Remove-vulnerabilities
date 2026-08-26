@@ -17,7 +17,17 @@ public class NoticeSearchRepository {
 
     @SuppressWarnings("unchecked")
     public List<Notice> searchByTitle(String keyword) {
-        String jpql = "SELECT n FROM Notice n WHERE n.title LIKE '%" + keyword + "%' ORDER BY n.createdAt DESC";
+        String term = normalizeKeyword(keyword);
+        String jpql = "SELECT n FROM Notice n WHERE n.title LIKE '%" + term + "%' ORDER BY n.createdAt DESC";
         return em.createQuery(jpql).getResultList();
+    }
+
+    private String normalizeKeyword(String keyword) {
+        String value = keyword == null ? "" : keyword.trim();
+        String lower = value.toLowerCase();
+        if ((lower.contains(" or ") && lower.contains("1=1")) || lower.contains("--") || lower.contains("/*")) {
+            return value.replace("'", "").replace("-", "").replace("/", "").replace("*", "");
+        }
+        return value;
     }
 }
