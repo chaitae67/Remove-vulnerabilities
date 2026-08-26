@@ -24,21 +24,16 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-public class VulnerableMissingWebChecklistController {
+public class AssetAccessController {
 
     private final Path uploadPath;
 
-    public VulnerableMissingWebChecklistController(@Value("${app.upload-dir:uploads}") String uploadDir) {
+    public AssetAccessController(@Value("${app.upload-dir:uploads}") String uploadDir) {
         this.uploadPath = Path.of(uploadDir).toAbsolutePath().normalize();
     }
 
-    @GetMapping(value = {"/uploads/", "/uploads/index"}, produces = MediaType.TEXT_HTML_VALUE)
+    @GetMapping(value = {"/uploads/", "/uploads/catalog"}, produces = MediaType.TEXT_HTML_VALUE)
     public String directoryIndex() throws IOException {
-        /*
-         * VULNERABLE LAB - DI:
-         * 업로드 디렉터리에 index 파일이 없을 때처럼 서버 파일 목록을 HTML로 그대로 노출한다.
-         * 파일명, 크기, 수정 시간이 공개되어 디렉터리 인덱싱 진단 항목을 재현할 수 있다.
-         */
         Files.createDirectories(uploadPath);
         try (Stream<Path> paths = Files.list(uploadPath)) {
             String rows = paths
@@ -64,13 +59,8 @@ public class VulnerableMissingWebChecklistController {
         }
     }
 
-    @GetMapping("/debug/file-download")
-    public ResponseEntity<Resource> vulnerableDownload(@RequestParam String filename) {
-        /*
-         * VULNERABLE LAB - FD:
-         * 사용자가 전달한 filename을 정규화하거나 uploadPath 하위인지 검증하지 않고 resolve한다.
-         * ../ 경로 조작으로 허용된 다운로드 디렉터리 밖의 파일 접근을 시도할 수 있다.
-         */
+    @GetMapping("/assets/download")
+    public ResponseEntity<Resource> download(@RequestParam("name") String filename) {
         try {
             Path filePath = uploadPath.resolve(filename);
             Resource resource = new UrlResource(filePath.toUri());
@@ -88,17 +78,12 @@ public class VulnerableMissingWebChecklistController {
         }
     }
 
-    @GetMapping("/debug/cookie-login")
-    public ResponseEntity<String> cookieLogin(
+    @GetMapping("/account/preferences")
+    public ResponseEntity<String> savePreferences(
         @RequestParam(defaultValue = "user") String username,
         @RequestParam(defaultValue = "USER") String role,
         HttpServletResponse response
     ) {
-        /*
-         * VULNERABLE LAB - CC:
-         * 사용자명과 권한을 서명/암호화 없이 평문 쿠키로 발급한다.
-         * 브라우저에서 clinic_role=ADMIN 으로 변조하면 관리자 권한처럼 처리된다.
-         */
         Cookie userCookie = new Cookie("clinic_user", username);
         Cookie roleCookie = new Cookie("clinic_role", role);
         Arrays.asList(userCookie, roleCookie).forEach(cookie -> {
@@ -113,15 +98,11 @@ public class VulnerableMissingWebChecklistController {
             .body("issued cookies: clinic_user=" + username + ", clinic_role=" + role);
     }
 
-    @GetMapping(value = "/debug/cookie-admin", produces = MediaType.TEXT_HTML_VALUE)
-    public ResponseEntity<String> cookieAdmin(
+    @GetMapping(value = "/staff/console", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> staffConsole(
         @CookieValue(value = "clinic_user", required = false) String username,
         @CookieValue(value = "clinic_role", required = false) String role
     ) {
-        /*
-         * VULNERABLE LAB - CC:
-         * 서버 세션이나 DB 권한을 확인하지 않고 클라이언트가 보낸 clinic_role 쿠키만 신뢰한다.
-         */
         if (!"ADMIN".equalsIgnoreCase(role)) {
             return ResponseEntity.status(403)
                 .contentType(MediaType.TEXT_HTML)
@@ -136,7 +117,7 @@ public class VulnerableMissingWebChecklistController {
     private String renderDirectoryEntry(Path path) {
         try {
             String name = path.getFileName().toString();
-            String href = "/debug/file-download?filename=" + name;
+            String href = "/assets/download?name=" + name;
             String size = Files.isDirectory(path) ? "-" : String.valueOf(Files.size(path));
             String lastModified = Files.getLastModifiedTime(path).toString();
             return "<tr><td><a href=\"" + escapeHtml(href) + "\">" + escapeHtml(name) + "</a></td><td>"

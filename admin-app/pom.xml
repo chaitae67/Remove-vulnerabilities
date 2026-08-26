@@ -14,4 +14,8 @@
     <artifactId>clinic-admin-app</artifactId>
     <name>clinic-admin-app</name>
     <description>Administrator-facing plastic surgery clinic application</description>
+
+    <properties>
+        <start-class>com.example.clinic.ClinicSiteApplication</start-class>
+    </properties>
 </project>

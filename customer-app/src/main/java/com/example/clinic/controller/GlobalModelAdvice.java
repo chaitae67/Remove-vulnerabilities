@@ -1,6 +1,9 @@
 package com.example.clinic.controller;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.security.Principal;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.security.core.Authentication;
@@ -19,10 +22,15 @@ public class GlobalModelAdvice {
 
     private final UserService userService;
     private final String adminUrl;
+    private final String localAdminUrl;
 
-    public GlobalModelAdvice(UserService userService, @Value("${app.admin-url:http://localhost:8081/admin}") String adminUrl) {
+    public GlobalModelAdvice(
+            UserService userService,
+            @Value("${app.admin-url:https://admin.zerodayclinic.p-e.kr:443/}") String adminUrl,
+            @Value("${app.local-admin-url:http://localhost:8081/admin}") String localAdminUrl) {
         this.userService = userService;
         this.adminUrl = adminUrl;
+        this.localAdminUrl = localAdminUrl;
     }
 
     @ModelAttribute("currentUserId")
@@ -53,8 +61,11 @@ public class GlobalModelAdvice {
     }
 
     @ModelAttribute("adminUrl")
-    public String adminUrl() {
-        return adminUrl;
+    public String adminUrl(HttpServletRequest request) {
+        if (isLocalRequest(request)) {
+            return localAdminUrl;
+        }
+        return forceHttpsPort443(adminUrl);
     }
 
     @ModelAttribute("_csrf")
@@ -62,17 +73,35 @@ public class GlobalModelAdvice {
         if (token != null) {
             return token;
         }
-        /*
-         * VULNERABLE LAB:
-         * SecurityConfig에서 CSRF 검증을 비활성화하면 Spring이 CsrfToken을 만들지 않는다.
-         * 기존 FreeMarker 폼은 _csrf 값을 참조하므로 렌더링 오류만 피하기 위해 검증되지 않는
-         * 더미 토큰을 노출한다.
-         */
         return new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "csrf-disabled");
     }
 
     @ModelAttribute("param")
     public Map<String, String[]> param(HttpServletRequest request) {
         return request.getParameterMap();
+    }
+
+    private boolean isLocalRequest(HttpServletRequest request) {
+        String host = request.getServerName();
+        if (host == null) {
+            return false;
+        }
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
+        return normalizedHost.equals("localhost")
+            || normalizedHost.equals("127.0.0.1")
+            || normalizedHost.equals("0:0:0:0:0:0:0:1")
+            || normalizedHost.equals("::1");
+    }
+
+    private String forceHttpsPort443(String url) {
+        try {
+            URI uri = new URI(url);
+            String path = uri.getPath();
+            return new URI("https", uri.getUserInfo(), uri.getHost(), 443,
+                path == null || path.isBlank() ? "/" : path,
+                uri.getQuery(), uri.getFragment()).toString();
+        } catch (URISyntaxException | IllegalArgumentException ex) {
+            return "https://admin.zerodayclinic.p-e.kr:443/";
+        }
     }
 }

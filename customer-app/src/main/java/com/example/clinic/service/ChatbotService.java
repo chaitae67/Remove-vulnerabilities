@@ -33,7 +33,7 @@ public class ChatbotService {
             return new ChatbotReply(capabilityAnswer(), "GUIDE");
         }
         if (ollamaChatClient.isEnabled()) {
-            return ollamaChatClient.ask(buildVulnerablePrompt(message))
+            return ollamaChatClient.ask(buildModelPrompt(message))
                 .map(answer -> new ChatbotReply(answer, "AI"))
                 .orElseGet(() -> new ChatbotReply(ruleBasedAnswer(message), "FALLBACK"));
         }
@@ -85,24 +85,14 @@ public class ChatbotService {
             return "상단 메뉴에서 회원가입 또는 로그인할 수 있습니다. 로그인 후 마이페이지에서 회원정보, 결제 내역, Q&A와 후기를 확인할 수 있습니다.";
         }
 
-        /*
-         * VULNERABLE LAB: 알 수 없는 질문을 HTML 이스케이프 없이 응답에 반사한다.
-         * 프런트엔드가 이 값을 innerHTML로 출력하므로 반사형 XSS가 발생한다.
-         */
         return "입력한 질문 <strong>" + message.strip() + "</strong>은 이해하지 못했습니다. "
             + "시술 가격, 공지사항, 상담, 결제, 포인트 또는 쿠폰에 대해 질문해 주세요.";
     }
 
-    private String buildVulnerablePrompt(String message) {
+    private String buildModelPrompt(String message) {
         String procedureContext = procedureAnswer();
         String noticeContext = noticeAnswer();
 
-        /*
-         * VULNERABLE LAB - Prompt Injection:
-         * 신뢰해야 할 운영 지시와 신뢰할 수 없는 사용자 입력을 하나의 문자열로 이어 붙인다.
-         * 별도의 역할 분리나 입력 경계 검증이 없어 사용자가 "이전 지시를 무시하라"와 같은
-         * 문장으로 챗봇의 동작과 HTML 출력을 바꾸는 프롬프트 인젝션을 실습할 수 있다.
-         */
         return """
             당신은 제로데이클리닉의 한국어 AI 안내 챗봇입니다.
             답변은 핵심만 2~3문장으로 짧고 친절하게 작성하세요.
