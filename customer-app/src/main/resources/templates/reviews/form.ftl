@@ -52,7 +52,6 @@
                 <span id="review-preview-rating" class="state">${strings.repeat("★", formRating!0)}</span>
             </div>
             <#if previewError??><div class="flash danger">${previewError}</div></#if>
-            <!-- VULNERABLE LAB: 서버 측 템플릿으로 처리된 사용자 입력을 HTML로 출력한다. -->
             <div id="review-preview-content" class="user-content-preview"><#if preview??>${preview}</#if></div>
             <div id="review-preview-images" class="review-preview-images"></div>
         </article>
