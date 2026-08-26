@@ -795,6 +795,159 @@ textarea {
     margin: 0;
 }
 
+.admin-users-page {
+    min-height: 100vh;
+    background: #f5f8f6;
+}
+
+.admin-user-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    padding: 34px 0 26px;
+}
+
+.admin-user-summary article {
+    padding: 26px;
+    border: 1px solid #d8e3df;
+    background: #fff;
+    box-shadow: 0 14px 32px rgba(31, 41, 51, 0.06);
+}
+
+.admin-user-summary span,
+.admin-user-summary small {
+    display: block;
+}
+
+.admin-user-summary span {
+    color: var(--green);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .12em;
+}
+
+.admin-user-summary strong {
+    display: block;
+    margin: 14px 0 5px;
+    font-size: 38px;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.admin-user-summary small {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.admin-user-panel {
+    padding-top: 24px;
+}
+
+.admin-user-table-wrap {
+    overflow-x: auto;
+    border: 1px solid #d8e3df;
+    background: #fff;
+    box-shadow: var(--shadow);
+}
+
+.admin-user-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: collapse;
+}
+
+.admin-user-table th,
+.admin-user-table td {
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.admin-user-table th {
+    background: #eef4f1;
+    color: #52625d;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .08em;
+}
+
+.admin-user-table tbody tr {
+    transition: background .2s ease;
+}
+
+.admin-user-table tbody tr:hover {
+    background: #f7faf8;
+}
+
+.admin-user-profile {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.admin-user-profile > span {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--green-dark);
+    color: #fff;
+    font-weight: 800;
+}
+
+.admin-user-profile strong,
+.admin-user-profile small,
+.admin-user-contact strong,
+.admin-user-contact small {
+    display: block;
+}
+
+.admin-user-profile small,
+.admin-user-contact small,
+.admin-user-table time {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.role-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #edf5f2;
+    color: var(--green-dark);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.role-admin {
+    background: #283d39;
+    color: #fff;
+}
+
+.point-balance {
+    color: var(--green);
+}
+
+.empty-state {
+    padding: 52px;
+    border: 1px solid #d8e3df;
+    background: #fff;
+    text-align: center;
+}
+
+.empty-state strong {
+    font-size: 22px;
+}
+
+.empty-state p {
+    color: var(--muted);
+}
+
 .article-body {
     margin: 28px 0;
     white-space: pre-line;
@@ -1138,6 +1291,7 @@ textarea {
     .split,
     .columns,
     .admin-grid,
+    .admin-user-summary,
     .product-grid,
     .site-footer {
         grid-template-columns: 1fr;

@@ -12,7 +12,7 @@ clinic-split/
 │   ├── pom.xml              고객 앱 모듈 설정
 │   ├── .env.example         고객 앱 환경변수 예시
 │   └── src/
-└── admin-app/               관리자용 애플리케이션 (기본 포트 8082)
+└── admin-app/               관리자용 애플리케이션 (기본 포트 8081)
     ├── pom.xml              관리자 앱 모듈 설정
     ├── .env.example         관리자 앱 환경변수 예시
     └── src/
@@ -27,7 +27,7 @@ clinic-split/
 ```text
 고객 도메인 -> WEB01(Nginx) -> WAS01(customer-app:8081) --┐
                                                           ├-> DB01 / Oracle :1521
-관리 도메인 -> WEB-ADMIN01 -> WAS-ADMIN01(admin-app:8082) ┘
+관리 도메인 -> WEB-ADMIN01 -> WAS-ADMIN01(admin-app:8081) ┘
 ```
 
 ## 환경변수
@@ -39,6 +39,8 @@ export ORACLE_URL='jdbc:oracle:thin:@10.0.20.56:1521/FREEPDB1'
 export ORACLE_USERNAME='clinic'
 export ORACLE_PASSWORD='실제비밀번호'
 ```
+
+관리자 앱은 `APP_BASE_URL`, `APP_UPLOAD_DIR`, `MAIL_USERNAME`, `MAIL_PASSWORD`를 추가로 사용하고, 고객 앱은 관리자 화면 연결을 위해 `ADMIN_APP_URL`을 사용합니다.
 
 ## 빌드
 
