@@ -1,0 +1,6 @@
+**/target/
+**/work/.m2/
+**/work/clinic-local*
+**/uploads/
+.env
+.DS_Store
