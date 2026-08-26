@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${notice.title}">공지사항</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="narrow-wide">
+    <article class="panel article">
+        <p class="eyebrow">Notice</p>
+        <h1 th:text="${notice.title}">공지 제목</h1>
+        <p class="muted" th:text="|${notice.author.name} · ${#temporals.format(notice.createdAt, 'yyyy.MM.dd HH:mm')}|">작성정보</p>
+        <div class="article-body" th:text="${notice.content}">본문</div>
+        <div class="actions">
+            <a class="button button-outline" th:href="@{/notices}">목록</a>
+            <a sec:authorize="hasRole('ADMIN')" class="button button-outline" th:href="@{/notices/{id}/edit(id=${notice.id})}">수정</a>
+            <form sec:authorize="hasRole('ADMIN')" th:action="@{/notices/{id}/delete(id=${notice.id})}" method="post">
+                <button class="button button-danger" type="submit">삭제</button>
+            </form>
+        </div>
+    </article>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

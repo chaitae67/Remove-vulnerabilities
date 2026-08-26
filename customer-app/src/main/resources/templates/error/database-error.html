@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error</title>
+</head>
+<body>
+<h1>Database Error</h1>
+<p>There was an unexpected error while processing the database request.</p>
+<p><strong>Exception:</strong> <span th:text="${exceptionType}">DatabaseException</span></p>
+<p th:if="${sqlState}"><strong>SQL State:</strong> <span th:text="${sqlState}">00000</span></p>
+<p th:if="${errorCode}"><strong>Error Code:</strong> <span th:text="${errorCode}">0</span></p>
+</body>
+</html>

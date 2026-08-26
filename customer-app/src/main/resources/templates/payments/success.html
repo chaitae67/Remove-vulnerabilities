@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>결제 완료</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="narrow">
+    <section class="panel success-panel">
+        <p class="eyebrow">Payment Complete</p>
+        <h1>결제가 완료되었습니다.</h1>
+        <dl class="summary-list">
+            <div><dt>주문번호</dt><dd th:text="${order.orderNumber}">ORDER</dd></div>
+            <div><dt>상품</dt><dd th:text="${order.procedureProduct.name}">상품명</dd></div>
+            <div><dt>상품금액</dt><dd th:text="|${#numbers.formatInteger(order.originalAmount, 0, 'COMMA')}원|">0원</dd></div>
+            <div><dt>쿠폰 할인</dt><dd th:text="|-${#numbers.formatInteger(order.couponDiscount, 0, 'COMMA')}원|">0원</dd></div>
+            <div><dt>포인트 사용</dt><dd th:text="|-${#numbers.formatInteger(order.pointsUsed, 0, 'COMMA')}P|">0P</dd></div>
+            <div><dt>금액</dt><dd th:text="|${#numbers.formatInteger(order.amount, 0, 'COMMA')}원|">0원</dd></div>
+            <div><dt>적립 포인트</dt><dd th:text="|${#numbers.formatInteger(order.earnedPoints, 0, 'COMMA')}P|">0P</dd></div>
+            <div><dt>상태</dt><dd th:text="${order.status}">PAID</dd></div>
+        </dl>
+        <a class="button" th:href="@{/}">홈으로</a>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

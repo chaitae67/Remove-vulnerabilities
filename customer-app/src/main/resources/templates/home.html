@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>제로데이클리닉</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+
+<main>
+    <section class="hero" aria-label="제로데이클리닉 의료진 소개">
+        <img class="hero-image" th:src="@{/images/seohyun-main-hero.png}"
+             alt="성형의 기준을 세우다 - 정확한 진단, 안전한 수술, 독보적 결과">
+    </section>
+
+    <section class="hero-links" aria-label="주요 서비스 바로가기">
+        <a th:href="@{/procedures}"><span>01</span><strong>시술 프로그램</strong><b aria-hidden="true">↗</b></a>
+        <a th:href="@{/reviews}"><span>02</span><strong>리얼 후기</strong><b aria-hidden="true">↗</b></a>
+        <a th:href="@{/qna}"><span>03</span><strong>온라인 상담</strong><b aria-hidden="true">↗</b></a>
+    </section>
+
+    <div class="flash success" th:if="${message}" th:text="${message}"></div>
+    <div class="flash error" th:if="${error}" th:text="${error}"></div>
+
+    <section class="content-band split">
+        <div>
+            <div class="home-section-title">
+                <div>
+                    <p class="eyebrow">Zero Day Signature</p>
+                    <h2>나에게 꼭 맞는<br>시그니처 프로그램.</h2>
+                </div>
+                <p>정확한 진단을 바탕으로<br>꼭 필요한 과정만 제안합니다.</p>
+            </div>
+            <div class="product-grid">
+                <article class="card product-card" th:each="procedure : ${procedures}">
+                    <span class="tag" th:text="${procedure.category}"></span>
+                    <h3 th:text="${procedure.name}">패키지명</h3>
+                    <p th:text="${procedure.summary}">설명</p>
+                    <strong th:text="|${#numbers.formatInteger(procedure.price, 0, 'COMMA')}원|">0원</strong>
+                    <a class="button button-small" th:href="@{/payments/checkout/{id}(id=${procedure.id})}">예약 결제</a>
+                </article>
+            </div>
+        </div>
+
+        <aside id="quick-consultation" class="quick-form">
+            <p class="eyebrow">Quick Consultation</p>
+            <h2>빠른 상담 신청</h2>
+            <p class="quick-form-lead">남겨주신 내용을 확인한 뒤 순차적으로 안내해 드립니다.</p>
+            <form th:action="@{/consultations}" method="post">
+                <input name="name" placeholder="성함" required>
+                <input name="phone" placeholder="휴대전화번호" required>
+                <select name="area" required>
+                    <option value="">희망 부위</option>
+                    <option>지방흡입</option>
+                    <option>윤곽/리프팅</option>
+                    <option>눈성형</option>
+                    <option>코성형</option>
+                    <option>사후관리</option>
+                </select>
+                <select name="preferredContact" required>
+                    <option>전화 상담</option>
+                    <option>문자 안내</option>
+                    <option>카카오톡 안내</option>
+                </select>
+                <textarea name="message" placeholder="궁금한 내용을 남겨주세요"></textarea>
+                <label class="check"><input type="checkbox" name="privacyAgreed" value="true" required> 개인정보 수집 및 이용 동의</label>
+                <button class="button" type="submit">상담신청</button>
+            </form>
+        </aside>
+    </section>
+
+    <section class="board-band">
+      <div class="content-band columns">
+        <div>
+            <div class="section-head">
+                <h2>공지사항</h2>
+                <a th:href="@{/notices}">more</a>
+            </div>
+            <form th:action="@{/notices/search}" method="get" class="search-form">
+                <input type="text" name="keyword" placeholder="공지 제목 검색">
+                <button type="submit" class="button button-small">검색</button>
+            </form>
+            <ul class="board-list">
+                <li th:each="notice : ${notices}">
+                    <a th:href="@{/notices/{id}(id=${notice.id})}" th:text="${notice.title}">공지</a>
+                    <time th:text="${#temporals.format(notice.createdAt, 'MM-dd')}">08-22</time>
+                </li>
+            </ul>
+        </div>
+        <div>
+            <div class="section-head">
+                <h2>온라인 상담</h2>
+                <a th:href="@{/qna}">more</a>
+            </div>
+            <ul class="board-list">
+                <li th:each="post : ${qnas}">
+                    <a th:href="@{/qna/{id}(id=${post.id})}" th:text="${post.privatePost ? '비공개 상담글입니다' : post.title}">상담</a>
+                    <span class="state" th:text="${post.answered ? '답변완료' : '대기'}">대기</span>
+                </li>
+            </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="standard-band" aria-label="제로데이클리닉 진료 원칙">
+        <div class="standard-inner">
+            <p class="eyebrow">Our Standard</p>
+            <h2>안전을 기본으로,<br>결과로 증명합니다.</h2>
+            <div class="standard-grid">
+                <article><b>01</b><strong>1:1 맞춤 진단</strong><span>개인의 특성과 균형을 세심하게 고려합니다.</span></article>
+                <article><b>02</b><strong>체계적인 진료</strong><span>상담부터 회복까지 단계별로 관리합니다.</span></article>
+                <article><b>03</b><strong>섬세한 사후관리</strong><span>편안한 회복을 위한 케어를 이어갑니다.</span></article>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

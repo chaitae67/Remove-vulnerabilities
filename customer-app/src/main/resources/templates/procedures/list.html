@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>시술 패키지</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main>
+    <section class="page-title">
+        <p class="eyebrow">Procedure</p>
+        <h1>시술/상담 패키지</h1>
+    </section>
+    <section class="content-band">
+        <form th:action="@{/procedures/search}" method="get" class="search-form">
+            <input type="text" name="keyword" th:value="${keyword}" placeholder="패키지명으로 검색">
+            <button type="submit" class="button">검색</button>
+        </form>
+        <div class="product-grid">
+            <article class="card product-card" th:each="row : ${products}">
+                <span class="tag" th:text="${row[2]}">분류</span>
+                <h2 th:text="${row[1]}">패키지명</h2>
+                <p th:text="${row[4]}">상세 설명</p>
+                <strong th:text="|${#numbers.formatInteger(row[3], 0, 'COMMA')}원|">0원</strong>
+                <a class="button" th:href="@{/payments/checkout/{id}(id=${row[0]})}">결제하기</a>
+            </article>
+            <p th:if="${products.isEmpty()}">검색 결과가 없습니다.</p>
+        </div>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

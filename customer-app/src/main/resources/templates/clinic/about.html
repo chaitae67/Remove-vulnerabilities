@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>병원소개 - 제로데이클리닉</title><link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="about-page">
+    <section class="about-hero">
+        <p class="eyebrow">About Zero Day</p>
+        <h1>성형의 기준을 세우다.</h1>
+        <p>정확한 진단, 안전을 우선하는 진료, 개인을 존중하는 상담을 바탕으로<br>제로데이클리닉만의 기준을 만들어갑니다.</p>
+    </section>
+    <section id="philosophy" class="about-values">
+        <div class="category-heading"><p class="eyebrow">Our Philosophy</p><h2>처음부터 끝까지<br>한결같은 원칙.</h2></div>
+        <div class="about-value-list">
+            <article><b>01</b><h3>정확한 진단</h3><p>개인의 상태와 목표를 충분히 이해한 뒤 상담합니다.</p></article>
+            <article><b>02</b><h3>안전 우선</h3><p>결과보다 앞서 안전을 진료의 기본 원칙으로 생각합니다.</p></article>
+            <article><b>03</b><h3>책임 있는 관리</h3><p>상담부터 회복까지 필요한 안내와 관리를 이어갑니다.</p></article>
+        </div>
+    </section>
+    <section id="location" class="about-location"><div><p class="eyebrow">Location</p><h2>제로데이클리닉<br>오시는 길.</h2></div><div><strong>경기도 성남시 분당구 판교로227번길 23</strong><p>대표번호 010-9268-8539</p><a href="tel:010-9268-8539">전화 문의하기</a></div></section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

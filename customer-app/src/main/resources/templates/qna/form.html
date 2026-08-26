@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>상담 작성</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div th:replace="~{fragments/header :: header}"></div>
+<main class="narrow-wide">
+    <section class="panel">
+        <p class="eyebrow">Q&A Upload</p>
+        <h1>상담 작성</h1>
+        <form class="stack-form" th:action="@{/qna}" method="post" enctype="multipart/form-data">
+            <input name="title" placeholder="제목" required th:value="${formTitle}">
+            <input name="phone" placeholder="연락처" th:value="${formPhone}">
+            <textarea name="content" rows="10" placeholder="상담 내용을 입력해 주세요" required th:text="${formContent}"></textarea>
+            <input name="files" type="file" multiple>
+            <label class="check"><input type="checkbox" name="privatePost" value="true" th:checked="${formPrivatePost}"> 비공개 상담으로 등록</label>
+            <div class="form-actions">
+                <button class="button secondary" type="submit" th:formaction="@{/qna/preview}" formenctype="application/x-www-form-urlencoded">미리보기</button>
+                <button class="button" type="submit">등록하기</button>
+            </div>
+        </form>
+    </section>
+    <section class="panel" th:if="${preview != null or previewError != null}">
+        <p class="eyebrow">Q&amp;A Preview</p>
+        <h2 th:text="${formTitle}">문의 제목</h2>
+        <div class="flash danger" th:if="${previewError}" th:text="${previewError}">미리보기 오류</div>
+        <!-- VULNERABLE LAB: 서버 측 템플릿으로 처리된 사용자 입력을 HTML로 출력한다. -->
+        <div class="user-content-preview" th:if="${preview}" th:utext="${preview}">문의 내용</div>
+    </section>
+</main>
+<div th:replace="~{fragments/footer :: footer}"></div>
+</body>
+</html>

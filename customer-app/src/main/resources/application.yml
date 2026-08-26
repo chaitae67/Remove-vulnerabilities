@@ -1,0 +1,70 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: clinic-customer-app
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 30MB
+  datasource:
+    url: ${ORACLE_URL:jdbc:oracle:thin:@localhost:1521/FREEPDB1}
+    username: ${ORACLE_USERNAME:clinic}
+    password: ${ORACLE_PASSWORD:clinic}
+    driver-class-name: oracle.jdbc.OracleDriver
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME:alxkahzld0@gmail.com}
+    password: ${MAIL_PASSWORD:sapjmeonxmosufks}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+  h2:
+    console:
+      enabled: false
+  freemarker:
+    suffix: .ftl
+    settings:
+      api_builtin_enabled: "true"
+  jpa:
+    database-platform: org.hibernate.dialect.OracleDialect
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+
+app:
+  base-url: ${APP_BASE_URL:http://localhost:8081}
+  mail-from-name: ${MAIL_FROM_NAME:zeroday_clinic}
+  upload-dir: uploads
+  chatbot:
+    ai:
+      enabled: ${OLLAMA_ENABLED:true}
+      model: ${OLLAMA_MODEL:gemma3:1b}
+      endpoint: ${OLLAMA_CHAT_URL:http://localhost:11434/api/chat}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+  datasource:
+    url: jdbc:h2:file:./work/clinic-local;MODE=Oracle;DATABASE_TO_UPPER=false;NON_KEYWORDS=USER
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update
