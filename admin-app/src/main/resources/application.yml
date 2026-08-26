@@ -1,5 +1,6 @@
 server:
-  port: ${SERVER_PORT:8082}
+  port: ${SERVER_PORT:8081}
+  forward-headers-strategy: framework
 
 spring:
   application:
@@ -11,13 +12,13 @@ spring:
   datasource:
     url: ${ORACLE_URL:jdbc:oracle:thin:@localhost:1521/FREEPDB1}
     username: ${ORACLE_USERNAME:clinic}
-    password: ${ORACLE_PASSWORD:clinic}
+    password: ${ORACLE_PASSWORD:change-me}
     driver-class-name: oracle.jdbc.OracleDriver
   mail:
     host: smtp.gmail.com
     port: 587
-    username: ${MAIL_USERNAME:alxkahzld0@gmail.com}
-    password: ${MAIL_PASSWORD:sapjmeonxmosufks}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
     properties:
       mail:
         smtp:
@@ -41,9 +42,9 @@ spring:
     open-in-view: false
 
 app:
-  base-url: ${APP_BASE_URL:http://localhost:8082}
+  base-url: ${APP_BASE_URL:http://localhost:8081}
   mail-from-name: ${MAIL_FROM_NAME:zeroday_clinic}
-  upload-dir: uploads
+  upload-dir: ${APP_UPLOAD_DIR:uploads}
   chatbot:
     ai:
       enabled: ${OLLAMA_ENABLED:true}

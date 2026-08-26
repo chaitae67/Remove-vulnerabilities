@@ -8,7 +8,7 @@
         <div class="nav-group"><a class="nav-root" href="/qna"><span>상담</span><small>CONSULT</small></a><div class="nav-dropdown"><p><strong>CONSULT</strong><span>궁금한 내용을 편하게 남겨주세요</span></p><div><a href="/qna">온라인 상담</a><#if isAuthenticated><a href="/qna/new">상담 작성</a></#if><a href="/#quick-consultation">빠른 상담</a></div></div></div>
         <div class="nav-group"><a class="nav-root" href="/events"><span>소식·혜택</span><small>EVENT</small></a><div class="nav-dropdown"><p><strong>NEWS & BENEFIT</strong><span>새로운 소식과 현재 프로그램</span></p><div><a href="/events">이벤트</a><a href="/notices">공지사항</a></div></div></div>
         <#if isAuthenticated><a href="/mypage?userId=${currentUserId}"><span>마이페이지</span><small>MY PAGE</small></a></#if>
-        <#if isAdmin><a href="/admin"><span>관리자</span><small>ADMIN</small></a></#if>
+        <#if isAdmin><a href="${adminUrl}"><span>관리자</span><small>ADMIN</small></a></#if>
     </nav>
     <div class="auth-nav"><a class="header-consult" href="/#quick-consultation">빠른 상담</a><#if !isAuthenticated><a class="header-account" href="/login">로그인</a><a class="header-account" href="/register">회원가입</a></#if><#if isAuthenticated><a class="hello" href="/mypage?userId=${currentUserId}">${currentUsername}</a><form action="/logout" method="post"><input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}"><button class="link-button" type="submit">로그아웃</button></form></#if></div>
 </header>

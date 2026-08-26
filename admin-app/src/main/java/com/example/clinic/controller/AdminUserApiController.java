@@ -5,13 +5,13 @@ import com.example.clinic.domain.Role;
 import com.example.clinic.service.UserService;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ResponseBody;
 
-@RestController
-@RequestMapping({"/admin/users", "/api/admin/users"})
+@Controller
 public class AdminUserApiController {
 
     private final UserService userService;
@@ -20,14 +20,26 @@ public class AdminUserApiController {
         this.userService = userService;
     }
 
-    @GetMapping
+    @GetMapping("/admin/users")
+    public String usersPage(Model model) {
+        List<AppUser> users = userService.findAllUsers();
+        model.addAttribute("users", users);
+        model.addAttribute("adminCount", users.stream().filter(user -> user.getRole() == Role.ADMIN).count());
+        model.addAttribute("userCount", users.stream().filter(user -> user.getRole() == Role.USER).count());
+        model.addAttribute("totalPointBalance", users.stream().mapToInt(AppUser::getPointBalance).sum());
+        return "admin/users";
+    }
+
+    @GetMapping("/api/admin/users")
+    @ResponseBody
     public List<UserSummaryResponse> findAll() {
         return userService.findAllUsers().stream()
             .map(UserSummaryResponse::from)
             .toList();
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/api/admin/users/{id}")
+    @ResponseBody
     public UserDetailResponse findById(@PathVariable Long id) {
         return UserDetailResponse.from(userService.findById(id));
     }

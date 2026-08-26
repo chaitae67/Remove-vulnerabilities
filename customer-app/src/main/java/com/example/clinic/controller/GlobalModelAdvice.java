@@ -6,6 +6,7 @@ import java.util.Map;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.DefaultCsrfToken;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ModelAttribute;
 
@@ -17,9 +18,11 @@ import jakarta.servlet.http.HttpServletRequest;
 public class GlobalModelAdvice {
 
     private final UserService userService;
+    private final String adminUrl;
 
-    public GlobalModelAdvice(UserService userService) {
+    public GlobalModelAdvice(UserService userService, @Value("${app.admin-url:http://localhost:8081/admin}") String adminUrl) {
         this.userService = userService;
+        this.adminUrl = adminUrl;
     }
 
     @ModelAttribute("currentUserId")
@@ -47,6 +50,11 @@ public class GlobalModelAdvice {
     @ModelAttribute("currentUsername")
     public String currentUsername(Principal principal) {
         return principal == null ? null : principal.getName();
+    }
+
+    @ModelAttribute("adminUrl")
+    public String adminUrl() {
+        return adminUrl;
     }
 
     @ModelAttribute("_csrf")

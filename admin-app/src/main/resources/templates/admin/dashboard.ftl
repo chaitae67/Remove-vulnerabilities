@@ -10,7 +10,7 @@
 <header class="site-header">
     <div class="header-inner">
         <a href="/admin" class="brand">Zero Day Clinic Admin</a>
-        <nav><a href="/admin">대시보드</a> <a href="/admin/users">회원 API</a> <a href="/logout">로그아웃</a></nav>
+        <nav><a href="/admin">대시보드</a> <a href="/admin/users">회원 관리</a> <a href="/logout">로그아웃</a></nav>
     </div>
 </header>
 <main>

@@ -22,7 +22,7 @@ public class SecurityConfig {
         http
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/", "/search", "/clinic", "/eye", "/nose", "/contour", "/lifting", "/body", "/aftercare", "/events",
-                    "/login", "/register", "/forgot-password", "/reset-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**", "/error").permitAll()
+                    "/login", "/register", "/forgot-password", "/reset-password", "/api/chat", "/css/**", "/js/**", "/images/**", "/uploads/**", "/debug/**", "/tools/**", "/error").permitAll()
                 // 관리자 전용 변경 기능은 고객 WAS에서 아예 접근하지 못하게 막는다.
                 .requestMatchers("/admin/**", "/api/admin/**", "/notices/new", "/notices/*/edit", "/notices/*/delete", "/notices/fetch-image", "/qna/*/answer").denyAll()
                 .requestMatchers("/qna/new", "/qna/preview", "/reviews/preview", "/payments/**", "/mypage/**").authenticated()

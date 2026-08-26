@@ -32,8 +32,6 @@ public class SecurityConfig {
                 .logoutRequestMatcher(new AntPathRequestMatcher("/logout"))
                 .logoutSuccessUrl("/login?logout")
                 .permitAll())
-            // 취약점 진단 실습의 서버 설정 진단을 위해 기존 앱과 동일한 취약 설정을 일부 유지한다.
-            .requiresChannel(channel -> channel.anyRequest().requiresInsecure())
             .sessionManagement(session -> session.sessionFixation(sessionFixation -> sessionFixation.none()))
             .csrf(csrf -> csrf.disable())
             .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
