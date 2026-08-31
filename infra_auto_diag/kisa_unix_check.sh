@@ -216,23 +216,72 @@ else
   rep U-06 "사용자 계정 su 기능 제한" VULN "일반 사용자($gen_users) 존재하나 pam_wheel/SU_WHEEL_ONLY 미설정 → 모든 사용자 su 가능"
 fi
 
-# U-07 불필요한 계정 제거
-unnec=""; for u in lp uucp nuucp games gopher news adm sync shutdown halt; do
-  grep -q "^$u:" /etc/passwd 2>/dev/null && unnec="$unnec $u"; done
-rep U-07 "불필요한 계정 제거" MAN "기본 시스템 계정 존재:${unnec:- 없음} → 미사용 계정 여부 확인"
+# 클라우드 이미지 기본 관리 계정(존재 자체는 정상)
+CLOUD_DEFAULT=" ec2-user ubuntu rocky centos almalinux fedora debian admin cloud-user opc bitnami "
+never_login() { lastlog -u "$1" 2>/dev/null | tail -n +2 | grep -q 'Never logged in'; }
+acct_locked() { case "$(passwd -S "$1" 2>/dev/null | awk '{print $2}')" in L|LK) return 0;; *) return 1;; esac; }
 
-# U-08 관리자 그룹에 최소한의 계정 포함 (GID 0 그룹에 root 외 계정이 있으면 취약)
-rootg=$(getent group root | awk -F: '{print $4}')
-wheelg=$(getent group wheel 2>/dev/null | awk -F: '{print $4}')
-sudog=$(getent group sudo 2>/dev/null | awk -F: '{print $4}')
-if [ -z "$rootg" ]; then
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "root(GID 0) 그룹에 추가 계정 없음 (wheel=${wheelg:-없음}, sudo=${sudog:-없음} 는 별도 정책 확인)"
+# U-07 불필요한 계정 제거
+badsys=""
+for u in lp uucp nuucp games gopher news operator ftp; do
+  s=$(awk -F: -v U="$u" '$1==U{print $7}' /etc/passwd 2>/dev/null)
+  { [ -n "$s" ] && ! echo "$s" | grep -qE 'nologin|false'; } && badsys="$badsys $u($s)"
+done
+stale=""
+while IFS=: read -r u _ uid _ _ _ sh; do
+  case "$uid" in ''|*[!0-9]*) continue;; esac
+  { [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ]; } || continue
+  echo "$sh" | grep -qE 'nologin|false' && continue
+  case "$CLOUD_DEFAULT" in *" $u "*) continue;; esac
+  { acct_locked "$u" || never_login "$u"; } && stale="$stale $u"
+done < /etc/passwd
+if [ -n "$badsys" ]; then
+  rep U-07 "불필요한 계정 제거" VULN "제거 권고 기본계정에 로그인 셸 부여:$badsys"
+elif [ -n "$stale" ]; then
+  rep U-07 "불필요한 계정 제거" VULN "로그인 이력이 없거나 잠긴 일반계정 방치:$stale → 미사용 시 삭제"
 else
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "root(GID 0) 그룹에 일반 계정 포함: $rootg"
+  logins=$(awk -F: '$3>=1000 && $3<60000 && $7 !~ /(nologin|false)/ {print $1}' /etc/passwd | tr '\n' ' ')
+  rep U-07 "불필요한 계정 제거" MAN "로그인 가능한 일반계정:${logins:- 없음} → 각 계정 사용 여부 확인"
 fi
 
-# U-09 계정이 존재하지 않는 GID 금지 (사용자 없는 그룹은 정상; 여기선 근거 제시)
-rep U-09 "계정이 존재하지 않는 GID 금지" MAN "불필요/미사용 그룹 존재 여부는 조직 정책에 따라 확인"
+# U-08 관리자 그룹에 최소한의 계정 포함
+rootg=$(getent group root 2>/dev/null | awk -F: '{print $4}')
+sudo_groups=$(grep -rhE '^[[:space:]]*%[A-Za-z0-9_-]+[[:space:]]+ALL=\(ALL' /etc/sudoers /etc/sudoers.d/ 2>/dev/null \
+              | sed 's/^[[:space:]]*%//' | awk '{print $1}')
+sudoall=$(grep -rhE '^[[:space:]]*[%A-Za-z0-9_-]+[[:space:]]+ALL=\(ALL' /etc/sudoers /etc/sudoers.d/ 2>/dev/null \
+          | awk '{print $1}' | tr '\n' ' ')
+adm_view=""; stale_adm=""
+for g in root wheel sudo adm $sudo_groups; do
+  mm=$(getent group "$g" 2>/dev/null | awk -F: '{gsub(/,/," ",$4); print $4}')
+  [ -z "$mm" ] && continue
+  adm_view="$adm_view ${g}:{${mm}}"
+  for u in $mm; do
+    case "$CLOUD_DEFAULT" in *" $u "*) continue;; esac
+    if acct_locked "$u"; then stale_adm="$stale_adm $u($g,잠금)"
+    elif never_login "$u"; then stale_adm="$stale_adm $u($g,로그인이력없음)"; fi
+  done
+done
+if [ -n "$rootg" ]; then
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "root(GID 0) 그룹에 일반 계정: $rootg"
+elif [ -n "$stale_adm" ]; then
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "관리자 그룹에 미사용/잠금 계정 방치:$stale_adm (sudo ALL: ${sudoall:-없음})"
+else
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" MAN "관리자 그룹 구성:${adm_view:- 없음} (sudo ALL: ${sudoall:-없음}) → 각 계정 필요성 확인"
+fi
+
+# U-09 계정이 존재하지 않는 GID 금지 (소속 계정 0인 사용자정의 그룹)
+empty_grp=""
+while IFS=: read -r gn _ gid members; do
+  case "$gid" in ''|*[!0-9]*) continue;; esac
+  { [ "$gid" -ge 1000 ] && [ "$gid" -lt 60000 ]; } || continue
+  awk -F: -v G="$gid" '$4==G{f=1} END{exit !f}' /etc/passwd && continue   # 기본 그룹으로 사용 중
+  [ -z "$members" ] && empty_grp="$empty_grp ${gn}($gid)"
+done < /etc/group
+if [ -z "$empty_grp" ]; then
+  rep U-09 "계정이 존재하지 않는 GID 금지" GOOD "소속 계정이 없는 불필요한 사용자정의 그룹 없음"
+else
+  rep U-09 "계정이 존재하지 않는 GID 금지" VULN "소속 계정 없는 그룹:$empty_grp → 미사용 시 제거"
+fi
 
 # U-10 동일한 UID 금지
 dupuid=$(awk -F: '{print $3}' /etc/passwd | sort | uniq -d | tr '\n' ' ')
