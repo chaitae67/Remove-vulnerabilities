@@ -193,18 +193,25 @@ class App:
         r3 = ttk.Frame(conn); r3.pack(fill="x", padx=8, pady=4)
         ttk.Label(r3, text="sudo 비밀번호(선택)").grid(row=0, column=0, sticky="w")
         self.e_sudo = ttk.Entry(r3, width=18, show="*"); self.e_sudo.grid(row=0, column=1, padx=6)
-        ttk.Label(r3, text="(NOPASSWD sudo면 비워두세요)").grid(row=0, column=2, sticky="w")
-
-        self.btn_run = ttk.Button(r3, text="▶ 점검 실행", command=self.on_run)
-        self.btn_run.grid(row=0, column=3, padx=12)
-        self.btn_xlsx = ttk.Button(r3, text="⬇ 엑셀로 추출", command=self.on_export, state="disabled")
-        self.btn_xlsx.grid(row=0, column=4)
 
         self._toggle_auth()
 
+        # 버튼들을 한 행에 묶어줄 프레임 생성
+        self.btn_frame = ttk.Frame(self.root)
+        self.btn_frame.pack(fill="x", padx=12) # 양옆 여백 설정
+
         # 상태 라벨
-        self.lbl_sum = ttk.Label(self.root, text="대기 중…", anchor="w")
-        self.lbl_sum.pack(fill="x", padx=12)
+        self.lbl_sum = ttk.Label(self.btn_frame, text="대기 중…", anchor="w")
+        self.lbl_sum.pack(side="left", padx=12, pady=5)
+
+
+        # 엑셀 버튼 (오른쪽 정렬을 위해 오른쪽부터 채워 넣음)
+        self.btn_xlsx = ttk.Button(self.btn_frame, text="엑셀로 추출", command=self.on_export, state="disabled")
+        self.btn_xlsx.pack(side="right", padx=2)
+
+        # 점검 실행 버튼 (엑셀 버튼 왼쪽에 배치됨)
+        self.btn_run = ttk.Button(self.btn_frame, text="▶ 점검 실행", command=self.on_run)
+        self.btn_run.pack(side="right", padx=2)
 
         # 결과 표
         table_frame = ttk.Frame(self.root)
