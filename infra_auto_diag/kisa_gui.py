@@ -255,9 +255,14 @@ class App:
         table_frame.pack(fill="both", expand=True, padx=10, pady=6)
         cols = ("code", "imp", "title", "auto", "final", "evidence")
         self.tree = ttk.Treeview(table_frame, columns=cols, show="headings")
-        for c, t, w in (("code", "코드", 60), ("imp", "중요도", 55), ("title", "점검 항목", 240),
-                        ("auto", "자동판정", 75), ("final", "최종판정", 75), ("evidence", "근거", 430)):
-            self.tree.heading(c, text=t)
+        self._col_title = {"code": "코드", "imp": "중요도", "title": "점검 항목",
+                           "auto": "자동판정", "final": "최종판정", "evidence": "근거"}
+        self._sort_key = None
+        self._sort_rev = False
+        for c, w in (("code", 60), ("imp", 55), ("title", 240),
+                     ("auto", 75), ("final", 75), ("evidence", 430)):
+            self.tree.heading(c, text=self._col_title[c],
+                              command=lambda cc=c: self._sort_col(cc))
             self.tree.column(c, width=w, anchor="w")
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
@@ -271,7 +276,7 @@ class App:
             self.tree.tag_configure(st, background=color)
         self.tree.bind("<Double-1>", self._on_row_dblclick)
         ttk.Label(self.root,
-                  text="↳ 행을 더블클릭 → 근거 확인 후 최종판정(양호/취약/인터뷰 필요) 지정. 엑셀은 '최종판정' 기준으로 추출되고 취약은 빨강으로 표시됩니다. (N/A 는 양호로 기재)",
+                  text="↳ 행 더블클릭 → 최종판정(양호/취약/인터뷰 필요) 지정.  열 머리글 클릭 → 정렬(최종판정/자동판정 클릭 시 판정별로 묶임).  엑셀은 '최종판정' 기준 추출, 취약은 빨강.",
                   foreground="#555").pack(fill="x", padx=12)
 
         # 로그
@@ -503,6 +508,10 @@ class App:
 
     def _show_results(self):
         self._clear_table()
+        self._sort_key = None
+        self._sort_rev = False
+        for c in ("code", "imp", "title", "auto", "final", "evidence"):
+            self.tree.heading(c, text=self._col_title[c])
         for idx, r in enumerate(self.results):
             # 최종판정 초기값 = 자동판정 (N/A 는 양호로)
             r.setdefault("final", "양호" if r.get("status") == "N/A" else r.get("status", ""))
@@ -510,6 +519,38 @@ class App:
             self._insert_row(idx, r)
         self._update_summary()
         self.btn_xlsx.configure(state="normal" if self.results else "disabled")
+
+    # 판정 정렬 우선순위 (양호 → 취약 → 인터뷰 필요)
+    _VERDICT_ORDER = {"양호": 0, "취약": 1, "수동확인": 2, "인터뷰 필요": 2, "N/A": 0}
+    _IMP_ORDER = {"상": 0, "중": 1, "하": 2}
+
+    def _sort_col(self, col):
+        """열 머리글 클릭 → 해당 열 기준 정렬. 같은 열 다시 클릭하면 역순."""
+        self._sort_rev = (not self._sort_rev) if self._sort_key == col else False
+        self._sort_key = col
+
+        def keyfn(iid):
+            r = self.results[int(iid)]
+            code = r.get("code", "")
+            if col == "final":
+                v = self._VERDICT_ORDER.get(r.get("final") or r.get("status", ""), 9)
+                return (v, code)                      # 판정 묶고, 그 안에서는 코드순
+            if col == "auto":
+                return (self._VERDICT_ORDER.get(r.get("status", ""), 9), code)
+            if col == "imp":
+                return (self._IMP_ORDER.get(r.get("importance", ""), 9), code)
+            if col == "title":
+                return (r.get("title", ""), code)
+            if col == "evidence":
+                return (" / ".join(r.get("evidence", [])), code)
+            return code
+
+        items = sorted(self.tree.get_children(""), key=keyfn, reverse=self._sort_rev)
+        for pos, iid in enumerate(items):
+            self.tree.move(iid, "", pos)
+        arrow = " ▼" if self._sort_rev else " ▲"
+        for c in ("code", "imp", "title", "auto", "final", "evidence"):
+            self.tree.heading(c, text=self._col_title[c] + (arrow if c == col else ""))
 
     def _insert_row(self, idx, r):
         fin = r.get("final", r.get("status", ""))
