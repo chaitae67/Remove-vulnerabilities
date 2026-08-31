@@ -153,7 +153,7 @@ class App:
         # 게이트웨이(bastion) 경유 설정
         self.gateway = {"enabled": False, "host": "", "port": 22, "user": "ec2-user",
                         "auth": "password", "password": "", "key": ""}
-        root.title("KISA Unix 취약점 점검 도구 (SSH)")
+        root.title("취약점 빼기 팀 infra 진단 자동화 툴")
         root.geometry("1000x680")
         self._build_ui()
 
@@ -263,6 +263,8 @@ class App:
     def _open_gateway_dialog(self):
         g = self.gateway
         dlg = tk.Toplevel(self.root)
+        icon_img = tk.PhotoImage(file='infra_auto_diag/logo.png')
+        dlg.iconphoto(False, icon_img)
         dlg.title("게이트웨이(Bastion) 설정")
         dlg.transient(self.root)
         dlg.resizable(False, False)
@@ -500,6 +502,8 @@ class App:
     def _open_detail(self, idx):
         r = self.results[idx]
         dlg = tk.Toplevel(self.root)
+        icon_img = tk.PhotoImage(file="infra_auto_diag\logo.png")
+        dlg.iconphoto(False, icon_img)
         dlg.title(f"{r.get('code','')} 상세 / 최종판정")
         dlg.transient(self.root); dlg.grab_set(); dlg.geometry("580x480")
 
@@ -701,6 +705,10 @@ class App:
 
 def main():
     root = tk.Tk()
+    icon32 = tk.PhotoImage(file='infra_auto_diag/logo.png')
+    icon16 = tk.PhotoImage(file='infra_auto_diag/logo.png')
+
+    root.iconphoto(False, icon32, icon16)
     App(root)
     root.mainloop()
 
