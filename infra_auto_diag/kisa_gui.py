@@ -690,18 +690,17 @@ class App:
         summary = _add_verdict_cf(summary, "F6:F72")
 
         # 2-1 그래프
-        #   D18/D20: 양식이 점수행이 아닌 F53:T53 을 참조하던 버그 → 적용율행 F74:T74
-        #   C5/C6  : AVERAGE(F74:T74)  (서버1대라 F74 값)
-        #   D6/D17 : COUNTA 로 서버 수 = 1
-        #   C72~C76: '2-2'!V6/V19/V39/V69/V70 (영역별 점수) — V39 위에서 교정함
-        graph = _put_formula(
-            graph, "D18",
-            'COUNTIF(\'2-2. 요약 진단결과(Linux)\'!$F$74:$T$74,">=0.85")')
-        graph = _put_formula(
-            graph, "D20",
-            'COUNTIF(\'2-2. 요약 진단결과(Linux)\'!$F$74:$T$74,"<0.7")')
-        graph = _put_formula(graph, "C5", "AVERAGE('2-2. 요약 진단결과(Linux)'!$F$74:$T$74)")
-        graph = _put_formula(graph, "C6", "AVERAGE('2-2. 요약 진단결과(Linux)'!$F$74:$T$74)")
+        #   점수 범위 = '2-2. 요약 진단결과(Linux)'!$F$74:$T$74 (서버별 보안 적용율)
+        #   안전 D18 = COUNTIF(점수,">=0.85")
+        #   양호 D19 = COUNTIFS(점수,">=0.7", 점수,"<0.85")   ← 양식은 D17-(D18+D20) 뺄셈이라 교체
+        #   취약 D20 = COUNTIF(점수,"<0.7")
+        #   C18~C20  = D18~D20 / $D$17 (비율),  C5/C6 = AVERAGE(점수)
+        SCORE = "'2-2. 요약 진단결과(Linux)'!$F$74:$T$74"
+        graph = _put_formula(graph, "D18", f'COUNTIF({SCORE},">=0.85")')
+        graph = _put_formula(graph, "D19", f'COUNTIFS({SCORE},">=0.7",{SCORE},"<0.85")')
+        graph = _put_formula(graph, "D20", f'COUNTIF({SCORE},"<0.7")')
+        graph = _put_formula(graph, "C5", f'AVERAGE({SCORE})')
+        graph = _put_formula(graph, "C6", f'AVERAGE({SCORE})')
         for row in range(37, 51):
             graph = _clear_cols(graph, row, 22, 24)   # 미사용 서버 목록(V/W/X) 정리
 
