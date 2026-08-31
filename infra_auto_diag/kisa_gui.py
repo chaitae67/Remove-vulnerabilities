@@ -36,6 +36,11 @@ LOCAL_CHECK = os.path.join(SCRIPT_DIR, "kisa_unix_check.sh")  # 원격에 올릴
 REMOTE_SCRIPT = "/tmp/kisa_check.sh"
 REMOTE_JSON = "/tmp/kisa_result.json"
 
+# 결과보고서 양식(같은 폴더). 있으면 이 서식 그대로 채워서 저장한다.
+REPORT_TEMPLATE = os.path.join(SCRIPT_DIR, "보고서_양식_Linux.xlsx")
+RESULT_SHEET = "3-1. 진단 결과(Linux)"
+TARGET_SHEET = "1. 진단 대상"
+
 STATUS_COLORS = {          # 표 행 배경색
     "취약": "#f8d7da",
     "양호": "#d4edda",
@@ -55,6 +60,8 @@ class App:
         self.root = root
         self.results = []          # 회수된 점검 결과 리스트
         self.host_label = ""
+        self.os_label = ""
+        self.conn_host = ""
         # 게이트웨이(bastion) 경유 설정
         self.gateway = {"enabled": False, "host": "", "port": 22, "user": "ec2-user",
                         "auth": "password", "password": "", "key": ""}
@@ -336,6 +343,8 @@ class App:
             sftp.close()
 
             self.host_label = data.get("host", p["host"])
+            self.os_label = data.get("os", "")
+            self.conn_host = p["host"]
             self.results = data.get("results", [])
             self.log(f"      완료: {len(self.results)}개 항목 (OS: {data.get('os','?')})")
             self.root.after(0, self._show_results)
@@ -385,6 +394,44 @@ class App:
                                             filetypes=[("Excel", "*.xlsx")])
         if not path:
             return
+        # 보고서 양식이 있으면 그 서식대로 채워서 저장
+        if os.path.exists(REPORT_TEMPLATE):
+            try:
+                self._export_with_template(path)
+                self.log(f"✔ 엑셀 저장(보고서 양식): {path}")
+                messagebox.showinfo("저장 완료", f"보고서 양식으로 저장했습니다:\n{path}")
+                return
+            except Exception as e:
+                self.log(f"⚠ 양식 채우기 실패({e}) → 기본 형식으로 저장합니다.")
+        self._export_plain(path)
+
+    def _export_with_template(self, path):
+        wb = openpyxl.load_workbook(REPORT_TEMPLATE)
+        ws = wb[RESULT_SHEET]
+        by_code = {r.get("code", ""): r for r in self.results}
+        # U-01 → 6행, U-67 → 72행
+        for n in range(1, 68):
+            code = f"U-{n:02d}"
+            r = by_code.get(code)
+            if not r:
+                continue
+            row = 5 + n
+            ws.cell(row=row, column=6).value = r.get("status", "")            # F: 판정
+            ws.cell(row=row, column=7).value = " / ".join(r.get("evidence", []))  # G: 상세결과
+
+        # 진단 대상 시트에 점검 호스트 1대 기록
+        try:
+            wt = wb[TARGET_SHEET]
+            wt.cell(row=5, column=2).value = 1
+            wt.cell(row=5, column=3).value = self.host_label or self.conn_host   # Hostname
+            wt.cell(row=5, column=4).value = self.conn_host                      # IP Address
+            wt.cell(row=5, column=5).value = self.os_label                       # 버전정보
+        except Exception:
+            pass
+
+        wb.save(path)
+
+    def _export_plain(self, path):
         try:
             wb = openpyxl.Workbook()
             ws = wb.active
