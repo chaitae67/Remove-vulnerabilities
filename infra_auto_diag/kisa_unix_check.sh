@@ -205,10 +205,15 @@ else
 fi
 
 # U-06 사용자 계정 su 기능 제한
-if grep -qE '^[[:space:]]*auth.*pam_wheel\.so' /etc/pam.d/su 2>/dev/null; then
-  rep U-06 "사용자 계정 su 기능 제한" GOOD "/etc/pam.d/su 에 pam_wheel 제한 적용"
+gen_users=$(awk -F: '$3>=1000 && $3<65534 && $7 !~ /(nologin|false)/ {print $1}' /etc/passwd 2>/dev/null | tr '\n' ' ')
+if grep -qE '^[[:space:]]*auth[[:space:]].*pam_wheel\.so' /etc/pam.d/su 2>/dev/null; then
+  rep U-06 "사용자 계정 su 기능 제한" GOOD "/etc/pam.d/su 에 pam_wheel 그룹 제한 적용"
+elif grep -qiE '^[[:space:]]*SU_WHEEL_ONLY[[:space:]]+yes' /etc/login.defs 2>/dev/null; then
+  rep U-06 "사용자 계정 su 기능 제한" GOOD "/etc/login.defs SU_WHEEL_ONLY=yes"
+elif [ -z "$gen_users" ]; then
+  rep U-06 "사용자 계정 su 기능 제한" GOOD "일반 사용자 계정 없음(root 전용) → su 제한 불필요"
 else
-  rep U-06 "사용자 계정 su 기능 제한" MAN "pam_wheel 미적용 → wheel 그룹 기반 su 제한 확인 필요"
+  rep U-06 "사용자 계정 su 기능 제한" VULN "일반 사용자($gen_users) 존재하나 pam_wheel/SU_WHEEL_ONLY 미설정 → 모든 사용자 su 가능"
 fi
 
 # U-07 불필요한 계정 제거
@@ -216,9 +221,15 @@ unnec=""; for u in lp uucp nuucp games gopher news adm sync shutdown halt; do
   grep -q "^$u:" /etc/passwd 2>/dev/null && unnec="$unnec $u"; done
 rep U-07 "불필요한 계정 제거" MAN "기본 시스템 계정 존재:${unnec:- 없음} → 미사용 계정 여부 확인"
 
-# U-08 관리자 그룹에 최소한의 계정 포함
+# U-08 관리자 그룹에 최소한의 계정 포함 (GID 0 그룹에 root 외 계정이 있으면 취약)
 rootg=$(getent group root | awk -F: '{print $4}')
-rep U-08 "관리자 그룹에 최소한의 계정 포함" MAN "root 그룹 멤버: ${rootg:-없음} → 불필요 계정 포함 여부 확인"
+wheelg=$(getent group wheel 2>/dev/null | awk -F: '{print $4}')
+sudog=$(getent group sudo 2>/dev/null | awk -F: '{print $4}')
+if [ -z "$rootg" ]; then
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "root(GID 0) 그룹에 추가 계정 없음 (wheel=${wheelg:-없음}, sudo=${sudog:-없음} 는 별도 정책 확인)"
+else
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "root(GID 0) 그룹에 일반 계정 포함: $rootg"
+fi
 
 # U-09 계정이 존재하지 않는 GID 금지 (사용자 없는 그룹은 정상; 여기선 근거 제시)
 rep U-09 "계정이 존재하지 않는 GID 금지" MAN "불필요/미사용 그룹 존재 여부는 조직 정책에 따라 확인"
@@ -248,12 +259,16 @@ else
 fi
 
 # U-13 안전한 비밀번호 암호화 알고리즘 사용
-em=$(grep -E '^ENCRYPT_METHOD' /etc/login.defs 2>/dev/null | awk '{print $2}')
-sha=$(awk -F: '$2 ~ /^\$6\$/ {c++} END{print c+0}' /etc/shadow 2>/dev/null)
-if echo "$em" | grep -qiE 'SHA512|SHA256|YESCRYPT'; then
-  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" GOOD "ENCRYPT_METHOD=$em, SHA512 해시 계정=$sha"
+em=$(grep -E '^[[:space:]]*ENCRYPT_METHOD' /etc/login.defs 2>/dev/null | awk '{print $2}')
+strong=$(awk -F: '$2 ~ /^\$(6|5|y|gy|7)\$/ {c++} END{print c+0}' /etc/shadow 2>/dev/null)
+weakacc=$(awk -F: '$2 ~ /^\$(1|_)\$/ {print $1}' /etc/shadow 2>/dev/null | tr '\n' ' ')
+pamsha=$(grep -rhE 'pam_unix\.so.*(sha512|sha256|yescrypt)' $PAM_PW 2>/dev/null | head -1)
+if [ -n "$weakacc" ]; then
+  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" VULN "취약 해시(MD5/DES) 사용 계정: $weakacc"
+elif echo "$em" | grep -qiE 'SHA512|SHA256|YESCRYPT' || [ -n "$pamsha" ] || [ "${strong:-0}" -gt 0 ]; then
+  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" GOOD "ENCRYPT_METHOD=${em:-미명시}, SHA-2/yescrypt 해시 계정=$strong (취약 해시 없음)"
 else
-  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" MAN "ENCRYPT_METHOD=${em:-미설정} (SHA512 권장), \$6\$해시=$sha"
+  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" MAN "암호화 방식 확인 불가 (설정된 계정 해시 없음)"
 fi
 
 #==============================================================================
@@ -285,10 +300,21 @@ if [ -z "$ssbad" ]; then
 else
   rep U-17 "시스템 시작 스크립트 권한 설정" VULN "부적절 항목: $(echo $ssbad | cut -c1-120)"
 fi
-# U-18 /etc/shadow
-chk_file U-18 "/etc/shadow 소유자 및 권한 설정" /etc/shadow 640 root
-# U-19 /etc/hosts
-chk_file U-19 "/etc/hosts 소유자 및 권한 설정" /etc/hosts 600 root
+# U-18 /etc/shadow (KISA 기준: root 소유 + 권한 400 이하. Debian 계열 root:shadow 640은 예외적 허용)
+if [ ! -e /etc/shadow ]; then
+  rep U-18 "/etc/shadow 소유자 및 권한 설정" NA "/etc/shadow 없음"
+else
+  sp=$(stat -c '%a' /etc/shadow); so=$(stat -c '%U' /etc/shadow); sg=$(stat -c '%G' /etc/shadow)
+  if [ "$so" = root ] && octal_le "$sp" 400; then
+    rep U-18 "/etc/shadow 소유자 및 권한 설정" GOOD "/etc/shadow 소유자=$so 권한=$sp (기준 400 이하)"
+  elif [ "$so" = root ] && [ "$sg" = shadow ] && octal_le "$sp" 640; then
+    rep U-18 "/etc/shadow 소유자 및 권한 설정" MAN "/etc/shadow $so:$sg 권한=$sp — Debian 계열 기본값이나 KISA 권고(400) 초과 → 정책상 허용 여부 확인"
+  else
+    rep U-18 "/etc/shadow 소유자 및 권한 설정" VULN "/etc/shadow 소유자=$so 권한=$sp (기준: root, 400 이하)"
+  fi
+fi
+# U-19 /etc/hosts (KISA 기준: root 소유 + 권한 644 이하)
+chk_file U-19 "/etc/hosts 소유자 및 권한 설정" /etc/hosts 644 root
 # U-20 /etc/(x)inetd.conf
 if [ -e /etc/xinetd.conf ]; then chk_file U-20 "/etc/(x)inetd.conf 소유자 및 권한 설정" /etc/xinetd.conf 600 root
 elif [ -e /etc/inetd.conf ]; then chk_file U-20 "/etc/(x)inetd.conf 소유자 및 권한 설정" /etc/inetd.conf 600 root
@@ -348,12 +374,23 @@ fi
 # U-29 hosts.lpd
 chk_file U-29 "hosts.lpd 파일 소유자 및 권한 설정" /etc/hosts.lpd 600 root
 
-# U-30 UMASK
-um=$(umask)
-if octal_le "022" "$um" || [ "$(printf '%d' "0$um")" -ge "$(printf '%d' 022)" ]; then
-  rep U-30 "UMASK 설정 관리" GOOD "umask=$um (022 이상)"
+# U-30 UMASK (실행 세션 값이 아니라 설정 파일의 값으로 판정)
+umc=$(grep -rhE '^[[:space:]]*(umask|UMASK)[[:space:]]+[0-7]{3,4}' \
+        /etc/profile /etc/bashrc /etc/bash.bashrc /etc/csh.cshrc /etc/csh.login \
+        /etc/login.defs /etc/profile.d/ /etc/pam.d/ 2>/dev/null \
+        | grep -oE '[0-7]{3,4}' | sort -u)
+weakest=""
+for v in $umc; do
+  n=$(printf '%d' "0$v")
+  [ -z "$weakest" ] && weakest="$v"
+  [ "$n" -lt "$(printf '%d' "0$weakest")" ] && weakest="$v"
+done
+chkum=${weakest:-$(umask)}
+# 022 이상 = 그룹/other 쓰기 비트가 모두 켜져 있음  →  (umask & 022) == 022
+if [ "$(( 0$chkum & 022 ))" -eq "$(( 022 ))" ]; then
+  rep U-30 "UMASK 설정 관리" GOOD "설정 umask=${weakest:-미설정(현재 $chkum)} (022 이상)"
 else
-  rep U-30 "UMASK 설정 관리" VULN "umask=$um (022 이상 필요)"
+  rep U-30 "UMASK 설정 관리" VULN "umask=$chkum (022 미만 → 그룹/타 사용자 쓰기 허용)"
 fi
 
 # U-31 홈 디렉토리 소유자 및 권한
@@ -470,11 +507,17 @@ if port_listen 25; then
     rep U-48 "expn, vrfy 명령어 제한" GOOD "vrfy/expn 제한 설정"
   else rep U-48 "expn, vrfy 명령어 제한" MAN "메일 실행 중 → disable_vrfy_command=yes / noexpn,novrfy 확인"; fi
 else rep U-48 "expn, vrfy 명령어 제한" NA "메일 미실행"; fi
-# U-49 DNS 보안 버전 패치
-if proc_run named || port_listen 53; then
-  { port_listen 53 && ! (ss -lntuH 2>/dev/null|grep -qE '127.0.0.53'); }
-  rep U-49 "DNS 보안 버전 패치" MAN "DNS(named) 관련 → BIND 버전/패치 확인 (127.0.0.53은 systemd-resolved로 서버 아님)"
-else rep U-49 "DNS 보안 버전 패치" NA "BIND named 미실행"; fi
+# U-49 DNS 보안 버전 패치 (systemd-resolved의 127.0.0.53은 DNS 서버 아님 → 제외)
+dns_srv=0
+proc_run named && dns_srv=1
+pkg_installed bind && dns_srv=1
+pkg_installed bind9 && dns_srv=1
+{ port_listen 53 && ss -lntuH 2>/dev/null | grep -E '[[:space:]]:53[[:space:]]|:::53' | grep -qvE '127\.0\.0\.53|127\.0\.0\.1:53'; } && dns_srv=1
+if [ "$dns_srv" -eq 1 ]; then
+  rep U-49 "DNS 보안 버전 패치" MAN "DNS(BIND/named) 운영 중 → BIND 버전/패치 이력 확인"
+else
+  rep U-49 "DNS 보안 버전 패치" NA "BIND named 미운영 (127.0.0.53 등은 systemd-resolved, DNS 서버 아님)"
+fi
 # U-50 DNS Zone Transfer
 if proc_run named; then
   if grep -qiE 'allow-transfer' /etc/named.conf /etc/named/*.conf /etc/bind/named.conf* 2>/dev/null; then
@@ -524,13 +567,20 @@ else rep U-60 "SNMP Community String 복잡성 설정" NA "SNMP 미실행"; fi
 # U-61 SNMP Access Control
 if port_listen 161; then rep U-61 "SNMP Access Control 설정" MAN "snmpd.conf의 접근 허용 대상(com2sec/소스제한) 확인"
 else rep U-61 "SNMP Access Control 설정" NA "SNMP 미실행"; fi
-# U-62 로그인 시 경고 메시지
-banner_ok=0
-[ -s /etc/motd ] && banner_ok=1
-grep -qiE '^\s*Banner\s+\S' /etc/ssh/sshd_config 2>/dev/null && banner_ok=1
-[ -s /etc/issue.net ] && banner_ok=1
-if [ "$banner_ok" -eq 1 ]; then rep U-62 "로그인 시 경고 메시지 설정" MAN "경고 배너 존재(motd/issue/sshd Banner) → 내용 적절성 확인"
-else rep U-62 "로그인 시 경고 메시지 설정" VULN "로그인 경고 메시지 미설정"; fi
+# U-62 로그인 시 경고 메시지 (OS 정보만 담긴 기본 issue/motd 는 경고 배너로 인정 안 함)
+warn_re='(경고|허가|무단|승인|비인가|unauthorized|authorized[[:space:]]+(users|personnel)|prohibited|monitored|warning)'
+sshban=$(sshd -T 2>/dev/null | awk '/^banner /{print $2}')
+[ -z "$sshban" ] && sshban=$(grep -iE '^[[:space:]]*Banner[[:space:]]+\S' /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+b_ssh=0; b_local=0
+{ [ -n "$sshban" ] && [ "$sshban" != none ] && [ -s "$sshban" ]; } && b_ssh=1
+grep -qiE "$warn_re" /etc/issue /etc/issue.net /etc/motd 2>/dev/null && b_local=1
+if [ "$b_ssh" -eq 1 ] && [ "$b_local" -eq 1 ]; then
+  rep U-62 "로그인 시 경고 메시지 설정" GOOD "SSH Banner + issue/motd 경고문 설정됨"
+elif [ "$b_ssh" -eq 1 ] || [ "$b_local" -eq 1 ]; then
+  rep U-62 "로그인 시 경고 메시지 설정" MAN "일부 경고 배너만 설정(SSH=$b_ssh, 콘솔=$b_local) → 전 서비스 적용 여부 확인"
+else
+  rep U-62 "로그인 시 경고 메시지 설정" VULN "로그인 경고 메시지 미설정 (기본 issue 파일은 OS 정보만 노출)"
+fi
 # U-63 sudo 명령어 접근 관리
 if [ -e /etc/sudoers ]; then
   sp=$(stat -c '%a' /etc/sudoers)
@@ -557,12 +607,27 @@ else rep U-65 "NTP 및 시각 동기화 설정" VULN "NTP/시각동기화 미설
 if svc_active rsyslog || svc_active syslog-ng || svc_active systemd-journald; then
   rep U-66 "정책에 따른 시스템 로깅 설정" MAN "로깅 서비스 활성 → 로그 종류/보존정책이 기준 충족하는지 확인"
 else rep U-66 "정책에 따른 시스템 로깅 설정" VULN "시스템 로깅 서비스 미실행"; fi
-# U-67 로그 디렉토리 소유자 및 권한
-if [ -d /var/log ]; then
-  lp=$(stat -c '%a' /var/log); lo=$(stat -c '%U' /var/log)
-  if [ "$lo" = root ] && octal_le "$lp" 755; then rep U-67 "로그 디렉토리 소유자 및 권한 설정" GOOD "/var/log 소유자=$lo 권한=$lp"
-  else rep U-67 "로그 디렉토리 소유자 및 권한 설정" VULN "/var/log 소유자=$lo 권한=$lp (root, 755 이하 권장)"; fi
-else rep U-67 "로그 디렉토리 소유자 및 권한 설정" NA "/var/log 없음"; fi
+# U-67 로그 디렉토리 및 로그 파일 소유자/권한 (파일까지 점검 — 기준: root, 644 이하)
+if [ ! -d /var/log ]; then
+  rep U-67 "로그 디렉토리 소유자 및 권한 설정" NA "/var/log 없음"
+else
+  logbad=""
+  dp=$(stat -c '%a' /var/log); do_=$(stat -c '%U' /var/log)
+  { [ "$do_" = root ] && octal_le "$dp" 755; } || logbad="$logbad /var/log($do_,$dp)"
+  for f in /var/log/messages /var/log/syslog /var/log/secure /var/log/auth.log \
+           /var/log/kern.log /var/log/cron /var/log/maillog /var/log/dmesg \
+           /var/log/wtmp /var/log/btmp /var/log/lastlog; do
+    [ -e "$f" ] || continue
+    p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
+    case "$o" in root|syslog|adm) ;; *) logbad="$logbad ${f}(소유자=$o)";; esac
+    octal_le "$p" 644 || logbad="$logbad ${f}($p)"
+  done
+  if [ -z "$logbad" ]; then
+    rep U-67 "로그 디렉토리 소유자 및 권한 설정" GOOD "/var/log 및 주요 로그 파일 소유자 root(syslog/adm) + 권한 644 이하"
+  else
+    rep U-67 "로그 디렉토리 소유자 및 권한 설정" VULN "기준 초과:$logbad (기준: root, 644 이하)"
+  fi
+fi
 
 #==============================================================================
 echo
