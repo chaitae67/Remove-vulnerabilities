@@ -138,52 +138,35 @@ def _clear_cols(xml, row, col_from, col_to):
     return xml
 
 
-def _inject_verdict_fills(styles_xml):
-    """styles.xml 의 <fills>·<cellXfs> 끝에 판정별 배경색 스타일을 추가한다.
+# 양식 styles.xml 에 이미 정의된 조건부서식 글꼴색 (dxfId)
+_DXF_RED = 4      # <font><b/><color rgb="FFFF0000"/>  → 취약
+_DXF_BLUE = 7     # <font><b/><color rgb="FF0070C0"/>  → 인터뷰 필요
 
-    양식에는 '취약' 글자색을 빨강으로 바꾸는 조건부서식이 있으나 행 범위가
-    들쭉날쭉해 일부 셀만 적용된다. 판정 셀에 배경색 스타일을 직접 지정해
-    조건부서식과 무관하게 색이 일관되게 나오도록 한다.
-    반환: (수정된 styles_xml, {판정값: cellXf 인덱스})
+
+def _add_verdict_cf(sheet_xml, sqref):
+    """판정 셀 범위에 '취약=빨강 / 인터뷰 필요=파랑' 글꼴색 조건부서식을 추가한다.
+
+    양식의 기존 조건부서식은 sqref 가 863개로 쪼개져 일부 행에만 '취약' 규칙이
+    있어 색이 안 나온다. 우선순위 1~2 로 범위 전체를 덮는 규칙을 하나 더 넣어
+    보완한다(양호는 규칙 없이 기본 검정 유지). styles.xml 은 건드리지 않는다.
     """
-    palette = {
-        "취약": "FFF8D7DA", "양호": "FFD4EDDA",
-        "N/A": "FFFFF3CD", MANUAL_LABEL: "FFD1ECF1",
-    }
-    mf = re.search(r'<fills count="(\d+)">', styles_xml)
-    n_fills = int(mf.group(1))
-    fills_add = "".join(
-        f'<fill><patternFill patternType="solid"><fgColor rgb="{rgb}"/>'
-        f'<bgColor rgb="FF000000"/></patternFill></fill>' for rgb in palette.values())
-    styles_xml = (styles_xml[:mf.start()] + f'<fills count="{n_fills + len(palette)}">'
-                  + styles_xml[mf.end():]).replace("</fills>", fills_add + "</fills>", 1)
-
-    mx = re.search(r'<cellXfs count="(\d+)">', styles_xml)
-    n_xfs = int(mx.group(1))
-    xf_tpl = ('<xf numFmtId="0" fontId="10" fillId="{fid}" borderId="6" xfId="0" '
-              'applyAlignment="1" applyFill="1">'
-              '<alignment horizontal="center" vertical="center" wrapText="1"/></xf>')
-    xfs_add = "".join(xf_tpl.format(fid=n_fills + i) for i in range(len(palette)))
-    styles_xml = (styles_xml[:mx.start()] + f'<cellXfs count="{n_xfs + len(palette)}">'
-                  + styles_xml[mx.end():]).replace("</cellXfs>", xfs_add + "</cellXfs>", 1)
-
-    idx = {k: n_xfs + i for i, k in enumerate(palette)}
-    return styles_xml, idx
+    top = sqref.split(":")[0]           # 조건부서식 수식 기준 셀 (예: F6)
+    block = (
+        f'<conditionalFormatting sqref="{sqref}">'
+        f'<cfRule type="containsText" dxfId="{_DXF_RED}" priority="1" operator="containsText" '
+        f'text="취약"><formula>NOT(ISERROR(SEARCH("취약",{top})))</formula></cfRule>'
+        f'<cfRule type="containsText" dxfId="{_DXF_BLUE}" priority="2" operator="containsText" '
+        f'text="인터뷰"><formula>NOT(ISERROR(SEARCH("인터뷰",{top})))</formula></cfRule>'
+        f'</conditionalFormatting>')
+    return sheet_xml.replace("<pageMargins", block + "<pageMargins", 1)
 
 
-STATUS_COLORS = {          # 표 행 배경색
+STATUS_COLORS = {          # GUI 표(Treeview) 행 배경색
     "취약": "#f8d7da",
     "양호": "#d4edda",
     "N/A": "#fff3cd",
     "수동확인": "#d1ecf1",
     "인터뷰 필요": "#d1ecf1",
-}
-XLSX_FILL = {              # 엑셀 셀 채우기 (ARGB 앞 2자리는 alpha)
-    "취약": "F8D7DA",
-    "양호": "D4EDDA",
-    "N/A": "FFF3CD",
-    "수동확인": "D1ECF1",
-    "인터뷰 필요": "D1ECF1",
 }
 
 # 창 아이콘(logo.png) — 실행 위치와 무관하게 스크립트 폴더 기준, 없으면 조용히 무시
@@ -648,10 +631,7 @@ class App:
         summary = parts[XL_SUMMARY].decode("utf-8")
         detail = parts[XL_DETAIL].decode("utf-8")
         book = parts[XL_WORKBOOK].decode("utf-8")
-        styles = parts["xl/styles.xml"].decode("utf-8")
-
-        # 판정 셀 배경색 스타일 주입 (조건부서식이 일부 행만 색칠하는 문제 보완)
-        styles, vstyle = _inject_verdict_fills(styles)
+        # styles.xml 은 건드리지 않는다 — 색은 조건부서식(글꼴색)으로 처리
 
         host = (self.host_label or self.conn_host or "").strip()
         ipaddr = (self.conn_host or "").strip()
@@ -676,7 +656,7 @@ class App:
             row = 5 + n
             raw = r.get("final") or r.get("status", "")        # 검증자 최종판정 우선
             verdict = REPORT_STATUS.get(raw, raw)
-            detail = _put_str(detail, f"F{row}", verdict, s=vstyle.get(verdict))
+            detail = _put_str(detail, f"F{row}", verdict)
             note = (r.get("note") or "").strip()
             evidence = " / ".join(r.get("evidence", []))
             if note:
@@ -685,6 +665,7 @@ class App:
         for row in (3, 4, 5, 73, 74):               # 미사용 서버(H~AI) 정리
             detail = _clear_cols(detail, row, 8, 35)
         detail = _put_formula(detail, "F74", _APPLY_RATE.format(c="F"))
+        detail = _add_verdict_cf(detail, "F6:F72")   # 취약=빨강 / 인터뷰=파랑 글꼴색
 
         # 2-2 요약: G~K열(서버2~6) 제거, "인터뷰 필요" 점수 제외
         summary = _put_formula(
@@ -702,16 +683,27 @@ class App:
                 f'IF(COUNTIF({rng},"N/A")+COUNTIF({rng},"{MANUAL_LABEL}")'
                 f'=COUNTA({rng}),"N/A",$X{row}/(COUNTA({rng})-$Z{row}))')
         summary = _put_formula(summary, "F74", _APPLY_RATE.format(c="F"))
+        # 양식 버그: '3. 서비스 관리' 영역점수(V39)가 W69(패치)만 평균 → W39:W68 로 교정
+        summary = _put_formula(
+            summary, "V39",
+            'IF(COUNTIF(W39:W68,"N/A")=COUNTA(W39:W68),"N/A",AVERAGE(W39:W68))')
+        summary = _add_verdict_cf(summary, "F6:F72")
 
-        # 2-1 그래프: 서버 목록 1대로 축소 + 양식 버그(F53:T53 → F74:T74) 교정
+        # 2-1 그래프
+        #   D18/D20: 양식이 점수행이 아닌 F53:T53 을 참조하던 버그 → 적용율행 F74:T74
+        #   C5/C6  : AVERAGE(F74:T74)  (서버1대라 F74 값)
+        #   D6/D17 : COUNTA 로 서버 수 = 1
+        #   C72~C76: '2-2'!V6/V19/V39/V69/V70 (영역별 점수) — V39 위에서 교정함
         graph = _put_formula(
             graph, "D18",
             'COUNTIF(\'2-2. 요약 진단결과(Linux)\'!$F$74:$T$74,">=0.85")')
         graph = _put_formula(
             graph, "D20",
             'COUNTIF(\'2-2. 요약 진단결과(Linux)\'!$F$74:$T$74,"<0.7")')
+        graph = _put_formula(graph, "C5", "AVERAGE('2-2. 요약 진단결과(Linux)'!$F$74:$T$74)")
+        graph = _put_formula(graph, "C6", "AVERAGE('2-2. 요약 진단결과(Linux)'!$F$74:$T$74)")
         for row in range(37, 51):
-            graph = _clear_cols(graph, row, 22, 24)   # V, W, X
+            graph = _clear_cols(graph, row, 22, 24)   # 미사용 서버 목록(V/W/X) 정리
 
         # workbook: 미완성 "_깨짐" 시트 숨김
         book = book.replace(
@@ -726,11 +718,6 @@ class App:
         for name, xml in edited.items():
             _minidom.parseString(xml.encode("utf-8"))   # 형식 검증
             parts[name] = xml.encode("utf-8")
-        # styles.xml 은 7MB대라 파싱이 느림 → 태그 균형만 가볍게 확인
-        if styles.count("<fill>") == styles.count("</fill>") and styles.count("<cellXfs") == 1:
-            parts["xl/styles.xml"] = styles.encode("utf-8")
-        else:
-            raise ValueError("styles.xml 편집 결과가 비정상")
 
         # 메모리에서 zip 을 완성한 뒤 마지막에 한 번만 기록한다
         # (기록 실패 시에도 반쯤 쓰인 손상 파일이 남지 않도록).
@@ -752,16 +739,16 @@ class App:
                 c.font = Font(bold=True, color="FFFFFF")
                 c.fill = PatternFill("solid", fgColor="404040")
                 c.alignment = Alignment(horizontal="center")
+            font_color = {"취약": "FFFF0000", "인터뷰 필요": "FF0070C0"}  # 양호=검정
             for r in self.results:
                 raw = r.get("final") or r.get("status", "")
                 fin = REPORT_STATUS.get(raw, raw)      # 수동확인 → 인터뷰 필요
                 ws.append([self.host_label, r.get("code", ""), r.get("importance", ""),
                            r.get("title", ""), r.get("status", ""), fin,
                            " / ".join(r.get("evidence", [])), r.get("note", "")])
-                fill = XLSX_FILL.get(fin)   # 최종판정 색상
-                if fill:
-                    for c in ws[ws.max_row]:
-                        c.fill = PatternFill("solid", fgColor=fill)
+                fc = font_color.get(fin)
+                if fc:
+                    ws.cell(row=ws.max_row, column=6).font = Font(bold=True, color=fc)
             widths = [14, 7, 7, 30, 10, 10, 70, 24]
             for i, w in enumerate(widths, start=1):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
