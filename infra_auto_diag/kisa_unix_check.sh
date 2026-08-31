@@ -14,6 +14,16 @@
 #   수동확인 : 정책 수립 여부 등 시스템 상태만으로 확정 불가(인터뷰 필요) 잔여 항목
 #==============================================================================
 
+# ---- 실행 셸 보정 ----
+# 이 스크립트는 연관배열(declare -A) 등 bash 전용 문법을 사용한다.
+# Ubuntu/Debian 에서 'sh kisa_unix_check.sh' 로 실행하면 /bin/sh(dash)라 즉시 실패하므로
+# bash 로 실행되지 않았으면 bash 로 재실행한다. (없으면 명확히 에러)
+if [ -z "${BASH_VERSION:-}" ]; then
+  if command -v bash >/dev/null 2>&1; then exec bash "$0" "$@"; fi
+  echo "이 스크립트는 bash 로 실행해야 합니다:  sudo bash $0" >&2
+  exit 1
+fi
+
 # ---- 인자 파싱 ----
 JSON_FILE=""; NOCOLOR=0
 while [ $# -gt 0 ]; do
@@ -75,6 +85,27 @@ rep() {
 # 공통 헬퍼
 #------------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# 미적용 보안 업데이트 개수 조회 (계열/패키지관리자 자동 분기)
+#  $1 = dnf/yum updateinfo 에서 찾을 grep 패턴 (예: 'postfix|sendmail', 'bind')
+#  $2 = apt list --upgradable 에서 찾을 grep 패턴 (예: '^(postfix|sendmail)/')
+#  패턴을 비우면 전체 보안 업데이트 건수를 센다.
+#  dnf > yum > apt 순으로 '하나만' 실행 → Rocky(yum=dnf 심링크) 중복 실행/이중 카운트 방지.
+sec_update_count() {
+  local dpat="$1" apat="$2"
+  if have dnf; then
+    if [ -n "$dpat" ]; then dnf -q updateinfo list --security 2>/dev/null | grep -icE "$dpat"
+    else dnf -q updateinfo list --security 2>/dev/null | grep -cE '/|[0-9]{4}'; fi
+  elif have yum; then   # Amazon Linux 2 / CentOS 7 등 yum 세대
+    if [ -n "$dpat" ]; then yum -q updateinfo list security 2>/dev/null | grep -icE "$dpat"
+    else yum -q updateinfo list security 2>/dev/null | grep -icE 'ALAS|RHSA|CVE|[0-9]{4}-[0-9]+'; fi
+  elif have apt; then
+    if [ -n "$apat" ]; then apt list --upgradable 2>/dev/null | grep -icE "$apat"
+    else apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep -c '^Inst.*-security'; fi
+  else
+    echo "?"
+  fi
+}
 
 # 8진수 권한 비교 : perm <= max ?  (stat -c %a 출력 그대로 사용)
 perm_le() {
@@ -153,6 +184,8 @@ echo -e " 호스트 : $(hostname)"
 echo -e " OS     : ${PRETTY_NAME:-unknown}  (family=$FAM, UID_MIN=$UID_MIN)"
 echo -e " 시각   : $(date '+%Y-%m-%d %H:%M:%S')"
 [ "$IS_ROOT" -ne 1 ] && echo -e " ${Y}주의: root 권한이 아니므로 shadow/iptables/sshd -T/lastlog 등 일부 항목은 '수동확인'으로 표기될 수 있습니다.${N}"
+{ have ss || have netstat; } || echo -e " ${Y}주의: ss/netstat 둘 다 없어 포트 기반 서비스 점검(U-34/38/39/44/52 등)이 부정확할 수 있습니다. iproute2(ss) 설치 권장.${N}"
+{ have dnf || have yum || have apt; } || echo -e " ${Y}주의: dnf/yum/apt 를 찾지 못해 보안 패치 점검(U-45/49/64)이 '확인불가'로 처리됩니다.${N}"
 echo
 
 #==============================================================================
@@ -726,8 +759,7 @@ else
   mv=""
   [ "$mail_kind" = postfix ] && mv=$(postconf mail_version 2>/dev/null | awk '{print $3}')
   [ -z "$mv" ] && mv=$( (sendmail -d0.1 -bv root 2>/dev/null; echo) | grep -i 'Version' | head -1)
-  pend=$( { have dnf && dnf -q updateinfo list --security 2>/dev/null | grep -icE 'postfix|sendmail'; } \
-          || { have apt && apt list --upgradable 2>/dev/null | grep -icE '^(postfix|sendmail)/'; } )
+  pend=$(sec_update_count 'postfix|sendmail' '^(postfix|sendmail)/')
   if [ "${pend:-0}" -gt 0 ]; then rep U-45 "메일 서비스 버전 점검" VULN "$mail_kind 실행 중 (버전=${mv:-확인필요}) + 보안 업데이트 ${pend}건 미적용"
   else rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 실행 중 (버전=${mv:-확인필요}), 관련 보안 업데이트 미적용 없음"; fi
 fi
@@ -788,7 +820,7 @@ dns_srv=0
 # U-49 DNS 보안 버전 패치   [기준] 양호 - 주기적 패치 관리 / 취약 - 아님
 if [ "$dns_srv" -eq 0 ]; then rep U-49 "DNS 보안 버전 패치" NA "BIND(named) 미운영 (systemd-resolved 는 DNS 서버 아님)"
 else
-  bpend=$( { have dnf && dnf -q updateinfo list --security 2>/dev/null | grep -ic 'bind'; } || { have apt && apt list --upgradable 2>/dev/null | grep -ic '^bind9'; } )
+  bpend=$(sec_update_count 'bind' '^bind9')
   bver=$(named -v 2>/dev/null)
   if [ "${bpend:-0}" -gt 0 ]; then rep U-49 "DNS 보안 버전 패치" VULN "BIND 실행 중 ($bver) + 보안 업데이트 ${bpend}건 미적용"
   else rep U-49 "DNS 보안 버전 패치" MAN "BIND 실행 중 ($bver), 미적용 보안 업데이트 없음 → 패치 관리 정책/이력 확인"; fi
@@ -945,11 +977,7 @@ echo -e "${W}[ 4. 패치 관리 ]${N}"
 
 # U-64 주기적인 보안 패치 및 벤더 권고사항 적용
 # [기준] 양호 - 패치 정책 수립 + 주기적 패치 관리 + 패치 확인/적용 / 취약 - 아님
-sec_pend="?"
-if have dnf; then sec_pend=$(dnf -q updateinfo list --security 2>/dev/null | grep -cE '/|[0-9]{4}')
-elif have yum; then sec_pend=$(yum -q --security check-update 2>/dev/null | grep -c 'needed for security')
-elif have apt; then sec_pend=$( (apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep -c '^Inst.*-security') )
-fi
+sec_pend=$(sec_update_count '' '')   # 전체 보안 업데이트 건수 (dnf/yum/apt 자동 분기)
 eol_note=""
 case "${ID}:${VERSION_ID}" in
   debian:11) [ "$(date +%Y%m%d)" -ge 20260831 ] && eol_note=" (Debian 11 표준 지원 종료)";;
