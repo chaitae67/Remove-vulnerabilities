@@ -153,7 +153,7 @@ class App:
         # 게이트웨이(bastion) 경유 설정
         self.gateway = {"enabled": False, "host": "", "port": 22, "user": "ec2-user",
                         "auth": "password", "password": "", "key": ""}
-        root.title("KISA Unix 취약점 점검 도구 (SSH)")
+        root.title("취약점 빼기 팀 infra 진단 자동화 툴")
         root.geometry("1000x680")
         self._build_ui()
 
@@ -209,10 +209,10 @@ class App:
         # 결과 표
         table_frame = ttk.Frame(self.root)
         table_frame.pack(fill="both", expand=True, padx=10, pady=6)
-        cols = ("code", "imp", "title", "status", "evidence")
+        cols = ("code", "imp", "title", "auto", "final", "evidence")
         self.tree = ttk.Treeview(table_frame, columns=cols, show="headings")
-        for c, t, w in (("code", "코드", 70), ("imp", "중요도", 60), ("title", "점검 항목", 260),
-                        ("status", "판정", 80), ("evidence", "근거", 500)):
+        for c, t, w in (("code", "코드", 60), ("imp", "중요도", 55), ("title", "점검 항목", 240),
+                        ("auto", "자동판정", 75), ("final", "최종판정", 75), ("evidence", "근거", 430)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w")
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
@@ -225,6 +225,10 @@ class App:
         table_frame.columnconfigure(0, weight=1)
         for st, color in STATUS_COLORS.items():
             self.tree.tag_configure(st, background=color)
+        self.tree.bind("<Double-1>", self._on_row_dblclick)
+        ttk.Label(self.root,
+                  text="↳ 행을 더블클릭하면 근거를 보고 최종판정(양호/취약)을 지정할 수 있습니다. 엑셀은 '최종판정' 기준으로 추출됩니다.",
+                  foreground="#555").pack(fill="x", padx=12)
 
         # 로그
         logf = ttk.LabelFrame(self.root, text="로그")
@@ -259,6 +263,8 @@ class App:
     def _open_gateway_dialog(self):
         g = self.gateway
         dlg = tk.Toplevel(self.root)
+        icon_img = tk.PhotoImage(file='infra_auto_diag/logo.png')
+        dlg.iconphoto(False, icon_img)
         dlg.title("게이트웨이(Bastion) 설정")
         dlg.transient(self.root)
         dlg.resizable(False, False)
@@ -454,19 +460,87 @@ class App:
 
     def _show_results(self):
         self._clear_table()
+        for idx, r in enumerate(self.results):
+            r.setdefault("final", r.get("status", ""))   # 최종판정 초기값=자동판정
+            r.setdefault("note", "")                      # 검증자 비고
+            self._insert_row(idx, r)
+        self._update_summary()
+        self.btn_xlsx.configure(state="normal" if self.results else "disabled")
+
+    def _insert_row(self, idx, r):
+        fin = r.get("final", r.get("status", ""))
+        self.tree.insert("", "end", iid=str(idx),
+                         values=(r.get("code", ""), r.get("importance", ""),
+                                 r.get("title", ""), r.get("status", ""), fin,
+                                 " / ".join(r.get("evidence", []))),
+                         tags=(fin,))
+
+    def _update_row(self, idx):
+        r = self.results[idx]
+        fin = r.get("final", r.get("status", ""))
+        self.tree.item(str(idx),
+                       values=(r.get("code", ""), r.get("importance", ""),
+                               r.get("title", ""), r.get("status", ""), fin,
+                               " / ".join(r.get("evidence", []))),
+                       tags=(fin,))
+
+    def _update_summary(self):
         cnt = {"양호": 0, "취약": 0, "N/A": 0, "수동확인": 0}
         for r in self.results:
-            st = r.get("status", "")
-            cnt[st] = cnt.get(st, 0) + 1
-            self.tree.insert("", "end",
-                             values=(r.get("code", ""), r.get("importance", ""),
-                                     r.get("title", ""), st,
-                                     " / ".join(r.get("evidence", []))),
-                             tags=(st,))
+            f = r.get("final", r.get("status", ""))
+            cnt[f] = cnt.get(f, 0) + 1
         self.lbl_sum.configure(
-            text=f"[{self.host_label}]  양호 {cnt['양호']}   취약 {cnt['취약']}   "
+            text=f"[{self.host_label}]  (최종판정 기준)  양호 {cnt['양호']}   취약 {cnt['취약']}   "
                  f"N/A {cnt['N/A']}   수동확인 {cnt['수동확인']}   (총 {len(self.results)})")
-        self.btn_xlsx.configure(state="normal" if self.results else "disabled")
+
+    # ---------------- 행 더블클릭 → 상세/최종판정 ----------------
+    def _on_row_dblclick(self, event):
+        iid = self.tree.identify_row(event.y)
+        if iid != "":
+            self._open_detail(int(iid))
+
+    def _open_detail(self, idx):
+        r = self.results[idx]
+        dlg = tk.Toplevel(self.root)
+        icon_img = tk.PhotoImage(file="infra_auto_diag\logo.png")
+        dlg.iconphoto(False, icon_img)
+        dlg.title(f"{r.get('code','')} 상세 / 최종판정")
+        dlg.transient(self.root); dlg.grab_set(); dlg.geometry("580x480")
+
+        head = ttk.Frame(dlg); head.pack(fill="x", padx=10, pady=8)
+        ttk.Label(head, text=f"{r.get('code','')}  [{r.get('importance','')}]  {r.get('title','')}",
+                  font=("", 11, "bold")).pack(anchor="w")
+        ttk.Label(head, text=f"자동판정: {r.get('status','')}", foreground="#555").pack(anchor="w")
+
+        ttk.Label(dlg, text="■ 근거", font=("", 9, "bold")).pack(anchor="w", padx=10)
+        ev = tk.Text(dlg, height=9, wrap="word")
+        ev.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        ev.insert("1.0", "\n".join(r.get("evidence", []) or ["(근거 없음)"]))
+        ev.configure(state="disabled")
+
+        fr = ttk.LabelFrame(dlg, text="최종판정 (검증자 지정)")
+        fr.pack(fill="x", padx=10, pady=4)
+        fv = tk.StringVar(value=r.get("final", r.get("status", "")))
+        for i, s in enumerate(("양호", "취약", "N/A", "수동확인")):
+            ttk.Radiobutton(fr, text=s, variable=fv, value=s).grid(row=0, column=i, padx=10, pady=4)
+
+        ttk.Label(dlg, text="■ 비고(검증자 의견)", font=("", 9, "bold")).pack(anchor="w", padx=10)
+        note = tk.Text(dlg, height=3, wrap="word")
+        note.pack(fill="x", padx=10)
+        note.insert("1.0", r.get("note", ""))
+
+        def save():
+            r["final"] = fv.get()
+            r["note"] = note.get("1.0", "end").strip()
+            self._update_row(idx)
+            self._update_summary()
+            self.log(f"  · {r.get('code','')} 최종판정 저장: {r['final']}")
+            dlg.destroy()
+
+        bf = ttk.Frame(dlg); bf.pack(pady=10)
+        ttk.Button(bf, text="저장", width=10, command=save).grid(row=0, column=0, padx=8)
+        ttk.Button(bf, text="닫기", width=10, command=dlg.destroy).grid(row=0, column=1, padx=8)
+        dlg.wait_window()
 
     # ---------------- 엑셀 추출 ----------------
     def on_export(self):
@@ -602,25 +676,26 @@ class App:
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "KISA 점검결과"
-            headers = ["호스트", "코드", "중요도", "점검 항목", "판정", "근거"]
+            headers = ["호스트", "코드", "중요도", "점검 항목", "자동판정", "최종판정", "근거", "비고"]
             ws.append(headers)
             for c in ws[1]:
                 c.font = Font(bold=True, color="FFFFFF")
                 c.fill = PatternFill("solid", fgColor="404040")
                 c.alignment = Alignment(horizontal="center")
             for r in self.results:
+                fin = r.get("final", r.get("status", ""))
                 ws.append([self.host_label, r.get("code", ""), r.get("importance", ""),
-                           r.get("title", ""), r.get("status", ""),
-                           " / ".join(r.get("evidence", []))])
-                fill = XLSX_FILL.get(r.get("status", ""))
+                           r.get("title", ""), r.get("status", ""), fin,
+                           " / ".join(r.get("evidence", [])), r.get("note", "")])
+                fill = XLSX_FILL.get(fin)   # 최종판정 색상
                 if fill:
                     for c in ws[ws.max_row]:
                         c.fill = PatternFill("solid", fgColor=fill)
-            widths = [16, 8, 8, 34, 10, 90]
+            widths = [14, 7, 7, 30, 10, 10, 70, 24]
             for i, w in enumerate(widths, start=1):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
             ws.freeze_panes = "A2"
-            ws.auto_filter.ref = f"A1:F{ws.max_row}"
+            ws.auto_filter.ref = f"A1:H{ws.max_row}"
             wb.save(path)
             self.log(f"✔ 엑셀 저장: {path}")
             messagebox.showinfo("저장 완료", f"엑셀로 저장했습니다:\n{path}")
@@ -630,6 +705,10 @@ class App:
 
 def main():
     root = tk.Tk()
+    icon32 = tk.PhotoImage(file='infra_auto_diag/logo.png')
+    icon16 = tk.PhotoImage(file='infra_auto_diag/logo.png')
+
+    root.iconphoto(False, icon32, icon16)
     App(root)
     root.mainloop()
 
