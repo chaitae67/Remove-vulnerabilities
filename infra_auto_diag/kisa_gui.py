@@ -54,18 +54,16 @@ XL_SUMMARY = "xl/worksheets/sheet5.xml"
 XL_DETAIL = "xl/worksheets/sheet6.xml"
 XL_WORKBOOK = "xl/workbook.xml"
 
-# 점검 스크립트 판정 → 보고서 판정 매핑
-#   N/A(서비스/파일 미설치)  → 양호 로 기재(근거에 "해당 없음" 사유 유지)
-#   수동확인(정책·주기 확인)  → "인터뷰 필요" 로 기재. 보안 적용율·영역별 점수 계산에서 제외한다.
 MANUAL_LABEL = "인터뷰 필요"
 # 점검 스크립트 판정 / 검증자 최종판정 → 보고서 기재값
-#   수동확인(스크립트 용어) → "인터뷰 필요"(보고서 용어) 로 통일. 나머지는 그대로.
+#   N/A(서비스·파일 미설치 → 점검 대상 없음) → "양호" 로 기재 (보고서에 N/A 항목을 두지 않음)
+#   수동확인(스크립트 용어)                    → "인터뷰 필요"(보고서 용어) 로 통일
 REPORT_STATUS = {
-    "양호": "양호", "취약": "취약", "N/A": "N/A",
+    "양호": "양호", "취약": "취약", "N/A": "양호",
     "수동확인": MANUAL_LABEL, MANUAL_LABEL: MANUAL_LABEL,
 }
-# 검증자가 최종판정 대화상자에서 고를 수 있는 값
-FINAL_CHOICES = ("양호", "취약", "N/A", "수동확인", MANUAL_LABEL)
+# 검증자가 최종판정 대화상자에서 고를 수 있는 값 (N/A 는 양호로 처리하므로 제외)
+FINAL_CHOICES = ("양호", "취약", "수동확인", MANUAL_LABEL)
 
 # 보안 적용율(양호/진단항목) — 분모에서 N/A 와 "인터뷰 필요" 제외
 _APPLY_RATE = (
@@ -273,7 +271,7 @@ class App:
             self.tree.tag_configure(st, background=color)
         self.tree.bind("<Double-1>", self._on_row_dblclick)
         ttk.Label(self.root,
-                  text="↳ 행을 더블클릭 → 근거 확인 후 최종판정(양호/취약/N/A/인터뷰 필요) 지정. 엑셀은 '최종판정' 기준으로 추출되고 취약은 빨강으로 표시됩니다.",
+                  text="↳ 행을 더블클릭 → 근거 확인 후 최종판정(양호/취약/인터뷰 필요) 지정. 엑셀은 '최종판정' 기준으로 추출되고 취약은 빨강으로 표시됩니다. (N/A 는 양호로 기재)",
                   foreground="#555").pack(fill="x", padx=12)
 
         # 로그
@@ -506,7 +504,8 @@ class App:
     def _show_results(self):
         self._clear_table()
         for idx, r in enumerate(self.results):
-            r.setdefault("final", r.get("status", ""))   # 최종판정 초기값=자동판정
+            # 최종판정 초기값 = 자동판정 (N/A 는 양호로)
+            r.setdefault("final", "양호" if r.get("status") == "N/A" else r.get("status", ""))
             r.setdefault("note", "")                      # 검증자 비고
             self._insert_row(idx, r)
         self._update_summary()
@@ -530,14 +529,15 @@ class App:
                        tags=(fin,))
 
     def _update_summary(self):
-        cnt = {k: 0 for k in ("양호", "취약", "N/A", "수동확인", MANUAL_LABEL)}
+        cnt = {}
         for r in self.results:
             f = r.get("final", r.get("status", ""))
+            f = REPORT_STATUS.get(f, f)              # N/A→양호, 수동확인→인터뷰 필요
             cnt[f] = cnt.get(f, 0) + 1
-        man = cnt["수동확인"] + cnt[MANUAL_LABEL]
         self.lbl_sum.configure(
-            text=f"[{self.host_label}]  (최종판정 기준)  양호 {cnt['양호']}   취약 {cnt['취약']}   "
-                 f"N/A {cnt['N/A']}   인터뷰필요 {man}   (총 {len(self.results)})")
+            text=f"[{self.host_label}]  (최종판정 기준)  양호 {cnt.get('양호', 0)}   "
+                 f"취약 {cnt.get('취약', 0)}   인터뷰필요 {cnt.get(MANUAL_LABEL, 0)}   "
+                 f"(총 {len(self.results)})")
 
     # ---------------- 행 더블클릭 → 상세/최종판정 ----------------
     def _on_row_dblclick(self, event):
