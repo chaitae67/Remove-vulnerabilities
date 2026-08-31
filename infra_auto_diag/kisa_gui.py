@@ -57,8 +57,15 @@ XL_WORKBOOK = "xl/workbook.xml"
 # 점검 스크립트 판정 → 보고서 판정 매핑
 #   N/A(서비스/파일 미설치)  → 양호 로 기재(근거에 "해당 없음" 사유 유지)
 #   수동확인(정책·주기 확인)  → "인터뷰 필요" 로 기재. 보안 적용율·영역별 점수 계산에서 제외한다.
-REPORT_STATUS = {"양호": "양호", "취약": "취약", "N/A": "양호", "수동확인": "인터뷰 필요"}
 MANUAL_LABEL = "인터뷰 필요"
+# 점검 스크립트 판정 / 검증자 최종판정 → 보고서 기재값
+#   수동확인(스크립트 용어) → "인터뷰 필요"(보고서 용어) 로 통일. 나머지는 그대로.
+REPORT_STATUS = {
+    "양호": "양호", "취약": "취약", "N/A": "N/A",
+    "수동확인": MANUAL_LABEL, MANUAL_LABEL: MANUAL_LABEL,
+}
+# 검증자가 최종판정 대화상자에서 고를 수 있는 값
+FINAL_CHOICES = ("양호", "취약", "N/A", "수동확인", MANUAL_LABEL)
 
 # 보안 적용율(양호/진단항목) — 분모에서 N/A 와 "인터뷰 필요" 제외
 _APPLY_RATE = (
@@ -97,12 +104,13 @@ def _cell_replace(xml, ref, builder, required=True):
     return xml[:m.start()] + builder(_cell_style(m.group(1))) + xml[m.end():]
 
 
-def _put_str(xml, ref, text, required=True):
-    return _cell_replace(
-        xml, ref,
-        lambda s: f'<c r="{ref}"{s} t="inlineStr"><is><t xml:space="preserve">'
-                  f'{_xesc(text)}</t></is></c>',
-        required)
+def _put_str(xml, ref, text, required=True, s=None):
+    """s 를 주면 셀 스타일 인덱스를 그 값으로 교체(배경색 등), 안 주면 원래 스타일 유지."""
+    def build(old):
+        st = f' s="{s}"' if s is not None else old
+        return (f'<c r="{ref}"{st} t="inlineStr"><is><t xml:space="preserve">'
+                f'{_xesc(text)}</t></is></c>')
+    return _cell_replace(xml, ref, build, required)
 
 
 def _put_num(xml, ref, num, required=True):
@@ -129,18 +137,66 @@ def _clear_cols(xml, row, col_from, col_to):
                    + xml[m.end():])
     return xml
 
+
+def _inject_verdict_fills(styles_xml):
+    """styles.xml 의 <fills>·<cellXfs> 끝에 판정별 배경색 스타일을 추가한다.
+
+    양식에는 '취약' 글자색을 빨강으로 바꾸는 조건부서식이 있으나 행 범위가
+    들쭉날쭉해 일부 셀만 적용된다. 판정 셀에 배경색 스타일을 직접 지정해
+    조건부서식과 무관하게 색이 일관되게 나오도록 한다.
+    반환: (수정된 styles_xml, {판정값: cellXf 인덱스})
+    """
+    palette = {
+        "취약": "FFF8D7DA", "양호": "FFD4EDDA",
+        "N/A": "FFFFF3CD", MANUAL_LABEL: "FFD1ECF1",
+    }
+    mf = re.search(r'<fills count="(\d+)">', styles_xml)
+    n_fills = int(mf.group(1))
+    fills_add = "".join(
+        f'<fill><patternFill patternType="solid"><fgColor rgb="{rgb}"/>'
+        f'<bgColor rgb="FF000000"/></patternFill></fill>' for rgb in palette.values())
+    styles_xml = (styles_xml[:mf.start()] + f'<fills count="{n_fills + len(palette)}">'
+                  + styles_xml[mf.end():]).replace("</fills>", fills_add + "</fills>", 1)
+
+    mx = re.search(r'<cellXfs count="(\d+)">', styles_xml)
+    n_xfs = int(mx.group(1))
+    xf_tpl = ('<xf numFmtId="0" fontId="10" fillId="{fid}" borderId="6" xfId="0" '
+              'applyAlignment="1" applyFill="1">'
+              '<alignment horizontal="center" vertical="center" wrapText="1"/></xf>')
+    xfs_add = "".join(xf_tpl.format(fid=n_fills + i) for i in range(len(palette)))
+    styles_xml = (styles_xml[:mx.start()] + f'<cellXfs count="{n_xfs + len(palette)}">'
+                  + styles_xml[mx.end():]).replace("</cellXfs>", xfs_add + "</cellXfs>", 1)
+
+    idx = {k: n_xfs + i for i, k in enumerate(palette)}
+    return styles_xml, idx
+
+
 STATUS_COLORS = {          # 표 행 배경색
     "취약": "#f8d7da",
     "양호": "#d4edda",
     "N/A": "#fff3cd",
     "수동확인": "#d1ecf1",
+    "인터뷰 필요": "#d1ecf1",
 }
-XLSX_FILL = {              # 엑셀 셀 채우기
+XLSX_FILL = {              # 엑셀 셀 채우기 (ARGB 앞 2자리는 alpha)
     "취약": "F8D7DA",
     "양호": "D4EDDA",
     "N/A": "FFF3CD",
     "수동확인": "D1ECF1",
+    "인터뷰 필요": "D1ECF1",
 }
+
+# 창 아이콘(logo.png) — 실행 위치와 무관하게 스크립트 폴더 기준, 없으면 조용히 무시
+LOGO_PATH = os.path.join(SCRIPT_DIR, "logo.png")
+
+
+def set_window_icon(win):
+    try:
+        img = tk.PhotoImage(file=LOGO_PATH)
+        win._icon_ref = img          # GC 방지용 참조 유지
+        win.iconphoto(False, img)
+    except Exception:
+        pass
 
 
 class App:
@@ -234,7 +290,7 @@ class App:
             self.tree.tag_configure(st, background=color)
         self.tree.bind("<Double-1>", self._on_row_dblclick)
         ttk.Label(self.root,
-                  text="↳ 행을 더블클릭하면 근거를 보고 최종판정(양호/취약)을 지정할 수 있습니다. 엑셀은 '최종판정' 기준으로 추출됩니다.",
+                  text="↳ 행을 더블클릭 → 근거 확인 후 최종판정(양호/취약/N/A/인터뷰 필요) 지정. 엑셀은 '최종판정' 기준으로 추출되고 취약은 빨강으로 표시됩니다.",
                   foreground="#555").pack(fill="x", padx=12)
 
         # 로그
@@ -270,8 +326,7 @@ class App:
     def _open_gateway_dialog(self):
         g = self.gateway
         dlg = tk.Toplevel(self.root)
-        icon_img = tk.PhotoImage(file='infra_auto_diag/logo.png')
-        dlg.iconphoto(False, icon_img)
+        set_window_icon(dlg)
         dlg.title("게이트웨이(Bastion) 설정")
         dlg.transient(self.root)
         dlg.resizable(False, False)
@@ -492,13 +547,14 @@ class App:
                        tags=(fin,))
 
     def _update_summary(self):
-        cnt = {"양호": 0, "취약": 0, "N/A": 0, "수동확인": 0}
+        cnt = {k: 0 for k in ("양호", "취약", "N/A", "수동확인", MANUAL_LABEL)}
         for r in self.results:
             f = r.get("final", r.get("status", ""))
             cnt[f] = cnt.get(f, 0) + 1
+        man = cnt["수동확인"] + cnt[MANUAL_LABEL]
         self.lbl_sum.configure(
             text=f"[{self.host_label}]  (최종판정 기준)  양호 {cnt['양호']}   취약 {cnt['취약']}   "
-                 f"N/A {cnt['N/A']}   수동확인 {cnt['수동확인']}   (총 {len(self.results)})")
+                 f"N/A {cnt['N/A']}   인터뷰필요 {man}   (총 {len(self.results)})")
 
     # ---------------- 행 더블클릭 → 상세/최종판정 ----------------
     def _on_row_dblclick(self, event):
@@ -509,8 +565,7 @@ class App:
     def _open_detail(self, idx):
         r = self.results[idx]
         dlg = tk.Toplevel(self.root)
-        icon_img = tk.PhotoImage(file="infra_auto_diag\logo.png")
-        dlg.iconphoto(False, icon_img)
+        set_window_icon(dlg)
         dlg.title(f"{r.get('code','')} 상세 / 최종판정")
         dlg.transient(self.root); dlg.grab_set(); dlg.geometry("580x480")
 
@@ -528,8 +583,9 @@ class App:
         fr = ttk.LabelFrame(dlg, text="최종판정 (검증자 지정)")
         fr.pack(fill="x", padx=10, pady=4)
         fv = tk.StringVar(value=r.get("final", r.get("status", "")))
-        for i, s in enumerate(("양호", "취약", "N/A", "수동확인")):
-            ttk.Radiobutton(fr, text=s, variable=fv, value=s).grid(row=0, column=i, padx=10, pady=4)
+        for i, s in enumerate(FINAL_CHOICES):
+            ttk.Radiobutton(fr, text=s, variable=fv, value=s).grid(
+                row=i // 3, column=i % 3, padx=10, pady=4, sticky="w")
 
         ttk.Label(dlg, text="■ 비고(검증자 의견)", font=("", 9, "bold")).pack(anchor="w", padx=10)
         note = tk.Text(dlg, height=3, wrap="word")
@@ -599,6 +655,10 @@ class App:
         summary = parts[XL_SUMMARY].decode("utf-8")
         detail = parts[XL_DETAIL].decode("utf-8")
         book = parts[XL_WORKBOOK].decode("utf-8")
+        styles = parts["xl/styles.xml"].decode("utf-8")
+
+        # 판정 셀 배경색 스타일 주입 (조건부서식이 일부 행만 색칠하는 문제 보완)
+        styles, vstyle = _inject_verdict_fills(styles)
 
         host = (self.host_label or self.conn_host or "").strip()
         ipaddr = (self.conn_host or "").strip()
@@ -614,16 +674,21 @@ class App:
         target = _put_str(target, "D5", ipaddr)
         target = _put_str(target, "E5", osver)
 
-        # 3-1 상세 결과: F=판정, G=근거
+        # 3-1 상세 결과: F=판정(최종판정 기준), G=근거
         by_code = {r.get("code", ""): r for r in self.results}
         for n in range(1, 68):                       # U-01 → 6행, U-67 → 72행
             r = by_code.get(f"U-{n:02d}")
             if not r:
                 continue
             row = 5 + n
-            detail = _put_str(detail, f"F{row}",
-                              REPORT_STATUS.get(r.get("status", ""), r.get("status", "")))
-            detail = _put_str(detail, f"G{row}", " / ".join(r.get("evidence", [])))
+            raw = r.get("final") or r.get("status", "")        # 검증자 최종판정 우선
+            verdict = REPORT_STATUS.get(raw, raw)
+            detail = _put_str(detail, f"F{row}", verdict, s=vstyle.get(verdict))
+            note = (r.get("note") or "").strip()
+            evidence = " / ".join(r.get("evidence", []))
+            if note:
+                evidence = f"{evidence}  [검증자: {note}]" if evidence else f"[검증자: {note}]"
+            detail = _put_str(detail, f"G{row}", evidence)
         for row in (3, 4, 5, 73, 74):               # 미사용 서버(H~AI) 정리
             detail = _clear_cols(detail, row, 8, 35)
         detail = _put_formula(detail, "F74", _APPLY_RATE.format(c="F"))
@@ -668,6 +733,11 @@ class App:
         for name, xml in edited.items():
             _minidom.parseString(xml.encode("utf-8"))   # 형식 검증
             parts[name] = xml.encode("utf-8")
+        # styles.xml 은 7MB대라 파싱이 느림 → 태그 균형만 가볍게 확인
+        if styles.count("<fill>") == styles.count("</fill>") and styles.count("<cellXfs") == 1:
+            parts["xl/styles.xml"] = styles.encode("utf-8")
+        else:
+            raise ValueError("styles.xml 편집 결과가 비정상")
 
         # 메모리에서 zip 을 완성한 뒤 마지막에 한 번만 기록한다
         # (기록 실패 시에도 반쯤 쓰인 손상 파일이 남지 않도록).
@@ -690,7 +760,8 @@ class App:
                 c.fill = PatternFill("solid", fgColor="404040")
                 c.alignment = Alignment(horizontal="center")
             for r in self.results:
-                fin = r.get("final", r.get("status", ""))
+                raw = r.get("final") or r.get("status", "")
+                fin = REPORT_STATUS.get(raw, raw)      # 수동확인 → 인터뷰 필요
                 ws.append([self.host_label, r.get("code", ""), r.get("importance", ""),
                            r.get("title", ""), r.get("status", ""), fin,
                            " / ".join(r.get("evidence", [])), r.get("note", "")])
@@ -712,10 +783,7 @@ class App:
 
 def main():
     root = tk.Tk()
-    icon32 = tk.PhotoImage(file='infra_auto_diag/logo.png')
-    icon16 = tk.PhotoImage(file='infra_auto_diag/logo.png')
-
-    root.iconphoto(False, icon32, icon16)
+    set_window_icon(root)
     App(root)
     root.mainloop()
 
