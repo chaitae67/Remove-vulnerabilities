@@ -374,23 +374,22 @@ fi
 # U-29 hosts.lpd
 chk_file U-29 "hosts.lpd 파일 소유자 및 권한 설정" /etc/hosts.lpd 600 root
 
-# U-30 UMASK (실행 세션 값이 아니라 설정 파일의 값으로 판정)
-umc=$(grep -rhE '^[[:space:]]*(umask|UMASK)[[:space:]]+[0-7]{3,4}' \
-        /etc/profile /etc/bashrc /etc/bash.bashrc /etc/csh.cshrc /etc/csh.login \
-        /etc/login.defs /etc/profile.d/ /etc/pam.d/ 2>/dev/null \
-        | grep -oE '[0-7]{3,4}' | sort -u)
-weakest=""
-for v in $umc; do
-  n=$(printf '%d' "0$v")
-  [ -z "$weakest" ] && weakest="$v"
-  [ "$n" -lt "$(printf '%d' "0$weakest")" ] && weakest="$v"
-done
-chkum=${weakest:-$(umask)}
-# 022 이상 = 그룹/other 쓰기 비트가 모두 켜져 있음  →  (umask & 022) == 022
-if [ "$(( 0$chkum & 022 ))" -eq "$(( 022 ))" ]; then
-  rep U-30 "UMASK 설정 관리" GOOD "설정 umask=${weakest:-미설정(현재 $chkum)} (022 이상)"
+# U-30 UMASK (로그인 세션 기준값 = /etc/login.defs UMASK 를 1차로 본다)
+# RHEL 계열 /etc/bashrc 는 UPG(사용자 사설 그룹) 사용자에 한해 umask 002 를 조건부
+# 적용하므로, bashrc 의 002 만 보고 취약으로 단정하지 않는다.
+um_ge() { [ "$(( 0$1 & 022 ))" -eq "$(( 022 ))" ]; }   # 022 이상이면 참
+ld_um=$(grep -E '^[[:space:]]*UMASK[[:space:]]+[0-7]{3,4}' /etc/login.defs 2>/dev/null \
+          | awk '{print $2}' | tail -1)
+prof_um=$(grep -rhE '^[[:space:]]*umask[[:space:]]+[0-7]{3,4}' \
+            /etc/profile /etc/profile.d/ 2>/dev/null | grep -oE '[0-7]{3,4}' | sort -u | tr '\n' ' ')
+prof_bad=""
+for v in $prof_um; do um_ge "$v" || prof_bad="$prof_bad $v"; done
+if [ -n "$ld_um" ] && um_ge "$ld_um" && [ -z "$prof_bad" ]; then
+  rep U-30 "UMASK 설정 관리" GOOD "login.defs UMASK=$ld_um, /etc/profile umask=[${prof_um:-미설정}] (모두 022 이상)"
+elif [ -n "$prof_bad" ] || { [ -n "$ld_um" ] && ! um_ge "$ld_um"; }; then
+  rep U-30 "UMASK 설정 관리" VULN "022 미만 설정 존재: login.defs=${ld_um:-미설정} profile=[${prof_bad:- }] → 그룹/타 사용자 쓰기 허용"
 else
-  rep U-30 "UMASK 설정 관리" VULN "umask=$chkum (022 미만 → 그룹/타 사용자 쓰기 허용)"
+  rep U-30 "UMASK 설정 관리" MAN "UMASK 명시 설정 없음(현재 세션 $(umask)) → 기본값/조건부 설정 확인"
 fi
 
 # U-31 홈 디렉토리 소유자 및 권한
