@@ -142,6 +142,18 @@ XLSX_FILL = {              # 엑셀 셀 채우기
     "수동확인": "D1ECF1",
 }
 
+# 창 아이콘(logo.png) — 실행 위치와 무관하게 스크립트 폴더 기준, 없으면 조용히 무시
+LOGO_PATH = os.path.join(SCRIPT_DIR, "logo.png")
+
+
+def set_window_icon(win):
+    try:
+        img = tk.PhotoImage(file=LOGO_PATH)
+        win._icon_ref = img          # GC 방지용 참조 유지
+        win.iconphoto(False, img)
+    except Exception:
+        pass
+
 
 class App:
     def __init__(self, root):
@@ -263,8 +275,7 @@ class App:
     def _open_gateway_dialog(self):
         g = self.gateway
         dlg = tk.Toplevel(self.root)
-        icon_img = tk.PhotoImage(file='infra_auto_diag/logo.png')
-        dlg.iconphoto(False, icon_img)
+        set_window_icon(dlg)
         dlg.title("게이트웨이(Bastion) 설정")
         dlg.transient(self.root)
         dlg.resizable(False, False)
@@ -502,8 +513,7 @@ class App:
     def _open_detail(self, idx):
         r = self.results[idx]
         dlg = tk.Toplevel(self.root)
-        icon_img = tk.PhotoImage(file="infra_auto_diag\logo.png")
-        dlg.iconphoto(False, icon_img)
+        set_window_icon(dlg)
         dlg.title(f"{r.get('code','')} 상세 / 최종판정")
         dlg.transient(self.root); dlg.grab_set(); dlg.geometry("580x480")
 
@@ -705,10 +715,7 @@ class App:
 
 def main():
     root = tk.Tk()
-    icon32 = tk.PhotoImage(file='infra_auto_diag/logo.png')
-    icon16 = tk.PhotoImage(file='infra_auto_diag/logo.png')
-
-    root.iconphoto(False, icon32, icon16)
+    set_window_icon(root)
     App(root)
     root.mainloop()
 
