@@ -176,6 +176,17 @@ else
 fi
 LOG_FILES_UTMP="/var/log/wtmp /var/log/btmp /var/log/lastlog"
 
+# sshd 유효 설정 1회 캐시(root 일 때만). Ubuntu/Debian 은 sshd_config.d/*.conf drop-in 을 쓰므로
+# sshd -T(전체 반영값) → sshd_config + sshd_config.d/*.conf 순으로 조회한다.
+SSHD_T=""
+[ "$IS_ROOT" -eq 1 ] && command -v sshd >/dev/null 2>&1 && SSHD_T=$(sshd -T 2>/dev/null)
+sshd_val() {  # $1 = 소문자 키워드 (예: permitrootlogin)
+  local v
+  v=$(printf '%s\n' "$SSHD_T" | awk -v k="$1" 'tolower($1)==k{print $2; exit}')
+  [ -z "$v" ] && v=$(conf_line "^[[:space:]]*$1[[:space:]]" /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+  printf '%s' "$v"
+}
+
 echo
 echo -e "${W}==============================================================${N}"
 echo -e "${W} KISA Unix/Linux 취약점 점검 (U-01~U-67)  READ-ONLY${N}"
@@ -212,9 +223,7 @@ ssh_used=0
 { [ -e /etc/ssh/sshd_config ] || port_listen 22 || svc_active sshd || svc_active ssh; } && ssh_used=1
 if [ "$ssh_used" -eq 0 ]; then sv=NA; se="SSH 미사용"
 else
-  prl=""
-  [ "$IS_ROOT" -eq 1 ] && prl=$(sshd -T 2>/dev/null | awk '/^permitrootlogin /{print $2}')
-  [ -z "$prl" ] && prl=$(conf_line '^[[:space:]]*PermitRootLogin[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+  prl=$(sshd_val permitrootlogin)
   case "$prl" in
     no)                              sv=GOOD; se="PermitRootLogin=no" ;;
     yes)                             sv=VULN; se="PermitRootLogin=yes (root 직접 접속 허용)" ;;
@@ -295,31 +304,33 @@ else
 fi
 
 # U-07 불필요한 계정 제거
-# [기준] 양호 - 불필요한 계정(기본 미사용 계정 / 미사용 사용자 계정)이 없는 경우
-#        취약 - 로그인 가능한 불필요 기본계정, 또는 로그인 이력이 없거나 잠긴 방치 계정 존재
+# [기준] 양호 - 로그인이 필요 없는 불필요 기본계정이 로그인 불가(nologin/false)로 설정된 경우
+#        취약 - 불필요한 기본계정(lp, uucp, games 등)이 로그인 가능한 셸을 가진 경우
+#  ※ "퇴사자·미사용 사용자 계정" 존재 여부는 업무 컨텍스트가 필요 → 인터뷰(MAN) 로 분리
 badsys=""
-for u in lp uucp nuucp games gopher news operator ftp; do
-  s=$(awk -F: -v U="$u" '$1==U{print $7}' /etc/passwd 2>/dev/null)
-  { [ -n "$s" ] && ! echo "$s" | grep -qE 'nologin|false'; } && badsys="$badsys $u($s)"
+for u in lp uucp nuucp games gopher news operator ftp halt sync shutdown adm; do
+  ent=$(awk -F: -v U="$u" '$1==U{print $1":"$7}' /etc/passwd 2>/dev/null)
+  [ -n "$ent" ] || continue                       # 해당 기본계정 없음 → 문제 아님
+  s=${ent#*:}
+  echo "$s" | grep -qE 'nologin|false|/bin/sync|/sbin/shutdown|/sbin/halt' || badsys="$badsys $u(${s:-기본셸})"
 done
-stale=""
+# 로그인 셸을 가진 일반 계정 중 로그인 이력이 없거나 잠긴 것 → 방치 의심(인터뷰 대상)
+review=""
 while IFS=: read -r u _ uid _ _ _ sh; do
   case "$uid" in ''|*[!0-9]*) continue;; esac
   { [ "$uid" -ge "$UID_MIN" ] && [ "$uid" -lt 60000 ]; } || continue
   echo "$sh" | grep -qE 'nologin|false' && continue
   case "$CLOUD_DEFAULT" in *" $u "*) continue;; esac
-  if acct_locked "$u"; then stale="$stale ${u}(잠금)"; continue; fi
-  never_login "$u" && stale="$stale ${u}(로그인이력없음)"
+  if acct_locked "$u"; then review="$review ${u}(잠금)"; continue; fi
+  never_login "$u" && review="$review ${u}(로그인이력없음)"
 done < /etc/passwd
+logins=$(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $7 !~ /(nologin|false)/ {print $1}' /etc/passwd | tr '\n' ' ')
 if [ -n "$badsys" ]; then
-  rep U-07 "불필요한 계정 제거" VULN "제거 권고 기본계정에 로그인 셸 부여:$badsys"
-elif [ -n "$stale" ]; then
-  rep U-07 "불필요한 계정 제거" VULN "방치 의심 계정:$stale → 미사용이면 삭제/잠금"
-elif [ "$IS_ROOT" -ne 1 ] && have lastlog; then
-  rep U-07 "불필요한 계정 제거" MAN "로그인 셸 보유 기본계정 없음. 사용자 계정 방치 여부는 root로 재점검 필요"
+  rep U-07 "불필요한 계정 제거" VULN "제거 권고 기본계정이 로그인 가능한 셸 보유:$badsys → 삭제 또는 nologin 처리"
+elif [ -n "$review" ]; then
+  rep U-07 "불필요한 계정 제거" MAN "로그인 셸 보유 기본계정 없음(양호). 다음 계정의 사용 여부 인터뷰 확인 필요:$review (전체 일반계정:${logins:- 없음})"
 else
-  logins=$(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $7 !~ /(nologin|false)/ {print $1}' /etc/passwd | tr '\n' ' ')
-  rep U-07 "불필요한 계정 제거" GOOD "제거 권고 기본계정에 로그인 셸 없음, 방치(로그인이력 없음/잠김) 계정 없음. 현재 일반계정:${logins:- 없음}"
+  rep U-07 "불필요한 계정 제거" GOOD "제거 권고 기본계정 모두 로그인 불가 설정, 방치 의심 계정 없음. 현재 일반계정:${logins:- 없음}"
 fi
 
 # U-08 관리자 그룹에 최소한의 계정 포함
@@ -380,8 +391,8 @@ else rep U-11 "사용자 Shell 점검" VULN "로그인 가능 셸을 가진 시�
 # U-12 세션 종료 시간 설정
 # [기준] 양호 - Session Timeout(TMOUT) 600초 이하로 설정 / 취약 - 미설정 또는 초과
 tmout=$(grep -rhE '^[[:space:]]*(export[[:space:]]+)?TMOUT=' /etc/profile /etc/profile.d/ /etc/bashrc /etc/bash.bashrc /etc/csh.cshrc /etc/csh.login 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE 'TMOUT=[0-9]+' | grep -oE '[0-9]+' | sort -n | head -1)
-cai=$(conf_line '^[[:space:]]*ClientAliveInterval' /etc/ssh/sshd_config | awk '{print $2}')
-cac=$(conf_line '^[[:space:]]*ClientAliveCountMax' /etc/ssh/sshd_config | awk '{print $2}')
+cai=$(sshd_val clientaliveinterval)
+cac=$(sshd_val clientalivecountmax)
 if [ -n "$tmout" ] && [ "$tmout" -ge 1 ] && [ "$tmout" -le 600 ]; then
   rep U-12 "세션 종료 시간 설정" GOOD "TMOUT=$tmout (<=600). SSH ClientAliveInterval=${cai:-미설정}"
 else
@@ -592,20 +603,51 @@ if [ ! -e /etc/hosts.lpd ]; then rep U-29 "hosts.lpd 파일 소유자 및 권한
 else chk_perm U-29 "hosts.lpd 파일 소유자 및 권한 설정" /etc/hosts.lpd 600 "root"; fi
 
 # U-30 UMASK 설정 관리
-# [기준] 양호 - UMASK 값이 022 이상 / 취약 - 022 미만
+# [기준] 양호 - UMASK 값이 022 이상(그룹·타 사용자 쓰기 비트가 마스킹) / 취약 - 022 미만
+#  점검 대상: /etc/login.defs, PAM pam_umask, /etc/profile·bashrc·csh 계열,
+#            /etc/profile.d/*, /etc/default/login, 로그인 계정 dotfile, 현재 세션 umask
 um_ge() { [ "$(( 8#${1:-0} & 8#022 ))" -eq "$(( 8#022 ))" ]; }
-ld_um=$(conf_line '^[[:space:]]*UMASK[[:space:]]' /etc/login.defs | awk '{print $2}')
-prof_um=$(grep -rhE '^[[:space:]]*umask[[:space:]]+[0-7]{3,4}' /etc/profile /etc/profile.d/ /etc/bashrc /etc/bash.bashrc 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE '[0-7]{3,4}' | sort -u | tr '\n' ' ')
-prof_bad=""
-for v in $prof_um; do um_ge "$v" || prof_bad="$prof_bad $v"; done
-# RHEL /etc/bashrc 의 조건부 umask 002 (UPG 사용자 한정)는 취약으로 보지 않음
-[ "$FAM" = rhel ] && grep -qE 'if \[ .*id -gn.* = .*id -un.* \]' /etc/bashrc 2>/dev/null && prof_bad=$(echo " $prof_bad " | sed 's/ 002 / /; s/ 007 / /' | xargs)
-if [ -n "$ld_um" ] && um_ge "$ld_um" && [ -z "$prof_bad" ]; then
-  rep U-30 "UMASK 설정 관리" GOOD "login.defs UMASK=$ld_um, /etc/profile umask=[${prof_um:-미설정}] (모두 022 이상)"
-elif [ -n "$prof_bad" ] || { [ -n "$ld_um" ] && ! um_ge "$ld_um"; }; then
-  rep U-30 "UMASK 설정 관리" VULN "022 미만 설정: login.defs=${ld_um:-미설정} profile=[${prof_bad:- }]"
+um_all=""; um_bad=""
+um_take() {   # $1=출처라벨  $2=umask값
+  [ -n "$2" ] || return 0
+  um_all="$um_all $1=$2"
+  um_ge "$2" || um_bad="$um_bad $1($2)"
+}
+# 1) /etc/login.defs
+um_take login.defs "$(conf_line '^[[:space:]]*UMASK[[:space:]]' /etc/login.defs | awk '{print $2}')"
+# 2) PAM pam_umask 의 umask= 인자
+um_take pam_umask "$(grep -rhE 'pam_umask\.so' /etc/pam.d/ 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE 'umask=[0-7]{3,4}' | head -1 | cut -d= -f2)"
+# 3) 시스템 셸 프로파일 계열
+for f in /etc/profile /etc/bashrc /etc/bash.bashrc /etc/csh.cshrc /etc/csh.login /etc/default/login; do
+  [ -f "$f" ] || continue
+  while read -r v; do um_take "$(basename "$f")" "$v"; done < <(
+    grep -hE '^[[:space:]]*umask[[:space:]]+[0-7]{3,4}' "$f" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE '[0-7]{3,4}')
+done
+# 4) /etc/profile.d/*
+while read -r v; do um_take profile.d "$v"; done < <(
+  grep -rhE '^[[:space:]]*umask[[:space:]]+[0-7]{3,4}' /etc/profile.d/ 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE '[0-7]{3,4}')
+# 5) 로그인 가능한 계정의 dotfile (root + 홈 디렉터리)
+for d in /root $(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $7 !~ /(nologin|false)/ {print $6}' /etc/passwd 2>/dev/null | sort -u); do
+  for rc in "$d/.bash_profile" "$d/.bashrc" "$d/.profile" "$d/.cshrc"; do
+    [ -f "$rc" ] || continue
+    while read -r v; do um_take "${rc#/}" "$v"; done < <(
+      grep -hE '^[[:space:]]*umask[[:space:]]+[0-7]{3,4}' "$rc" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE '[0-7]{3,4}')
+  done
+done
+# 6) RHEL UPG 조건부 umask 002 (/etc/bashrc·/etc/profile 의 "id -gn = id -un" 블록 한정)는
+#    Red Hat 표준 동작이므로 취약으로 보지 않음. profile.d/login.defs 등의 002 는 그대로 평가.
+if [ "$FAM" = rhel ] && grep -qsE 'id -gn.*id -un|UID.*-gt.*(199|200)' /etc/bashrc /etc/profile; then
+  um_bad=$(printf '%s' " $um_bad " | sed -E 's/ (bashrc|profile)\(00[27]\) / /g' | xargs)
+fi
+cur_um=$(umask 2>/dev/null)
+if [ -n "$um_bad" ]; then
+  rep U-30 "UMASK 설정 관리" VULN "022 미만 UMASK 설정 존재:${um_bad} (현재 세션 umask=$cur_um) → 022 이상으로 설정"
+elif [ -n "$um_all" ]; then
+  rep U-30 "UMASK 설정 관리" GOOD "UMASK 설정 모두 022 이상:${um_all# } (현재 세션 umask=$cur_um)"
+elif um_ge "$cur_um"; then
+  rep U-30 "UMASK 설정 관리" GOOD "별도 UMASK 설정 없음, 현재 적용 umask=$cur_um (022 이상)"
 else
-  rep U-30 "UMASK 설정 관리" MAN "UMASK 명시 설정 없음(현재 세션 $(umask)) → 기본값 확인 필요"
+  rep U-30 "UMASK 설정 관리" VULN "UMASK 명시 설정 없음 + 현재 적용 umask=$cur_um (022 미만)"
 fi
 
 # U-31 홈 디렉토리 소유자 및 권한
@@ -752,16 +794,25 @@ mail_kind="none"
 { svc_active postfix || pkg_installed postfix; } && mail_kind="postfix"
 { svc_active sendmail || pkg_installed sendmail || pkg_installed sendmail-cf; } && mail_kind="sendmail"
 
-# U-45 Sendmail 버전 점검
-# [기준] 양호 - 메일 서비스 버전이 최신(보안 패치 적용) / 취약 - 아님
-if [ "$mail_run" -eq 0 ]; then rep U-45 "메일 서비스 버전 점검" NA "메일 서비스 미실행"
+# U-45 메일 서비스 버전 점검
+# [기준] 양호 - SMTP 서비스를 사용하지 않거나, 사용 시 알려진 취약점이 없는 최신(패치) 버전 / 취약 - 구버전
+#  ※ 로컬(127.0.0.1) 전용 postfix 는 외부 SMTP 서비스 제공이 아니므로 양호로 본다.
+if [ "$mail_kind" = none ]; then
+  rep U-45 "메일 서비스 버전 점검" GOOD "sendmail/postfix/exim 등 메일 서비스 미설치"
+elif ! port_listen_ext 25; then
+  rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 설치되어 있으나 외부 인터페이스로 SMTP(25) 미제공 (localhost 전용/미기동)"
 else
   mv=""
   [ "$mail_kind" = postfix ] && mv=$(postconf mail_version 2>/dev/null | awk '{print $3}')
   [ -z "$mv" ] && mv=$( (sendmail -d0.1 -bv root 2>/dev/null; echo) | grep -i 'Version' | head -1)
   pend=$(sec_update_count 'postfix|sendmail' '^(postfix|sendmail)/')
-  if [ "${pend:-0}" -gt 0 ]; then rep U-45 "메일 서비스 버전 점검" VULN "$mail_kind 실행 중 (버전=${mv:-확인필요}) + 보안 업데이트 ${pend}건 미적용"
-  else rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 실행 중 (버전=${mv:-확인필요}), 관련 보안 업데이트 미적용 없음"; fi
+  if [ "$pend" = "?" ]; then
+    rep U-45 "메일 서비스 버전 점검" MAN "$mail_kind 외부 제공 중 (버전=${mv:-확인필요}) — 패키지 관리자 없음, 최신 버전 여부 수동 확인 필요"
+  elif [ "${pend:-0}" -gt 0 ]; then
+    rep U-45 "메일 서비스 버전 점검" VULN "$mail_kind 외부 제공 중 (버전=${mv:-확인필요}) + 보안 업데이트 ${pend}건 미적용"
+  else
+    rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 외부 제공 중 (버전=${mv:-확인필요}), 미적용 보안 업데이트 없음"
+  fi
 fi
 
 # U-46 일반 사용자의 메일 서비스 실행 방지
@@ -943,9 +994,7 @@ fi
 # U-62 로그인 시 경고 메시지 설정
 # [기준] 양호 - 서버 및 Telnet/FTP/SMTP/DNS 서비스 로그온 시 경고 메시지 설정 / 취약 - 미설정
 warn_re='(경고|허가|무단|승인|비인가|접근이 제한|unauthorized|authorized (users|personnel|access)|prohibited|monitored|warning|access is restricted)'
-sshban=""
-[ "$IS_ROOT" -eq 1 ] && sshban=$(sshd -T 2>/dev/null | awk '/^banner /{print $2}')
-[ -z "$sshban" ] && sshban=$(conf_line '^[[:space:]]*Banner[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+sshban=$(sshd_val banner)
 b_local=0; b_ssh=0
 grep -qiE "$warn_re" /etc/issue /etc/issue.net /etc/motd 2>/dev/null && b_local=1
 { [ -n "$sshban" ] && [ "$sshban" != none ] && { [ -s "$sshban" ] || grep -qiE "$warn_re" "$sshban" 2>/dev/null; }; } && b_ssh=1
