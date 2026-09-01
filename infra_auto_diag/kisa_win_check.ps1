@@ -565,16 +565,38 @@ if ($cfgOk -or $srcOk) {
 }
 
 # W-42 이벤트 로그 관리 설정
-# [기준] 양호 - 최대 로그 크기 10,240KB 이상 + "90일 이후 이벤트 덮어씀" / 취약 - 크기 미달 또는 덮어씀 90일 이하
+# [기준] 양호 - 최대 로그 크기 10,240KB 이상 AND 이벤트 덮어씀 기간 "90일 이후"(또는 덮어쓰지 않음/가득 차면 보관)
+#        취약 - 크기 미달 이거나, "필요에 따라 덮어씀"(=90일 이하)
 $logbad = @()
+$logunk = @()
 foreach ($lg in @("Security","Application","System")) {
-    $sz = RegVal ("HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\" + $lg) "MaxSize"
+    $base = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\" + $lg
+    $sz = RegVal $base "MaxSize"
     if ($null -eq $sz) { $sz = (Get-WinEvent -ListLog $lg -ErrorAction SilentlyContinue).MaximumSizeInBytes }
+    $ret    = RegVal $base "Retention"
+    $autobk = RegVal $base "AutoBackupLogFiles"        # 1 = 가득 차면 보관
+    if ($null -eq $sz -and $null -eq $ret) { $logunk += $lg; continue }  # 관리자 권한 부족 등
+
     $szKB = if ($sz) { [math]::Round($sz/1KB) } else { 0 }
-    if ($szKB -lt 10240) { $logbad += "$lg(${szKB}KB)" }
+    if ($szKB -lt 10240) { $logbad += "$lg 크기 ${szKB}KB(<10,240)" }
+
+    # Retention: 0/미설정 = 필요시 덮어씀(취약), 0xFFFFFFFF(-1) = 덮어쓰지 않음, 그 외 = 보존 초
+    $retNum = $null
+    if ($null -ne $ret) { try { $retNum = [int64]$ret } catch { $retNum = $null } }
+    if ($null -ne $retNum -and $retNum -lt 0) { $retNum = 4294967295 }
+    $retOk = ($autobk -eq 1) -or ($retNum -eq 4294967295) -or ($null -ne $retNum -and $retNum -ge 7776000)
+    if (-not $retOk) {
+        $how = if ($null -eq $retNum) { "미설정(필요시 덮어씀)" } elseif ($retNum -eq 0) { "필요시 덮어씀" } else { "$([math]::Floor($retNum/86400))일 후 덮어씀" }
+        $logbad += "$lg 덮어씀=$how(<90일)"
+    }
 }
-if ($logbad.Count -eq 0) { Rep "W-42" "이벤트 로그 관리 설정" "GOOD" @("보안/응용/시스템 로그 최대 크기 >= 10,240KB") }
-else { Rep "W-42" "이벤트 로그 관리 설정" "VULN" @("로그 크기 기준(10,240KB) 미달: $($logbad -join ', ')") }
+if ($logbad.Count -gt 0) {
+    Rep "W-42" "이벤트 로그 관리 설정" "VULN" @(($logbad -join " / "), "최대 로그 크기 10,240KB 이상 및 '90일 이후 이벤트 덮어씀' 설정 필요")
+} elseif ($logunk.Count -gt 0) {
+    Rep "W-42" "이벤트 로그 관리 설정" "MAN" @("로그 설정 확인 불가(관리자 권한 필요): $($logunk -join ', ')")
+} else {
+    Rep "W-42" "이벤트 로그 관리 설정" "GOOD" @("보안/응용/시스템 로그 최대 크기 10,240KB 이상 + 90일 이후 덮어씀(또는 덮어쓰지 않음/보관) 설정")
+}
 
 # W-43 이벤트 로그 파일 접근 통제 설정
 # [기준] 양호 - 로그 디렉터리에 Everyone 권한 없음 / 취약 - Everyone 권한 있음
@@ -646,8 +668,18 @@ RegExpect "W-50" "보안 감사를 로그할 수 없는 경우 즉시 시스템 
     "감사 실패 시 시스템 종료 안 함(가용성)" "감사 실패 시 시스템 강제 종료 → '사용 안 함'으로 설정"
 
 # W-51 SAM 계정과 공유의 익명 열거 허용 안 함
-RegExpect "W-51" "SAM 계정과 공유의 익명 열거 허용 안 함" "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" "RestrictAnonymousSAM" 1 `
-    "SAM 계정 익명 열거 제한" "SAM 계정 익명 열거 허용 → '사용'으로 설정"
+# [기준] 양호 - "SAM 계정과 공유의 익명 열거 허용 안 함" 사용(RestrictAnonymous=1) / 취약 - 사용 안 함(0 또는 미설정)
+#  ※ 본 항목은 RestrictAnonymous (기본값 0). RestrictAnonymousSAM(기본값 1)은 "SAM 계정" 항목이라 별개 — 참고만.
+$lsaP  = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"
+$ra    = RegVal $lsaP "RestrictAnonymous"
+$raSAM = RegVal $lsaP "RestrictAnonymousSAM"
+$raVal    = if ($null -eq $ra)    { 0 } else { try { [int]$ra }    catch { 0 } }
+$raSAMVal = if ($null -eq $raSAM) { 1 } else { try { [int]$raSAM } catch { 1 } }
+if ($raVal -ge 1) {
+    Rep "W-51" "SAM 계정과 공유의 익명 열거 허용 안 함" "GOOD" @("RestrictAnonymous=$raVal (익명 열거 제한), RestrictAnonymousSAM=$raSAMVal")
+} else {
+    Rep "W-51" "SAM 계정과 공유의 익명 열거 허용 안 함" "VULN" @("RestrictAnonymous=$(if($null -eq $ra){'미설정(=0)'}else{$ra}) → 익명 사용자가 SAM 계정·공유 열거 가능, '사용'(1)으로 설정 필요 (RestrictAnonymousSAM=$raSAMVal)")
+}
 
 # W-52 Autologon 기능 제어
 $aal = RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" "AutoAdminLogon"
