@@ -537,17 +537,31 @@ if ($IS_ADMIN) {
 }
 
 # W-41 NTP 및 시각 동기화 설정
-# [기준] 양호 - NTP/시각 동기화 설정 / 취약 - 미설정
-$w32 = SvcObj "W32Time"
-$w32status = w32tm /query /status 2>$null
-$srcLine = $w32status | Select-String "Source:|원본:" | Select-Object -First 1
-$src = if ($srcLine) { ($srcLine.ToString() -split ":",2)[1].Trim() } else { "" }
-if ($w32 -and $w32.Status -eq "Running" -and $src -and $src -notmatch 'Local CMOS Clock|Free-running') {
-    Rep "W-41" "NTP 및 시각 동기화 설정" "GOOD" @("W32Time 실행, 동기화 원본 = $src")
-} elseif ($w32 -and $w32.Status -eq "Running") {
-    Rep "W-41" "NTP 및 시각 동기화 설정" "VULN" @("W32Time 실행 중이나 외부 NTP 미동기화(원본=$src) → NTP 서버 지정")
+# [기준] 양호 - NTP/시각 동기화를 "설정"한 경우 (외부 NTP 지정 또는 도메인 계층 동기화)
+#        취약 - 미설정(NoSync 이거나 NTP 서버 미지정 + 로컬 CMOS 전용)
+#   ※ W32Time 은 도메인 미조인 서버에서 평소 '중지(수동/트리거)' 상태가 정상이므로
+#     서비스 실행 여부가 아니라 레지스트리 구성으로 판단한다. status 출력은 참고용.
+$w32   = SvcObj "W32Time"
+$w32p  = "HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters"
+$w32Type   = RegVal $w32p "Type"                 # NTP / NT5DS / AllSync / NoSync
+$w32Server = [string](RegVal $w32p "NtpServer")  # 예: time.windows.com,0x9 / 169.254.169.123
+$ntpClient = RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpClient" "Enabled"
+
+$w32exe = Join-Path $env:SystemRoot "System32\w32tm.exe"
+$w32status = if (Test-Path $w32exe) { & $w32exe /query /status 2>$null | Out-String } else { "" }
+$src = ""
+if ($w32status -match '(?m)^\s*(?:Source|원본)\s*:\s*(.+?)\s*$') { $src = $Matches[1].Trim() }
+$srcOk = ($src -and $src -notmatch 'Local CMOS Clock|Free-running|로컬 CMOS')
+
+$cfgOk = ($null -ne $w32) -and $w32Type -and ($w32Type -ne "NoSync") -and `
+         ( ($w32Server.Trim()) -or ($w32Type -eq "NT5DS") -or ($ntpClient -eq 1) )
+
+$w32ev = ("W32Time=$([string]$w32.Status)/$([string]$w32.StartType), Type=$w32Type, " +
+          "NtpServer=$w32Server, 현재 동기화 원본=$src")
+if ($cfgOk -or $srcOk) {
+    Rep "W-41" "NTP 및 시각 동기화 설정" "GOOD" @($w32ev, "NTP/시각 동기화가 설정되어 있어 양호함")
 } else {
-    Rep "W-41" "NTP 및 시각 동기화 설정" "VULN" @("Windows Time 서비스 미실행 → NTP/시각 동기화 설정 필요")
+    Rep "W-41" "NTP 및 시각 동기화 설정" "VULN" @($w32ev, "NTP 서버 미지정 또는 NoSync → 외부 NTP/시각 동기화 설정 필요")
 }
 
 # W-42 이벤트 로그 관리 설정
