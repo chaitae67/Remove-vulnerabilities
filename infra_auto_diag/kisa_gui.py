@@ -123,7 +123,7 @@ class App:
         cols = ("code", "imp", "title", "auto", "final", "evidence")
         self.tree = ttk.Treeview(table_frame, columns=cols, show="headings")
         self._col_title = {"code": "코드", "imp": "중요도", "title": "점검 항목",
-                           "auto": "자동판정", "final": "최종판정", "evidence": "근거"}
+                           "auto": "최초판정", "final": "최종판정", "evidence": "근거"}
         self._sort_key = None
         self._sort_rev = False
         for c, w in (("code", 60), ("imp", 55), ("title", 240),
@@ -171,7 +171,7 @@ class App:
         else:
             self.lbl_os_script.configure(text="실행: " + name + "  (파일 없음!)",
                                          foreground="#c00")
-            self.log(f"⚠ 점검 스크립트 없음: {p}")
+            self.log(f"점검 스크립트 없음: {p}")
 
     def _toggle_auth(self):
         if self.auth.get() == "password":
@@ -267,7 +267,7 @@ class App:
             sock = None
             if g.get("enabled"):
                 if not g.get("host"):
-                    raise RuntimeError("게이트웨이 사용이 켜져 있으나 Bastion IP가 비어 있습니다.")
+                    raise RuntimeError("게이트웨이 사용이 켜져 있지만 Bastion IP 공백.")
                 self.log(f"[게이트웨이] {g['host']}:{g['port']} ({g['user']}) 접속 중…")
                 gw_client = self._make_client(g["host"], g["port"], g["user"],
                                               g["auth"], g["password"], g["key"])
