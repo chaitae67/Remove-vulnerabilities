@@ -46,6 +46,7 @@ REPORT_SPECS = {
         "detail_cols_from": 8, "detail_cols_to": 35,
         "score_range": "'2-2. 요약 진단결과(Linux)'!$F$74:$T$74",
         "summary_rewrite": "linux",
+        "dxf_red": 4, "dxf_blue": 7,   # 이 양식 styles.xml 의 글꼴색 dxfId
     },
     "windows": {
         "template": os.path.join(SCRIPT_DIR, "보고서_양식_Windows.xlsx"),
@@ -58,6 +59,7 @@ REPORT_SPECS = {
         "detail_cols_from": 8, "detail_cols_to": 13,
         "score_range": "'2-2. 요약 진단결과(Window)'!$F$71:$G$71",
         "summary_rewrite": "windows",
+        "dxf_red": 22, "dxf_blue": 21,  # 이 양식 styles.xml 의 글꼴색 dxfId
     },
 }
 
@@ -127,24 +129,20 @@ def _clear_cols(xml, row, col_from, col_to):
     return xml
 
 
-# 양식 styles.xml 에 이미 정의된 조건부서식 글꼴색 (dxfId)
-_DXF_RED = 4      # <font><b/><color rgb="FFFF0000"/>  → 취약
-_DXF_BLUE = 7     # <font><b/><color rgb="FF0070C0"/>  → 인터뷰 필요
-
-
-def _add_verdict_cf(sheet_xml, sqref):
+def _add_verdict_cf(sheet_xml, sqref, dxf_red, dxf_blue):
     """판정 셀 범위에 '취약=빨강 / 인터뷰 필요=파랑' 글꼴색 조건부서식을 추가한다.
 
-    양식의 기존 조건부서식은 sqref 가 863개로 쪼개져 일부 행에만 '취약' 규칙이
+    양식의 기존 조건부서식은 sqref 가 잘게 쪼개져 일부 행에만 '취약' 규칙이
     있어 색이 안 나온다. 우선순위 1~2 로 범위 전체를 덮는 규칙을 하나 더 넣어
-    보완한다(양호는 규칙 없이 기본 검정 유지). styles.xml 은 건드리지 않는다.
+    보완한다(양호는 규칙 없이 기본 검정 유지). styles.xml 은 건드리지 않으며,
+    dxf_red/dxf_blue 는 계열별 양식 styles.xml 에 이미 있는 글꼴색 dxfId 다.
     """
     top = sqref.split(":")[0]           # 조건부서식 수식 기준 셀 (예: F6)
     block = (
         f'<conditionalFormatting sqref="{sqref}">'
-        f'<cfRule type="containsText" dxfId="{_DXF_RED}" priority="1" operator="containsText" '
+        f'<cfRule type="containsText" dxfId="{dxf_red}" priority="1" operator="containsText" '
         f'text="취약"><formula>NOT(ISERROR(SEARCH("취약",{top})))</formula></cfRule>'
-        f'<cfRule type="containsText" dxfId="{_DXF_BLUE}" priority="2" operator="containsText" '
+        f'<cfRule type="containsText" dxfId="{dxf_blue}" priority="2" operator="containsText" '
         f'text="인터뷰"><formula>NOT(ISERROR(SEARCH("인터뷰",{top})))</formula></cfRule>'
         f'</conditionalFormatting>')
     return sheet_xml.replace("<pageMargins", block + "<pageMargins", 1)
@@ -250,7 +248,8 @@ def _fill_template_raw(app, path, spec):
     for row in (3, 4, 5, last + 1, last + 2):    # 미사용 서버 열(H~) 정리
         detail = _clear_cols(detail, row, dc_from, dc_to)
     detail = _put_formula(detail, f"F{last + 2}", _apply_rate("F", last))
-    detail = _add_verdict_cf(detail, cf_range)   # 취약=빨강 / 인터뷰=파랑 글꼴색
+    detail = _add_verdict_cf(detail, cf_range,   # 취약=빨강 / 인터뷰=파랑 글꼴색
+                             spec["dxf_red"], spec["dxf_blue"])
 
     # 2-2 요약
     if spec["summary_rewrite"] == "linux":
@@ -271,11 +270,12 @@ def _fill_template_raw(app, path, spec):
         summary = _put_formula(
             summary, "V39",
             'IF(COUNTIF(W39:W68,"N/A")=COUNTA(W39:W68),"N/A",AVERAGE(W39:W68))')
-    else:  # windows — IFERROR 가드가 있어 서버 열(G)만 비우면 된다
-        for row in (3, 4, 5):
+    else:  # windows — 서버 2 열(G) 전체를 비운다(비우지 않으면 G71 이 0 으로
+           # 계산돼 그래프 점수 범위 F71:G71 에 유령 '취약' 서버가 생긴다)
+        for row in range(3, last + 3):          # G3(번호) ~ G71(보안 적용율)
             summary = _clear_cols(summary, row, 7, 7)
     summary = _put_formula(summary, f"F{last + 2}", _apply_rate("F", last))
-    summary = _add_verdict_cf(summary, cf_range)
+    summary = _add_verdict_cf(summary, cf_range, spec["dxf_red"], spec["dxf_blue"])
 
     # 2-1 그래프 : SCORE = 2-2 의 서버별 보안 적용율 행
     #   안전 D18 = COUNTIF(SCORE,">=0.85") / 양호 D19 = COUNTIFS(SCORE,">=0.7",…,"<0.85")
@@ -286,9 +286,8 @@ def _fill_template_raw(app, path, spec):
     graph = _put_formula(graph, "D20", f'COUNTIF({SCORE},"<0.7")', required=False)
     graph = _put_formula(graph, "C5", f'AVERAGE({SCORE})', required=False)
     graph = _put_formula(graph, "C6", f'AVERAGE({SCORE})', required=False)
-    if spec["summary_rewrite"] == "linux":
-        for row in range(37, 51):
-            graph = _clear_cols(graph, row, 22, 24)   # 미사용 서버 목록(V/W/X)
+    for row in range(37, 51):
+        graph = _clear_cols(graph, row, 22, 24)   # 미사용 서버 목록(V/W/X)
 
     # workbook: 미완성 "_깨짐" 시트 숨김
     book = book.replace(spec["broken_from"], spec["broken_to"])
