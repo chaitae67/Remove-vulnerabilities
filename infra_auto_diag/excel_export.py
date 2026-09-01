@@ -226,6 +226,7 @@ def _fill_template_raw(app, path, spec):
     target = _put_str(target, "C5", host)
     target = _put_str(target, "D5", ipaddr)
     target = _put_str(target, "E5", osver)
+    target = _put_str(target, "F5", "-", required=False)   # 용도(미수집) — 0 표시 방지
     for row in range(6, 20):                     # 서버 2대 이상 슬롯 비우기
         target = _clear_cols(target, row, 2, 7)
 
@@ -291,6 +292,14 @@ def _fill_template_raw(app, path, spec):
 
     # workbook: 미완성 "_깨짐" 시트 숨김
     book = book.replace(spec["broken_from"], spec["broken_to"])
+
+    # 열 때 수식을 강제로 재계산시킨다. 이 설정이 없으면(윈도우 양식이 그랬다)
+    # 엑셀이 캐시된 옛 값/빈 값을 그대로 보여줘 보안 적용율·그래프가 안 나온다.
+    if "<calcPr" not in book:
+        book = book.replace(
+            "</workbook>", '<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>')
+    elif "fullCalcOnLoad" not in book:
+        book = re.sub(r"<calcPr ", '<calcPr fullCalcOnLoad="1" ', book, count=1)
 
     edited = {
         spec["cover"]: cover, spec["target"]: target, spec["graph"]: graph,
