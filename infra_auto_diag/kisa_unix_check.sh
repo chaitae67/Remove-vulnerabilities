@@ -176,6 +176,17 @@ else
 fi
 LOG_FILES_UTMP="/var/log/wtmp /var/log/btmp /var/log/lastlog"
 
+# sshd 유효 설정 1회 캐시(root 일 때만). Ubuntu/Debian 은 sshd_config.d/*.conf drop-in 을 쓰므로
+# sshd -T(전체 반영값) → sshd_config + sshd_config.d/*.conf 순으로 조회한다.
+SSHD_T=""
+[ "$IS_ROOT" -eq 1 ] && command -v sshd >/dev/null 2>&1 && SSHD_T=$(sshd -T 2>/dev/null)
+sshd_val() {  # $1 = 소문자 키워드 (예: permitrootlogin)
+  local v
+  v=$(printf '%s\n' "$SSHD_T" | awk -v k="$1" 'tolower($1)==k{print $2; exit}')
+  [ -z "$v" ] && v=$(conf_line "^[[:space:]]*$1[[:space:]]" /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+  printf '%s' "$v"
+}
+
 echo
 echo -e "${W}==============================================================${N}"
 echo -e "${W} KISA Unix/Linux 취약점 점검 (U-01~U-67)  READ-ONLY${N}"
@@ -212,9 +223,7 @@ ssh_used=0
 { [ -e /etc/ssh/sshd_config ] || port_listen 22 || svc_active sshd || svc_active ssh; } && ssh_used=1
 if [ "$ssh_used" -eq 0 ]; then sv=NA; se="SSH 미사용"
 else
-  prl=""
-  [ "$IS_ROOT" -eq 1 ] && prl=$(sshd -T 2>/dev/null | awk '/^permitrootlogin /{print $2}')
-  [ -z "$prl" ] && prl=$(conf_line '^[[:space:]]*PermitRootLogin[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+  prl=$(sshd_val permitrootlogin)
   case "$prl" in
     no)                              sv=GOOD; se="PermitRootLogin=no" ;;
     yes)                             sv=VULN; se="PermitRootLogin=yes (root 직접 접속 허용)" ;;
@@ -382,8 +391,8 @@ else rep U-11 "사용자 Shell 점검" VULN "로그인 가능 셸을 가진 시�
 # U-12 세션 종료 시간 설정
 # [기준] 양호 - Session Timeout(TMOUT) 600초 이하로 설정 / 취약 - 미설정 또는 초과
 tmout=$(grep -rhE '^[[:space:]]*(export[[:space:]]+)?TMOUT=' /etc/profile /etc/profile.d/ /etc/bashrc /etc/bash.bashrc /etc/csh.cshrc /etc/csh.login 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE 'TMOUT=[0-9]+' | grep -oE '[0-9]+' | sort -n | head -1)
-cai=$(conf_line '^[[:space:]]*ClientAliveInterval' /etc/ssh/sshd_config | awk '{print $2}')
-cac=$(conf_line '^[[:space:]]*ClientAliveCountMax' /etc/ssh/sshd_config | awk '{print $2}')
+cai=$(sshd_val clientaliveinterval)
+cac=$(sshd_val clientalivecountmax)
 if [ -n "$tmout" ] && [ "$tmout" -ge 1 ] && [ "$tmout" -le 600 ]; then
   rep U-12 "세션 종료 시간 설정" GOOD "TMOUT=$tmout (<=600). SSH ClientAliveInterval=${cai:-미설정}"
 else
@@ -985,9 +994,7 @@ fi
 # U-62 로그인 시 경고 메시지 설정
 # [기준] 양호 - 서버 및 Telnet/FTP/SMTP/DNS 서비스 로그온 시 경고 메시지 설정 / 취약 - 미설정
 warn_re='(경고|허가|무단|승인|비인가|접근이 제한|unauthorized|authorized (users|personnel|access)|prohibited|monitored|warning|access is restricted)'
-sshban=""
-[ "$IS_ROOT" -eq 1 ] && sshban=$(sshd -T 2>/dev/null | awk '/^banner /{print $2}')
-[ -z "$sshban" ] && sshban=$(conf_line '^[[:space:]]*Banner[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+sshban=$(sshd_val banner)
 b_local=0; b_ssh=0
 grep -qiE "$warn_re" /etc/issue /etc/issue.net /etc/motd 2>/dev/null && b_local=1
 { [ -n "$sshban" ] && [ "$sshban" != none ] && { [ -s "$sshban" ] || grep -qiE "$warn_re" "$sshban" 2>/dev/null; }; } && b_ssh=1
