@@ -39,6 +39,7 @@ class App:
         self.host_label = ""
         self.os_label = ""
         self.conn_host = ""
+        self.family = "linux"      # 점검 결과 계열 (linux / windows) — 엑셀 양식 선택에 사용
         # 게이트웨이(bastion) 경유 설정
         self.gateway = {"enabled": False, "host": "", "port": 22, "user": "team",
                         "auth": "password", "password": "", "key": ""}
@@ -315,7 +316,9 @@ class App:
             self.os_label = data.get("os", "")
             self.conn_host = p["host"]
             self.results = data.get("results", [])
-            self.log(f"      완료: {len(self.results)}개 항목 (OS: {data.get('os','?')})")
+            self.family = (data.get("family", "") or p["osname"] or "linux").lower()
+            self.log(f"      완료: {len(self.results)}개 항목 "
+                     f"(OS: {data.get('os','?')}, 계열: {self.family})")
             self.root.after(0, self._show_results)
         except Exception as e:
             self.log(f"✖ 오류: {e}")
