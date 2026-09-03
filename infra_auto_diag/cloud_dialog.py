@@ -11,6 +11,52 @@ from tkinter import ttk, filedialog
 
 from common import set_window_icon, TARGET_LABEL
 
+# CSP별 입력 필드 정의  (라벨, 키, 비밀여부, 기본값)  — 인라인 폼/다이얼로그 공용
+CLOUD_FIELDS = {
+    "aws": {
+        "note": "필요 권한: 관리형 정책 SecurityAudit (읽기 전용).  "
+                "키를 비우면 ~/.aws 프로필 또는 환경 자격증명을 사용.",
+        "fields": [
+            ("Access Key ID", "access_key", False, ""),
+            ("Secret Access Key", "secret_key", True, ""),
+            ("Session Token (선택)", "session_token", True, ""),
+            ("프로필 이름 (선택)", "profile", False, ""),
+            ("리전", "region", False, "ap-northeast-2"),
+        ],
+    },
+    "azure": {
+        "note": "필요 권한: 구독 Reader.  AD 항목은 Graph Directory.Read.All 추가 필요.  "
+                "Tenant/Client/Secret 을 비우면 az login 자격을 사용.",
+        "fields": [
+            ("Tenant ID", "tenant_id", False, ""),
+            ("Client ID", "client_id", False, ""),
+            ("Client Secret", "client_secret", True, ""),
+            ("Subscription ID", "subscription_id", False, ""),
+        ],
+    },
+    "gcp": {
+        "note": "필요 권한: roles/iam.securityReviewer + roles/viewer.  "
+                "키 파일을 비우면 gcloud ADC(application-default) 를 사용.",
+        "fields": [
+            ("서비스계정 JSON 키 파일", "sa_key_path", False, ""),
+            ("Project ID", "project_id", False, ""),
+        ],
+    },
+}
+
+
+def normalize_creds(provider, raw):
+    """폼에서 읽은 값 dict 를 cloud_check.run 이 기대하는 형태로 보정."""
+    c = {k: (v or "").strip() for k, v in (raw or {}).items()}
+    if provider == "aws":
+        if c.get("access_key"):
+            c["mode"] = "key"
+        elif c.get("profile"):
+            c["mode"] = "profile"
+        else:
+            c["mode"] = "env"
+    return c
+
 
 def open_cloud_creds(parent, provider, current=None):
     """모달로 자격증명을 받는다. 취소하면 None, 확인하면 dict."""

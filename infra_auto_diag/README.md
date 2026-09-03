@@ -21,16 +21,20 @@ python kisa_gui.py
 
 ## 진단 대상별 사용법
 
-### Linux / Windows 서버 (SSH)
-1. "진단 대상" 에서 `Linux 서버` 또는 `Windows 서버` 선택
+상단 **진단 유형** 에서 `인프라 진단(서버)` / `클라우드 진단(AWS/Azure/GCP)` 을 먼저 고른다.
+
+### 인프라 진단 — Linux / Windows 서버 (SSH)
+1. `인프라 진단` → "진단 대상" 에서 `Linux 서버` 또는 `Windows 서버`
 2. IP/호스트 · 계정 · 비밀번호(또는 SSH 키) 입력, 필요 시 게이트웨이 설정
 3. `▶ 점검 실행` → 결과 표에서 행 더블클릭으로 최종판정 조정 → `엑셀로 추출`
 4. 점검 스크립트(`kisa_unix_check.sh` / `kisa_win_check.ps1`)는 READ-ONLY.
    root/sudo(또는 관리자)로 실행해야 shadow·sshd -T·secedit 등이 정확히 읽힘.
 
-### AWS / Azure / GCP (API)
-1. "진단 대상" 에서 `AWS` / `Azure` / `GCP` 선택
-2. `자격증명 설정` 버튼 → 키 입력 (또는 환경 자격증명 사용)
+### 클라우드 진단 — AWS / Azure / GCP (API)
+1. `클라우드 진단` → "진단 대상" 에서 `AWS` / `Azure` / `GCP`
+2. 왼쪽 **클라우드 자격증명** 패널에 CSP별 필드가 뜬다 → 키 입력
+   (Access Key/Secret, Tenant/Client/Secret+Subscription, SA JSON 키+Project 등.
+    비우면 `~/.aws` 프로필 / `az login` / `gcloud ADC` 자격을 사용)
 3. `▶ 클라우드 진단` → 표/엑셀은 서버와 동일하게 사용
 
 클라우드 진단은 **읽기 전용** (`describe_* / list_* / get_*` 만 호출). 리소스를 변경하지 않음.
