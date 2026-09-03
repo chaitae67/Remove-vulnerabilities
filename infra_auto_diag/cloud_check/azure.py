@@ -69,15 +69,23 @@ def run(creds):
 def _graph_get(cred, path):
     """Graph REST GET. 권한 없으면 예외."""
     import json
+    import urllib.error
     import urllib.request
     tok = cred.get_token("https://graph.microsoft.com/.default").token
     url = "https://graph.microsoft.com/v1.0" + path
     out, nxt = [], url
-    while nxt:
-        req = urllib.request.Request(nxt, headers={"Authorization": f"Bearer {tok}"})
-        data = json.loads(urllib.request.urlopen(req, timeout=30).read())
-        out += data.get("value", [])
-        nxt = data.get("@odata.nextLink")
+    try:
+        while nxt:
+            req = urllib.request.Request(nxt, headers={"Authorization": f"Bearer {tok}"})
+            data = json.loads(urllib.request.urlopen(req, timeout=30).read())
+            out += data.get("value", [])
+            nxt = data.get("@odata.nextLink")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise PermissionError(
+                "서비스 주체에 Microsoft Graph 애플리케이션 권한 'Directory.Read.All' + "
+                "관리자 동의가 없습니다 → AD 항목은 인터뷰로 확인")
+        raise
     return out
 
 
