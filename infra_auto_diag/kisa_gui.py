@@ -44,6 +44,8 @@ class App:
         self.conn_host = ""
         self.family = "linux"      # 점검 결과 계열 (linux / windows / cloud) — 엑셀 양식 선택에 사용
         self.cloud_creds = {}      # {csp: {자격증명 dict}}  — 클라우드 진단용
+        self._cloud_vars = {}      # 현재 표시 중인 클라우드 폼의 입력 변수
+        self.mode = None           # "infra" | "cloud"  (UI 에서 설정)
         # 게이트웨이(bastion) 경유 설정
         self.gateway = {"enabled": False, "host": "", "port": 22, "user": "team",
                         "auth": "password", "password": "", "key": ""}
@@ -53,7 +55,17 @@ class App:
 
     # ---------------- UI 구성 ----------------
     def _build_ui(self):
-        # 상단: 접속 정보(약 8) + OS 선택(약 2) 좌우 분할
+        # 모드 선택: 인프라(서버 SSH) / 클라우드(CSP API)
+        modebar = ttk.Frame(self.root)
+        modebar.pack(fill="x", padx=10, pady=(8, 0))
+        self.mode = tk.StringVar(value="infra")
+        ttk.Label(modebar, text="진단 유형:").pack(side="left", padx=(2, 8))
+        ttk.Radiobutton(modebar, text="인프라 진단(서버)", variable=self.mode,
+                        value="infra", command=self._on_mode_change).pack(side="left")
+        ttk.Radiobutton(modebar, text="클라우드 진단(AWS/Azure/GCP)", variable=self.mode,
+                        value="cloud", command=self._on_mode_change).pack(side="left", padx=8)
+
+        # 상단: (접속 정보 | 클라우드 자격증명) + 진단 대상 좌우 분할
         top = ttk.Frame(self.root)
         top.pack(fill="x", padx=10, pady=8)
         top.columnconfigure(0, weight=8)
@@ -61,17 +73,19 @@ class App:
 
         conn = ttk.LabelFrame(top, text="접속 정보")
         conn.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.conn_frame = conn
+
+        # 클라우드 자격증명(인라인) — conn 과 같은 칸을 공유, 모드에 따라 토글
+        self.cloudf = ttk.LabelFrame(top, text="클라우드 자격증명")
+        self.cloudf.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.cloudf.grid_remove()
 
         osf = ttk.LabelFrame(top, text="진단 대상")
         osf.grid(row=0, column=1, sticky="nsew")
         self.os_choice = tk.StringVar(value="linux")
-        for txt, val in (("Linux 서버", "linux"), ("Windows 서버", "windows"),
-                         ("AWS", "aws"), ("Azure", "azure"), ("GCP", "gcp")):
-            ttk.Radiobutton(osf, text=txt, variable=self.os_choice, value=val,
-                            command=self._on_os_change).pack(anchor="w", padx=10, pady=1)
-        self.btn_cloud_creds = ttk.Button(osf, text="자격증명 설정",
-                                          command=self._open_cloud_creds)
-        self.lbl_os_script = ttk.Label(osf, text="", foreground="#555", wraplength=170)
+        self._targets_holder = ttk.Frame(osf)
+        self._targets_holder.pack(anchor="w", fill="x")
+        self.lbl_os_script = ttk.Label(osf, text="", foreground="#555", wraplength=180)
         self.lbl_os_script.pack(anchor="w", padx=10, pady=(4, 8))
 
         # 1행: 호스트/포트/계정
@@ -163,30 +177,50 @@ class App:
             self.log("⚠ paramiko 미설치 → 터미널에서:  pip install paramiko")
         if excel_export.openpyxl is None:
             self.log("⚠ openpyxl 미설치 → 터미널에서:  pip install openpyxl")
-        self._on_os_change()   # OS 선택 라벨 초기화 + 스크립트 존재 확인
+        self._on_mode_change()   # 모드/대상 라디오·폼 초기화
 
     # ---------------- 진단 대상 선택 ----------------
     def local_check(self):
         """현재 선택된 OS 에 해당하는 로컬 점검 스크립트 경로."""
         return SCRIPT_BY_OS.get(self.os_choice.get(), LOCAL_CHECK_LINUX)
 
+    _TARGETS = {"infra": (("Linux 서버", "linux"), ("Windows 서버", "windows")),
+                "cloud": (("AWS", "aws"), ("Azure", "azure"), ("GCP", "gcp"))}
+
+    def _on_mode_change(self):
+        mode = self.mode.get()
+        # 대상 라디오 다시 그리기
+        for w in self._targets_holder.winfo_children():
+            w.destroy()
+        opts = self._TARGETS[mode]
+        if self.os_choice.get() not in [v for _, v in opts]:
+            self.os_choice.set(opts[0][1])
+        for txt, val in opts:
+            ttk.Radiobutton(self._targets_holder, text=txt, variable=self.os_choice,
+                            value=val, command=self._on_os_change).pack(anchor="w", padx=10, pady=1)
+        # 접속 정보 ↔ 클라우드 자격증명 패널 토글
+        if mode == "cloud":
+            self.conn_frame.grid_remove()
+            self.cloudf.grid()
+        else:
+            self.cloudf.grid_remove()
+            self.conn_frame.grid()
+        self._on_os_change()
+
     def _on_os_change(self):
         target = self.os_choice.get()
         if is_cloud(target):
-            self.btn_cloud_creds.pack(anchor="w", padx=10, pady=(6, 2), before=self.lbl_os_script)
+            self._build_cloud_form(target)
             if not cloud_check.available(target):
-                pkg = cloud_check.missing_package(target)
                 self.lbl_os_script.configure(
-                    text=f"{TARGET_LABEL[target]} SDK 미설치 → pip install {pkg}",
-                    foreground="#c00")
+                    text=f"{TARGET_LABEL[target]} SDK 미설치 → pip install "
+                         f"{cloud_check.missing_package(target)}", foreground="#c00")
             else:
-                summ = cloud_dialog.creds_summary(target, self.cloud_creds.get(target))
                 self.lbl_os_script.configure(
-                    text=f"{TARGET_LABEL[target]} API 진단 · 자격증명: {summ}", foreground="#555")
+                    text=f"{TARGET_LABEL[target]} API 진단 (읽기 전용)", foreground="#555")
             self.btn_run.configure(text="▶ 클라우드 진단")
             return
         # 서버(SSH) 모드
-        self.btn_cloud_creds.pack_forget()
         self.btn_run.configure(text="▶ 점검 실행")
         p = self.local_check()
         name = os.path.basename(p)
@@ -197,15 +231,40 @@ class App:
                                          foreground="#c00")
             self.log(f"점검 스크립트 없음: {p}")
 
-    def _open_cloud_creds(self):
-        target = self.os_choice.get()
-        if not is_cloud(target):
-            return
-        got = cloud_dialog.open_cloud_creds(self.root, target,
-                                            self.cloud_creds.get(target))
-        if got is not None:
-            self.cloud_creds[target] = got
-            self._on_os_change()
+    def _build_cloud_form(self, csp):
+        """선택한 CSP 에 맞는 자격증명 입력 필드를 cloudf 안에 그린다."""
+        for w in self.cloudf.winfo_children():
+            w.destroy()
+        self._cloud_vars = {}
+        spec = cloud_dialog.CLOUD_FIELDS[csp]
+        ttk.Label(self.cloudf, text=spec["note"], foreground="#666",
+                  wraplength=620).grid(row=0, column=0, columnspan=3, sticky="w",
+                                       padx=8, pady=(6, 4))
+        saved = self.cloud_creds.get(csp, {})
+        for i, (label, key, secret, default) in enumerate(spec["fields"], start=1):
+            ttk.Label(self.cloudf, text=label).grid(row=i, column=0, sticky="w",
+                                                    padx=(10, 6), pady=3)
+            var = tk.StringVar(value=saved.get(key, default))
+            ent = ttk.Entry(self.cloudf, textvariable=var, width=52,
+                            show="*" if secret else "")
+            ent.grid(row=i, column=1, sticky="ew", pady=3)
+            self._cloud_vars[key] = var
+            if key == "sa_key_path":
+                ttk.Button(self.cloudf, text="찾기", width=6,
+                           command=self._browse_sa_key).grid(row=i, column=2, padx=4)
+        self.cloudf.columnconfigure(1, weight=1)
+
+    def _browse_sa_key(self):
+        p = filedialog.askopenfilename(title="서비스계정 키(JSON)",
+                                       filetypes=[("JSON", "*.json")])
+        if p and "sa_key_path" in self._cloud_vars:
+            self._cloud_vars["sa_key_path"].set(p)
+
+    def _collect_cloud_creds(self, csp):
+        raw = {k: v.get() for k, v in self._cloud_vars.items()}
+        creds = cloud_dialog.normalize_creds(csp, raw)
+        self.cloud_creds[csp] = creds
+        return creds
 
     def _toggle_auth(self):
         if self.auth.get() == "password":
@@ -305,15 +364,16 @@ class App:
                 f"{TARGET_LABEL[target]} 진단에는 SDK가 필요합니다.\n"
                 f"pip install {cloud_check.missing_package(target)}")
             return
-        creds = self.cloud_creds.get(target)
-        if not creds:
-            if not messagebox.askyesno(
-                    "자격증명 미설정",
-                    "자격증명이 설정되지 않았습니다.\n"
-                    "환경 자격증명(~/.aws, az login, gcloud ADC)으로 시도할까요?"):
-                self._open_cloud_creds()
-                return
-            creds = {"mode": "env"} if target == "aws" else {}
+        creds = self._collect_cloud_creds(target)
+        # 필수값 안내 (비우면 환경/ADC 자격 시도)
+        need = {"azure": ["subscription_id"], "gcp": ["project_id"]}.get(target, [])
+        missing = [k for k in need if not creds.get(k)]
+        if missing:
+            messagebox.showwarning(
+                "입력 필요",
+                {"subscription_id": "Subscription ID 를 입력하세요.",
+                 "project_id": "Project ID 를 입력하세요."}[missing[0]])
+            return
         self.set_busy(True)
         self._clear_table()
         self.lbl_sum.configure(text=f"{TARGET_LABEL[target]} 진단 실행 중…")
