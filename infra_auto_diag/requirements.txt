@@ -19,6 +19,6 @@ azure-mgmt-monitor>=6.0
 azure-mgmt-containerservice>=30.0
 # 선택(있으면 4.1/4.5/4.11 자동화):
 # azure-mgmt-sql  azure-mgmt-keyvault  azure-mgmt-recoveryservices
-#   GCP  (3단계)
-# google-api-python-client>=2.100
-# google-auth>=2.25
+#   GCP
+google-api-python-client>=2.100
+google-auth>=2.25
