@@ -8,14 +8,17 @@ openpyxl>=3.1
 # 클라우드 진단 — 해당 CSP를 점검할 때만 필요 (없으면 그 CSP 버튼만 비활성)
 #   AWS
 boto3>=1.34
-#   Azure  (2단계)
-# azure-identity>=1.15
-# azure-mgmt-resource>=23.0
-# azure-mgmt-network>=25.0
-# azure-mgmt-storage>=21.0
-# azure-mgmt-compute>=30.0
-# azure-mgmt-authorization>=4.0
-# azure-mgmt-monitor>=6.0
+#   Azure  — SubscriptionClient/ManagementLockClient 통합 버전 필요 → resource 는 23.x 고정
+azure-identity>=1.15
+azure-mgmt-resource>=23,<24
+azure-mgmt-authorization>=4.0
+azure-mgmt-network>=25.0
+azure-mgmt-storage>=21.0
+azure-mgmt-compute>=30.0
+azure-mgmt-monitor>=6.0
+azure-mgmt-containerservice>=30.0
+# 선택(있으면 4.1/4.5/4.11 자동화):
+# azure-mgmt-sql  azure-mgmt-keyvault  azure-mgmt-recoveryservices
 #   GCP  (3단계)
 # google-api-python-client>=2.100
 # google-auth>=2.25

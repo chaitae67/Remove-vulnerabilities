@@ -154,7 +154,10 @@ CLOUD_SPECS = {
     "AWS": {"template": os.path.join(SCRIPT_DIR, "보고서_양식_AWS.xlsx"),
             "sheet": "진단 결과(AWS)", "first_row": 4, "code_col": 2,
             "result_col": 7, "detail_col": 8, "resource_col": 9},
-    # Azure/GCP 는 2·3단계에서 추가
+    "AZURE": {"template": os.path.join(SCRIPT_DIR, "보고서_양식_Azure.xlsx"),
+              "sheet": "진단 결과(Azure)", "first_row": 4, "code_col": 2,
+              "result_col": 7, "detail_col": 8, "resource_col": 9},
+    # GCP 는 3단계에서 추가
 }
 
 

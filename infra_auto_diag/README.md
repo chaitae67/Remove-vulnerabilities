@@ -13,8 +13,10 @@ python kisa_gui.py
 ```
 
 - Python 3.9+ / Tkinter 포함 배포판
-- `requirements.txt` 의 `boto3` 는 AWS 진단용. Azure/GCP 는 해당 단계에서 주석 해제.
-- 서버 진단만 쓸 거면 `paramiko`, `openpyxl` 만 있어도 됨.
+- `requirements.txt` : 서버는 `paramiko`+`openpyxl`, AWS 는 `boto3`, Azure 는 `azure-*`.
+  GCP(3단계)는 아직 주석. 필요한 CSP 것만 설치해도 됨(미설치 시 그 버튼만 안내 메시지).
+- **Azure**: `azure-mgmt-resource` 는 SubscriptionClient/ManagementLockClient 통합을 위해
+  `>=23,<24` 로 고정. 26.x 는 클라이언트가 분리돼 일부 항목이 수동확인으로 빠진다.
 
 ## 진단 대상별 사용법
 
@@ -37,8 +39,11 @@ python kisa_gui.py
 | CSP | 권한 | 비고 |
 |---|---|---|
 | AWS | 관리형 정책 **`SecurityAudit`** 를 진단용 IAM 사용자/역할에 연결 | Access Key 또는 `~/.aws` 프로필 |
-| Azure | 구독 **`Reader`** 역할 (서비스 주체) | Tenant/Client/Secret + Subscription ID |
+| Azure | 구독 **`Reader`** (서비스 주체) + (선택) Graph **`Directory.Read.All`** | Tenant/Client/Secret + Subscription ID |
 | GCP | **`roles/iam.securityReviewer`** + **`roles/viewer`** | 서비스계정 JSON 키 + Project ID |
+
+> Azure 의 AD 항목(1.1~1.9, 2.3, 4.6)은 Microsoft Graph 권한이 있어야 자동 판정된다.
+> 없으면 해당 항목은 "인터뷰 필요" 로 근거만 수집.
 
 > 자격증명이 유효하지 않으면 진단이 즉시 중단된다(엉뚱한 "양호" 결과 방지).
 > 권한이 일부 모자라면 해당 항목은 "인터뷰 필요(수동확인)" 로 표기된다.
@@ -64,8 +69,9 @@ cloud_dialog.py      클라우드 자격증명 입력
 cloud_check/         클라우드 진단 (CSP별 분리)
   __init__.py          run(provider, creds) 디스패처
   base.py              Reporter / 상태 상수 / safe() 래퍼
-  aws.py  aws_items.py  AWS 41항목 (SK Shieldus 2024 가이드)
-  azure.py  gcp.py       (2·3단계 예정)
+  aws.py    aws_items.py    AWS 41항목 (SK Shieldus 2024 가이드)
+  azure.py  azure_items.py  Azure 41항목
+  gcp.py                    (3단계 예정)
 kisa_unix_check.sh   Linux 서버 점검 (U-01~U-67, 계열 자동분기)
 kisa_win_check.ps1   Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
 보고서_양식_*.xlsx    결과 엑셀 양식
