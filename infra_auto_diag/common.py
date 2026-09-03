@@ -15,6 +15,20 @@ LOCAL_CHECK_LINUX = os.path.join(SCRIPT_DIR, "kisa_unix_check.sh")
 LOCAL_CHECK_WINDOWS = os.path.join(SCRIPT_DIR, "kisa_win_check.ps1")
 SCRIPT_BY_OS = {"linux": LOCAL_CHECK_LINUX, "windows": LOCAL_CHECK_WINDOWS}
 
+# 진단 대상 종류
+#   서버(SSH) : linux / windows      → 원격 접속 후 스크립트 실행
+#   클라우드   : aws / azure / gcp    → 로컬에서 CSP API 호출 (cloud_check 패키지)
+SERVER_TARGETS = ("linux", "windows")
+CLOUD_TARGETS = ("aws", "azure", "gcp")
+TARGET_LABEL = {
+    "linux": "Linux 서버", "windows": "Windows 서버",
+    "aws": "AWS", "azure": "Azure", "gcp": "GCP",
+}
+
+
+def is_cloud(target):
+    return (target or "").lower() in CLOUD_TARGETS
+
 # ---- OS별 원격 실행 설정 (경로/실행 명령을 Linux·Windows 로 분리) ----
 #   linux   : /tmp 에 .sh 업로드 → bash 실행 (sudo 지원)
 #   windows : SSH 홈(기본 %USERPROFILE%)에 .ps1 업로드 → PowerShell 실행 (sudo 없음)

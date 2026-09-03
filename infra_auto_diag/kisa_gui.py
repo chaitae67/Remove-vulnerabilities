@@ -26,10 +26,13 @@ except ImportError:
     paramiko = None
 
 from common import (SCRIPT_BY_OS, LOCAL_CHECK_LINUX, REMOTE, build_run_cmd,
-                    STATUS_COLORS, MANUAL_LABEL, REPORT_STATUS, set_window_icon)
+                    STATUS_COLORS, MANUAL_LABEL, REPORT_STATUS, set_window_icon,
+                    CLOUD_TARGETS, TARGET_LABEL, is_cloud)
 import excel_export
 import gateway_dialog
 import detail_dialog
+import cloud_dialog
+import cloud_check
 
 
 class App:
@@ -39,7 +42,8 @@ class App:
         self.host_label = ""
         self.os_label = ""
         self.conn_host = ""
-        self.family = "linux"      # 점검 결과 계열 (linux / windows) — 엑셀 양식 선택에 사용
+        self.family = "linux"      # 점검 결과 계열 (linux / windows / cloud) — 엑셀 양식 선택에 사용
+        self.cloud_creds = {}      # {csp: {자격증명 dict}}  — 클라우드 진단용
         # 게이트웨이(bastion) 경유 설정
         self.gateway = {"enabled": False, "host": "", "port": 22, "user": "team",
                         "auth": "password", "password": "", "key": ""}
@@ -58,15 +62,17 @@ class App:
         conn = ttk.LabelFrame(top, text="접속 정보")
         conn.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        osf = ttk.LabelFrame(top, text="OS 선택")
+        osf = ttk.LabelFrame(top, text="진단 대상")
         osf.grid(row=0, column=1, sticky="nsew")
         self.os_choice = tk.StringVar(value="linux")
-        ttk.Radiobutton(osf, text="Linux", variable=self.os_choice, value="linux",
-                        command=self._on_os_change).pack(anchor="w", padx=10, pady=(10, 4))
-        ttk.Radiobutton(osf, text="Windows", variable=self.os_choice, value="windows",
-                        command=self._on_os_change).pack(anchor="w", padx=10, pady=(0, 4))
+        for txt, val in (("Linux 서버", "linux"), ("Windows 서버", "windows"),
+                         ("AWS", "aws"), ("Azure", "azure"), ("GCP", "gcp")):
+            ttk.Radiobutton(osf, text=txt, variable=self.os_choice, value=val,
+                            command=self._on_os_change).pack(anchor="w", padx=10, pady=1)
+        self.btn_cloud_creds = ttk.Button(osf, text="자격증명 설정",
+                                          command=self._open_cloud_creds)
         self.lbl_os_script = ttk.Label(osf, text="", foreground="#555", wraplength=170)
-        self.lbl_os_script.pack(anchor="w", padx=10, pady=(2, 8))
+        self.lbl_os_script.pack(anchor="w", padx=10, pady=(4, 8))
 
         # 1행: 호스트/포트/계정
         r1 = ttk.Frame(conn); r1.pack(fill="x", padx=8, pady=4)
@@ -159,12 +165,29 @@ class App:
             self.log("⚠ openpyxl 미설치 → 터미널에서:  pip install openpyxl")
         self._on_os_change()   # OS 선택 라벨 초기화 + 스크립트 존재 확인
 
-    # ---------------- OS 선택 ----------------
+    # ---------------- 진단 대상 선택 ----------------
     def local_check(self):
         """현재 선택된 OS 에 해당하는 로컬 점검 스크립트 경로."""
         return SCRIPT_BY_OS.get(self.os_choice.get(), LOCAL_CHECK_LINUX)
 
     def _on_os_change(self):
+        target = self.os_choice.get()
+        if is_cloud(target):
+            self.btn_cloud_creds.pack(anchor="w", padx=10, pady=(6, 2), before=self.lbl_os_script)
+            if not cloud_check.available(target):
+                pkg = cloud_check.missing_package(target)
+                self.lbl_os_script.configure(
+                    text=f"{TARGET_LABEL[target]} SDK 미설치 → pip install {pkg}",
+                    foreground="#c00")
+            else:
+                summ = cloud_dialog.creds_summary(target, self.cloud_creds.get(target))
+                self.lbl_os_script.configure(
+                    text=f"{TARGET_LABEL[target]} API 진단 · 자격증명: {summ}", foreground="#555")
+            self.btn_run.configure(text="▶ 클라우드 진단")
+            return
+        # 서버(SSH) 모드
+        self.btn_cloud_creds.pack_forget()
+        self.btn_run.configure(text="▶ 점검 실행")
         p = self.local_check()
         name = os.path.basename(p)
         if os.path.exists(p):
@@ -173,6 +196,16 @@ class App:
             self.lbl_os_script.configure(text="실행: " + name + "  (파일 없음!)",
                                          foreground="#c00")
             self.log(f"점검 스크립트 없음: {p}")
+
+    def _open_cloud_creds(self):
+        target = self.os_choice.get()
+        if not is_cloud(target):
+            return
+        got = cloud_dialog.open_cloud_creds(self.root, target,
+                                            self.cloud_creds.get(target))
+        if got is not None:
+            self.cloud_creds[target] = got
+            self._on_os_change()
 
     def _toggle_auth(self):
         if self.auth.get() == "password":
@@ -233,6 +266,10 @@ class App:
 
     # ---------------- 실행 ----------------
     def on_run(self):
+        target = self.os_choice.get()
+        if is_cloud(target):
+            self._run_cloud(target)
+            return
         if paramiko is None:
             messagebox.showerror("의존성 오류", "paramiko가 필요합니다.\npip install paramiko")
             return
@@ -259,6 +296,49 @@ class App:
         self._clear_table()
         self.lbl_sum.configure(text="점검 실행 중…")
         threading.Thread(target=self._worker, args=(params,), daemon=True).start()
+
+    # ---------------- 클라우드 진단 ----------------
+    def _run_cloud(self, target):
+        if not cloud_check.available(target):
+            messagebox.showerror(
+                "SDK 미설치",
+                f"{TARGET_LABEL[target]} 진단에는 SDK가 필요합니다.\n"
+                f"pip install {cloud_check.missing_package(target)}")
+            return
+        creds = self.cloud_creds.get(target)
+        if not creds:
+            if not messagebox.askyesno(
+                    "자격증명 미설정",
+                    "자격증명이 설정되지 않았습니다.\n"
+                    "환경 자격증명(~/.aws, az login, gcloud ADC)으로 시도할까요?"):
+                self._open_cloud_creds()
+                return
+            creds = {"mode": "env"} if target == "aws" else {}
+        self.set_busy(True)
+        self._clear_table()
+        self.lbl_sum.configure(text=f"{TARGET_LABEL[target]} 진단 실행 중…")
+        threading.Thread(target=self._cloud_worker, args=(target, creds),
+                         daemon=True).start()
+
+    def _cloud_worker(self, target, creds):
+        try:
+            self.log(f"[{TARGET_LABEL[target]}] API 진단 시작 "
+                     f"(READ-ONLY, describe/list/get 만 호출)")
+            data = cloud_check.run(target, creds)
+            self.host_label = data.get("host", TARGET_LABEL[target])
+            self.os_label = data.get("os", TARGET_LABEL[target])
+            self.conn_host = data.get("host", "")
+            self.results = data.get("results", [])
+            self.family = (data.get("family", "") or "cloud").lower()
+            self.log(f"      완료: {len(self.results)}개 항목 "
+                     f"(대상: {self.os_label}, 계열: {self.family})")
+            self.root.after(0, self._show_results)
+        except Exception as e:
+            self.log(f"오류: {e}")
+            self.root.after(0, lambda: messagebox.showerror("클라우드 진단 오류", str(e)))
+            self.root.after(0, lambda: self.lbl_sum.configure(text="오류 발생"))
+        finally:
+            self.set_busy(False)
 
     def _worker(self, p):
         client = None

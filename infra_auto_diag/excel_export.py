@@ -148,10 +148,62 @@ def _add_verdict_cf(sheet_xml, sqref, dxf_red, dxf_blue):
     return sheet_xml.replace("<pageMargins", block + "<pageMargins", 1)
 
 
+# ---------------- 클라우드(AWS/Azure/GCP) 양식 ----------------
+#   서버 보고서와 달리 차트가 없는 단일 시트라 openpyxl 로 직접 채운다.
+CLOUD_SPECS = {
+    "AWS": {"template": os.path.join(SCRIPT_DIR, "보고서_양식_AWS.xlsx"),
+            "sheet": "진단 결과(AWS)", "first_row": 4, "code_col": 2,
+            "result_col": 7, "detail_col": 8, "resource_col": 9},
+    "AZURE": {"template": os.path.join(SCRIPT_DIR, "보고서_양식_Azure.xlsx"),
+              "sheet": "진단 결과(Azure)", "first_row": 4, "code_col": 2,
+              "result_col": 7, "detail_col": 8, "resource_col": 9},
+    "GCP": {"template": os.path.join(SCRIPT_DIR, "보고서_양식_GCP.xlsx"),
+            "sheet": "진단 결과(GCP)", "first_row": 4, "code_col": 2,
+            "result_col": 7, "detail_col": 8, "resource_col": 9},
+}
+
+
+def _cloud_spec(app):
+    label = (getattr(app, "os_label", "") or "").strip().upper()
+    return CLOUD_SPECS.get(label)
+
+
 # ---------------- 진입점 ----------------
 def _pick_spec(app):
     fam = getattr(app, "family", "") or app.os_choice.get()
     return REPORT_SPECS.get(fam, REPORT_SPECS["linux"])
+
+
+def _fill_cloud_template(app, path, cspec):
+    """클라우드 진단 결과를 단일 시트 양식(G/H/I 열)에 채운다(차트 없음 → openpyxl 직접)."""
+    wb = openpyxl.load_workbook(cspec["template"])
+    ws = wb[cspec["sheet"]]
+    by_code = {str(r.get("code", "")): r for r in app.results}
+    row_of = {}
+    for row in range(cspec["first_row"], ws.max_row + 1):
+        code = ws.cell(row=row, column=cspec["code_col"]).value
+        if code is not None:
+            row_of[str(code).strip()] = row
+
+    red = Font(color="FFFF0000", bold=True)
+    blue = Font(color="FF0070C0", bold=True)
+    black = Font(color="FF000000")
+    for code, r in by_code.items():
+        row = row_of.get(code)
+        if not row:
+            continue
+        raw = r.get("final") or r.get("status", "")
+        verdict = REPORT_STATUS.get(raw, raw)
+        note = (r.get("note") or "").strip()
+        detail = " / ".join(r.get("evidence", []))
+        if note:
+            detail = f"{detail}  [검증자: {note}]" if detail else f"[검증자: {note}]"
+        gc = ws.cell(row=row, column=cspec["result_col"], value=verdict)
+        gc.font = red if verdict == "취약" else blue if verdict == MANUAL_LABEL else black
+        ws.cell(row=row, column=cspec["detail_col"], value=detail)
+        ws.cell(row=row, column=cspec["resource_col"],
+                value=" / ".join(r.get("resources", []))[:32000])
+    wb.save(path)
 
 
 def export(app):
@@ -162,6 +214,29 @@ def export(app):
     if not app.results:
         messagebox.showwarning("데이터 없음", "먼저 점검을 실행하세요.")
         return
+
+    # 클라우드 진단 결과
+    if (getattr(app, "family", "") or "").lower() == "cloud":
+        cspec = _cloud_spec(app)
+        default = f"클라우드_{app.os_label}_{app.host_label or 'result'}.xlsx".replace(":", "_")
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", initialfile=default,
+                                            filetypes=[("Excel", "*.xlsx")])
+        if not path:
+            return
+        if cspec and os.path.exists(cspec["template"]):
+            try:
+                _fill_cloud_template(app, path, cspec)
+                app.log(f"✔ 엑셀 저장({app.os_label} 클라우드 양식): {path}")
+                messagebox.showinfo("저장 완료", f"{app.os_label} 진단 양식으로 저장했습니다:\n{path}")
+                return
+            except PermissionError:
+                messagebox.showerror("저장 실패", f"파일이 열려 있으면 닫고 다시 저장하세요:\n{path}")
+                return
+            except Exception as e:
+                app.log(f"⚠ 클라우드 양식 채우기 실패({e}) → 기본 형식으로 저장합니다.")
+        _export_plain(app, path)
+        return
+
     spec = _pick_spec(app)
     default = f"kisa_{spec['label']}_{app.host_label or 'result'}.xlsx".replace(":", "_")
     path = filedialog.asksaveasfilename(defaultextension=".xlsx",
