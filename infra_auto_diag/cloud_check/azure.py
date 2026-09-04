@@ -242,7 +242,7 @@ def _network(rep, ctx):
             rep.good("3.2", f"Bastion={bastions or '없음'} / VNet GW={vpngw or '없음'} 존재 "
                             "(대상 서브넷 적용 여부는 추가 확인)")
         else:
-            rep.man("3.2", "Bastion/VPN 게이트웨이가 확인되지 않음 → 내부 리소스 접근통제 수단 확인")
+            rep.vuln("3.2", "내부 리소스 접근통제 수단(Bastion / VPN 게이트웨이)이 없음")
     safe(rep, "3.2", c32)
 
     # 3.3 NSG ANY
@@ -301,8 +301,13 @@ def _network(rep, ctx):
             else rep.good("3.5", f"Azure Firewall {len(fws)}개에 ANY 허용 규칙 없음")
     safe(rep, "3.5", c35)
 
-    # 3.6 방화벽 불필요 — 인터뷰
-    rep.man("3.6", "Azure Firewall 정책 내 불필요/미사용 규칙 존재 여부 검토")
+    # 3.6 방화벽 불필요 — 방화벽 있을 때만 인터뷰, 없으면 N/A
+    def c36():
+        if not list(net().azure_firewalls.list_all()):
+            rep.na("3.6", "Azure Firewall 없음")
+        else:
+            rep.man("3.6", "Azure Firewall 정책 내 불필요/미사용 규칙 존재 여부 검토")
+    safe(rep, "3.6", c36)
 
     # 3.7 NAT 게이트웨이 서브넷
     def c37():
@@ -348,19 +353,22 @@ def _network(rep, ctx):
 def _operation(rep, ctx):
     cred, sub = ctx["cred"], ctx["sub"]
 
-    # 4.1 DB 암호화(TDE) — 인터뷰/부분
+    def _res_of_type(*types):
+        """구독 내 특정 유형 리소스 목록 (선택적 SDK 없이도 존재 여부 확인용)."""
+        from azure.mgmt.resource import ResourceManagementClient
+        rc = ResourceManagementClient(cred, sub)
+        flt = " or ".join(f"resourceType eq '{t}'" for t in types)
+        return list(rc.resources.list(filter=flt))
+
+    # 4.1 DB 암호화(TDE)
     def c41():
-        try:
-            from azure.mgmt.sql import SqlManagementClient
-        except ImportError:
-            rep.man("4.1", "azure-mgmt-sql 미설치 → SQL TDE 수동 확인")
+        dbs = _res_of_type("Microsoft.Sql/servers", "Microsoft.DBforMySQL/flexibleServers",
+                           "Microsoft.DBforPostgreSQL/flexibleServers")
+        if not dbs:
+            rep.na("4.1", "Azure SQL / 관리형 DB 없음")
             return
-        cli = SqlManagementClient(cred, sub)
-        servers = list(cli.servers.list())
-        if not servers:
-            rep.na("4.1", "Azure SQL 서버 없음")
-            return
-        rep.man("4.1", [f"Azure SQL 서버 {len(servers)}개 — TDE(투명한 데이터 암호화) 활성 여부 확인 필요"])
+        rep.man("4.1", [f"관리형 DB {len(dbs)}개 ({', '.join(d.name for d in dbs[:20])}) — "
+                        "TDE/데이터 암호화 활성 여부 확인 필요"], [d.name for d in dbs])
     safe(rep, "4.1", c41)
 
     # 4.2 스토리지 암호화 — 기본 활성. CMK 사용 여부
@@ -397,17 +405,12 @@ def _operation(rep, ctx):
 
     # 4.5 Key Vault 회전 정책
     def c45():
-        try:
-            from azure.mgmt.keyvault import KeyVaultManagementClient
-        except ImportError:
-            rep.man("4.5", "azure-mgmt-keyvault 미설치 → 키 회전 정책 수동 확인")
-            return
-        vaults = list(KeyVaultManagementClient(cred, sub).vaults.list())
+        vaults = _res_of_type("Microsoft.KeyVault/vaults")
         if not vaults:
             rep.na("4.5", "Key Vault 없음")
             return
-        rep.man("4.5", [f"Key Vault {len(vaults)}개 — 키 회전 정책이 90일 이내인지 확인 필요 "
-                        "(키 회전 정책은 데이터 평면 권한 필요)"])
+        rep.man("4.5", [f"Key Vault {len(vaults)}개 — 사용자 고유키 회전 정책이 90일 이내인지 확인 "
+                        "(키 회전 정책은 데이터 평면 권한 필요)"], [v.name for v in vaults])
     safe(rep, "4.5", c45)
 
     # 4.6 AD 감사 로그 — 인터뷰
@@ -467,17 +470,14 @@ def _operation(rep, ctx):
 
     # 4.11 백업
     def c411():
-        try:
-            from azure.mgmt.recoveryservices import RecoveryServicesClient
-        except ImportError:
-            rep.man("4.11", "azure-mgmt-recoveryservices 미설치 → 백업(Recovery Services Vault) 수동 확인")
-            return
-        vaults = list(RecoveryServicesClient(cred, sub).vaults.list_by_subscription_id())
+        vaults = _res_of_type("Microsoft.RecoveryServices/vaults",
+                              "Microsoft.DataProtection/backupVaults")
         if vaults:
-            rep.man("4.11", [f"Recovery Services 자격 증명 모음 {len(vaults)}개 존재 — "
-                             "백업 정책/주기 적정성은 인터뷰 확인"])
+            rep.man("4.11", [f"백업 자격 증명 모음 {len(vaults)}개 존재 "
+                             f"({', '.join(v.name for v in vaults[:20])}) — "
+                             "보호 항목/정책/주기 적정성은 인터뷰 확인"], [v.name for v in vaults])
         else:
-            rep.vuln("4.11", "Recovery Services Vault 등 백업 설정이 확인되지 않음")
+            rep.vuln("4.11", "Recovery Services / Backup Vault 등 백업 설정이 확인되지 않음")
     safe(rep, "4.11", c411)
 
     # 4.12 / 4.13 AKS

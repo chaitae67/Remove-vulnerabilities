@@ -365,10 +365,29 @@ def _permission_mgmt(rep, sess, iam):
             rep.good("2.1", "EC2 인스턴스 역할에 관리자/와일드카드 정책 없음")
     safe(rep, "2.1", c21)
 
-    # 2.2 / 2.3 — 역할·정책 전수 검토는 인터뷰
+    # 2.2 / 2.3 — 서비스 역할 전반에 과도 권한(AdministratorAccess / Action*/Resource*)
     def c2x(code, label):
-        cnt = len(iam.list_roles()["Roles"])
-        rep.man(code, [f"IAM 역할 {cnt}개 — {label} 권한이 서비스 역할에 맞게 최소화됐는지 정책 검토 필요"])
+        over = []
+        for page in iam.get_paginator("list_roles").paginate():
+            for role in page["Roles"]:
+                nm = role["RoleName"]
+                if nm.startswith("AWSServiceRoleFor"):
+                    continue
+                attached = [p["PolicyArn"] for p in iam.list_attached_role_policies(
+                    RoleName=nm)["AttachedPolicies"]]
+                if any(a in _ADMIN_POLICY_ARNS for a in attached):
+                    over.append(f"{nm} (AdministratorAccess)")
+                    continue
+                for pol in iam.list_role_policies(RoleName=nm)["PolicyNames"]:
+                    doc = iam.get_role_policy(RoleName=nm, PolicyName=pol)["PolicyDocument"]
+                    if _policy_is_admin(doc):
+                        over.append(f"{nm} (인라인 {pol}: Action*/Resource*)")
+                        break
+        if over:
+            rep.vuln(code, [f"{label} 관점 — 과도한 권한을 가진 IAM 역할:"] + over, over)
+        else:
+            rep.man(code, [f"{label} 권한이 서비스 역할에 맞게 최소화됐는지 정책 검토 필요 "
+                           "(관리자/와일드카드 역할은 없음)"])
     safe(rep, "2.2", lambda: c2x("2.2", "네트워크 서비스"))
     safe(rep, "2.3", lambda: c2x("2.3", "기타 서비스"))
 
@@ -790,7 +809,8 @@ def _operation_mgmt(rep, sess):
                 if _is_denied(_e):
                     raise
         if no_log:
-            rep.man("4.10", ["서버 액세스 로깅 미설정 버킷(로그 보관용 버킷은 필수):"] + no_log, no_log)
+            rep.vuln("4.10", [f"서버 액세스 로깅 미설정 버킷 {len(no_log)}/{len(buckets)}: "
+                              + ", ".join(no_log[:30])], no_log)
         else:
             rep.good("4.10", f"S3 버킷 {len(buckets)}개 모두 서버 액세스 로깅 설정")
     safe(rep, "4.10", c410)
