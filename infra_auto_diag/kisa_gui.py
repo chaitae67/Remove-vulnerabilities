@@ -483,8 +483,8 @@ class App:
         for c in ("code", "imp", "title", "auto", "final", "evidence"):
             self.tree.heading(c, text=self._col_title[c])
         for idx, r in enumerate(self.results):
-            # 최종판정 초기값 = 자동판정 (N/A 는 양호로)
-            r.setdefault("final", "양호" if r.get("status") == "N/A" else r.get("status", ""))
+            # 최종판정 초기값 = 자동판정을 보고서 용어로 (N/A→양호, 수동확인→인터뷰 필요)
+            r.setdefault("final", REPORT_STATUS.get(r.get("status", ""), r.get("status", "")))
             r.setdefault("note", "")                      # 검증자 비고
             self._insert_row(idx, r)
         self._update_summary()
@@ -524,18 +524,20 @@ class App:
 
     def _insert_row(self, idx, r):
         fin = r.get("final", r.get("status", ""))
+        auto = REPORT_STATUS.get(r.get("status", ""), r.get("status", ""))  # 표시용(수동확인→인터뷰 필요)
         self.tree.insert("", "end", iid=str(idx),
                          values=(r.get("code", ""), r.get("importance", ""),
-                                 r.get("title", ""), r.get("status", ""), fin,
+                                 r.get("title", ""), auto, fin,
                                  " / ".join(r.get("evidence", []))),
                          tags=(fin,))
 
     def _update_row(self, idx):
         r = self.results[idx]
         fin = r.get("final", r.get("status", ""))
+        auto = REPORT_STATUS.get(r.get("status", ""), r.get("status", ""))
         self.tree.item(str(idx),
                        values=(r.get("code", ""), r.get("importance", ""),
-                               r.get("title", ""), r.get("status", ""), fin,
+                               r.get("title", ""), auto, fin,
                                " / ".join(r.get("evidence", []))),
                        tags=(fin,))
 

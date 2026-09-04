@@ -118,12 +118,52 @@ def _iam_policy(ctx):
 def _account(rep, ctx):
     cred, project = ctx["cred"], ctx["project"]
 
-    # 1.1~1.4, 1.9 : Google 계정 / Cloud ID → Admin SDK 필요
-    rep.man("1.1", "IAM 정책 상 사용자/서비스계정 권한은 2.x 에서 점검. 불필요 Google 계정은 인터뷰 확인")
-    rep.man("1.2", "Cloud ID 계정 정책(조직 정책)은 Admin Console 권한 필요 → 수동 확인")
-    rep.man("1.3", "Cloud ID 패스워드 정책(길이/복잡성/만료)은 Admin Console 권한 필요 → 수동 확인")
-    rep.man("1.4", "Identity Platform 사용자 관리는 해당 서비스 사용 시 콘솔에서 확인")
-    rep.man("1.9", "MFA(2단계 인증) 강제 여부는 Admin Console(조직) 권한 필요 → 수동 확인")
+    # 1.1 사용자 계정 관리 — 프로젝트 IAM 정책으로 광범위 권한 사용자 수 확인
+    def c11():
+        pol = _iam_policy(ctx)
+        owners, all_users, ext = [], set(), []
+        for b in pol.get("bindings", []):
+            for m in b.get("members", []):
+                if m.startswith("user:"):
+                    u = m.split(":", 1)[1]
+                    all_users.add(u)
+                    if b["role"] in ("roles/owner", "roles/editor") or b["role"].endswith("Admin"):
+                        owners.append(f"{u} ({b['role'].split('/')[-1]})")
+                if m.startswith("group:") or m == "allUsers" or m == "allAuthenticatedUsers":
+                    ext.append(m)
+        ev = [f"IAM 사용자 {len(all_users)}명, 광범위 권한(owner/editor/*Admin) 보유: "
+              + (", ".join(sorted(set(owners))) if owners else "없음"),
+              "불필요 계정(협력사/테스트/퇴직자) 존재 여부는 담당자 인터뷰로 확인"]
+        if ext:
+            ev.append(f"⚠ 광범위 대상 바인딩: {', '.join(sorted(set(ext)))}")
+        if len(set(owners)) >= 2 or ext:
+            rep.vuln("1.1", ev, sorted(set(owners)))
+        else:
+            rep.man("1.1", ev, sorted(set(owners)))
+    safe(rep, "1.1", c11)
+
+    # 1.2~1.4, 1.9 : Cloud ID / Google Workspace 조직 설정 → 프로젝트 서비스계정으로는 조회 불가
+    _WS = ("이 항목은 Google Workspace/Cloud ID 조직 관리 설정이라 프로젝트 권한(서비스계정)으로는 "
+           "조회할 수 없습니다. admin.google.com(관리 콘솔)에서 직접 확인 → 인터뷰")
+    rep.man("1.2", "Cloud ID 계정 정책(조직 단위/역할 위임). " + _WS)
+    rep.man("1.3", "Cloud ID 패스워드 정책(길이/복잡성/만료/재사용). " + _WS)
+    rep.man("1.9", "2단계 인증(MFA) 강제 정책. " + _WS)
+
+    # 1.4 Identity Platform — 서비스 구성 존재 여부는 확인 가능
+    def c14():
+        try:
+            it = _svc(cred, "identitytoolkit", "v2")
+            cfg = it.projects().getConfig(name=f"projects/{project}/config").execute()
+        except Exception as e:
+            if _api_err(e) in ("disabled", "notfound"):
+                rep.na("1.4", "Identity Platform(Identity Toolkit) 미사용")
+                return
+            rep.man("1.4", f"Identity Platform 조회 실패: {e}")
+            return
+        signin = cfg.get("signIn", {})
+        rep.man("1.4", [f"Identity Platform 사용 중 (이메일 로그인={signin.get('email', {}).get('enabled')}, "
+                        f"익명={signin.get('anonymous', {}).get('enabled')}) — 사용자 계정/공급자 적정성 검토"])
+    safe(rep, "1.4", c14)
 
     # 1.5 API 활성화 및 사용 주기 (SA 키 오래된 것)
     def c15():
