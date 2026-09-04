@@ -33,6 +33,34 @@ def _svc(cred, name, version):
     return build(name, version, credentials=cred, cache_discovery=False)
 
 
+def _api_err(e):
+    """googleapiclient HttpError 를 분류: 'disabled' / 'denied' / 'notfound' / 'other'."""
+    s = f"{type(e).__name__} {e}"
+    if "SERVICE_DISABLED" in s or "has not been used in project" in s or "it is disabled" in s:
+        return "disabled"
+    if "PERMISSION_DENIED" in s or "does not have permission" in s or "403" in s and "disabled" not in s:
+        return "denied"
+    if "404" in s or "NOT_FOUND" in s:
+        return "notfound"
+    return "other"
+
+
+def _resolve(rep, codes, e, service_label):
+    """조회 실패 시 코드들을 상황에 맞게 채운다."""
+    kind = _api_err(e)
+    for c in codes:
+        if rep.done(c):
+            continue
+        if kind == "disabled":
+            rep.na(c, f"{service_label} API 가 프로젝트에 비활성 → 미사용으로 간주")
+        elif kind == "denied":
+            rep.man(c, f"{service_label} 조회 권한 부족 (roles/viewer 필요) → 수동 확인")
+        elif kind == "notfound":
+            rep.na(c, f"{service_label} 리소스 없음")
+        else:
+            rep.man(c, f"{service_label} 조회 실패: {e}")
+
+
 def _page(coll, key, **kw):
     """discovery list 컬렉션을 nextPageToken 따라 모두 모은다.
 
@@ -567,9 +595,7 @@ def _gke(rep, ctx, codes):
         clusters = gke.projects().locations().clusters().list(
             parent=f"projects/{project}/locations/-").execute().get("clusters", [])
     except Exception as e:
-        for c in codes:
-            if not rep.done(c):
-                rep.man(c, f"GKE 조회 실패: {e}")
+        _resolve(rep, codes, e, "Kubernetes Engine(GKE)")
         return
     if not clusters:
         for c in codes:
