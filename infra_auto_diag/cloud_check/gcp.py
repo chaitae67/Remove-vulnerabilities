@@ -172,11 +172,12 @@ def _account(rep, ctx):
         iam = _svc(cred, "iam", "v1")
         sas = iam.projects().serviceAccounts().list(
             name=f"projects/{project}").execute().get("accounts", [])
-        old = []
+        old, total_keys = [], 0
         now = datetime.datetime.now(datetime.timezone.utc)
         for sa in sas:
             keys = iam.projects().serviceAccounts().keys().list(
                 name=sa["name"], keyTypes="USER_MANAGED").execute().get("keys", [])
+            total_keys += len(keys)
             for k in keys:
                 vb = k.get("validAfterTime", "")
                 try:
@@ -185,11 +186,13 @@ def _account(rep, ctx):
                         old.append(f"{sa['email']} 키 {age}일")
                 except Exception:
                     pass
-        ev = [f"활성 API {len(enabled)}개, 사용자 관리 서비스계정 {len(sas)}개"]
+        ev = [f"활성 API {len(enabled)}개, 사용자 관리 서비스계정 {len(sas)}개, 사용자 관리 키 {total_keys}개"]
         if old:
             rep.vuln("1.5", ev + ["90일 초과 서비스계정 키:"] + old, old)
+        elif total_keys == 0:
+            rep.na("1.5", ev + ["다운로드된 사용자 관리 서비스계정 키가 없음(권장 상태)"])
         else:
-            rep.good("1.5", ev + ["90일 초과 사용자 관리 서비스계정 키 없음"])
+            rep.good("1.5", ev + ["90일 초과 서비스계정 키 없음"])
     safe(rep, "1.5", c15)
 
     # 1.6 SSH 키 사용 관리 (OS Login / block-project-ssh-keys)
@@ -208,22 +211,29 @@ def _account(rep, ctx):
             rep.vuln("1.6", "OS Login 미사용 + 프로젝트 SSH 키 차단 안 됨 → 키 관리 주체 불명확")
     safe(rep, "1.6", c16)
 
-    # 1.7 메타데이터 관리 (serial-port, oslogin, block ssh)
+    # 1.7 메타데이터 관리 (프로젝트 OS Login / 직렬포트 / 프로젝트 SSH 키 차단)
     def c17():
         comp = _svc(cred, "compute", "v1")
-        bad_inst = []
+        pmeta = {m["key"]: m["value"] for m in
+                 comp.projects().get(project=project).execute().get(
+                     "commonInstanceMetadata", {}).get("items", [])}
+        bad = []
+        if pmeta.get("enable-oslogin", "").lower() != "true":
+            bad.append("프로젝트 enable-oslogin 미설정")
         agg = comp.instances().aggregatedList(project=project).execute().get("items", {})
         insts = [i for z in agg.values() for i in z.get("instances", [])]
         for i in insts:
             m = {x["key"]: x["value"] for x in i.get("metadata", {}).get("items", [])}
             if m.get("serial-port-enable", "").lower() in ("true", "1"):
-                bad_inst.append(f"{i['name']} (직렬 포트 활성)")
-        if not insts:
-            rep.na("1.7", "Compute 인스턴스 없음")
-        elif bad_inst:
-            rep.vuln("1.7", ["위험 메타데이터 설정:"] + bad_inst, bad_inst)
+                bad.append(f"{i['name']} 직렬 포트 활성")
+            if m.get("enable-oslogin", pmeta.get("enable-oslogin", "")).lower() != "true":
+                bad.append(f"{i['name']} OS Login 미적용")
+        if bad:
+            rep.vuln("1.7", ["메타데이터 보안 미흡:"] + sorted(set(bad)), sorted(set(bad)))
+        elif not insts:
+            rep.good("1.7", "프로젝트 enable-oslogin=TRUE, 인스턴스 없음")
         else:
-            rep.good("1.7", f"인스턴스 {len(insts)}개 직렬 포트 비활성 등 메타데이터 안전")
+            rep.good("1.7", f"프로젝트 OS Login 활성 + 인스턴스 {len(insts)}개 직렬포트 비활성/OS Login 적용")
     safe(rep, "1.7", c17)
 
     # 1.8 SQL 계정 관리
@@ -311,10 +321,18 @@ def _network(rep, ctx):
             pols = comp.securityPolicies().list(project=project).execute().get("items", [])
         except Exception:
             pols = []
+        # 외부 HTTP(S) LB 가 있는데 Cloud Armor 가 없으면 취약, LB 자체가 없으면 N/A
+        try:
+            proxies = comp.targetHttpsProxies().list(project=project).execute().get("items", [])
+            proxies += comp.targetHttpProxies().list(project=project).execute().get("items", [])
+        except Exception:
+            proxies = []
         if pols:
-            rep.good("3.3", f"Cloud Armor 보안 정책 {len(pols)}개 존재")
+            rep.good("3.3", f"Cloud Armor 보안 정책 {len(pols)}개 적용")
+        elif proxies:
+            rep.vuln("3.3", f"외부 로드밸런서({len(proxies)}개)가 있으나 Cloud Armor(WAF) 정책이 없음")
         else:
-            rep.man("3.3", "Cloud Armor(애플리케이션 방화벽) 정책이 확인되지 않음 → WAF 사용 여부 확인")
+            rep.na("3.3", "외부 로드밸런서 없음 → 애플리케이션 방화벽 대상 아님")
     safe(rep, "3.3", c33)
 
     # 3.4 방화벽 ANY
@@ -418,14 +436,16 @@ def _network(rep, ctx):
             iamcfg = b.get("iamConfiguration", {})
             if not iamcfg.get("uniformBucketLevelAccess", {}).get("enabled"):
                 no_ubla.append(name)
-            if iamcfg.get("publicAccessPrevention") != "enforced":
+            # inherited(기본) 은 조직 정책에 위임된 상태 → 명시적으로 꺼진 경우만 취약
+            if iamcfg.get("publicAccessPrevention") not in ("enforced", "inherited"):
                 no_pap.append(name)
         rep.vuln("3.12", "퍼블릭(allUsers/allAuthenticatedUsers) 버킷: " + ", ".join(public), public) \
             if public else rep.good("3.12", f"버킷 {len(buckets)}개 모두 퍼블릭 접근 없음")
         rep.vuln("3.10", "균일 버킷 수준 액세스 미설정(세분화 ACL): " + ", ".join(no_ubla), no_ubla) \
             if no_ubla else rep.good("3.10", "모든 버킷 균일 버킷 수준 액세스(UBLA) 설정")
-        rep.vuln("3.11", "공개 액세스 방지(enforced) 미설정: " + ", ".join(no_pap), no_pap) \
-            if no_pap else rep.good("3.11", "모든 버킷 공개 액세스 방지 enforced")
+        rep.vuln("3.11", "공개 액세스 방지가 명시적으로 해제됨: " + ", ".join(no_pap), no_pap) \
+            if no_pap else rep.good("3.11",
+                                    f"버킷 {len(buckets)}개 공개 액세스 방지 enforced/inherited")
     safe(rep, "3.10", storage_check)
 
     # 3.13 GKE Pod 보안
