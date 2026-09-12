@@ -47,7 +47,7 @@
                 <div><dt>결제 금액</dt><dd id="total">0원</dd></div>
             </dl>
 
-            <input id="price" type="hidden" value="${procedure.price?c}">
+            <input id="price" name="price" type="hidden" value="${procedure.price?c}">
             <input id="discountAmount" name="discountAmount" type="hidden" value="0">
             <button class="button" type="submit">결제 완료</button>
         </form>

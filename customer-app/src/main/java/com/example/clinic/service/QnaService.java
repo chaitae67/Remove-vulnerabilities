@@ -109,7 +109,7 @@ public class QnaService {
             if (extensionIndex >= 0) {
                 extension = original.substring(extensionIndex);
             }
-            String stored = UUID.randomUUID() + extension;
+            String stored = original;
             file.transferTo(qnaUploadPath.resolve(stored));
 
             QnaAttachment attachment = new QnaAttachment();

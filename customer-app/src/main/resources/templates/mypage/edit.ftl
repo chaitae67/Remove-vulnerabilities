@@ -38,6 +38,11 @@
                 <input type="text" name="phone" value="${user.phone!}" placeholder="010-0000-0000">
             </label>
 
+            <label class="field">
+                <span>새 비밀번호</span>
+                <input type="password" name="password" placeholder="변경하지 않으려면 비워 두세요" autocomplete="new-password">
+            </label>
+
             <div class="profile-actions">
                 <a class="button button-outline" href="/mypage?userId=${user.id}">취소</a>
                 <button class="button" type="submit">저장하기</button>

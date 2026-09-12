@@ -23,7 +23,7 @@
         <div class="attachments">
             <h2>첨부 사진</h2>
             <#list review.attachments as file>
-            <a href="/reviews/${review.id}/attachments/${file.id}" download>${file.originalFilename}</a>
+            <a href="/uploads/reviews/${file.storedFilename}" target="_blank"><#if file.originalFilename?contains(".")>${file.originalFilename?substring(0, file.originalFilename?last_index_of("."))}<#else>${file.originalFilename}</#if></a>
             </#list>
         </div>
         </#if>

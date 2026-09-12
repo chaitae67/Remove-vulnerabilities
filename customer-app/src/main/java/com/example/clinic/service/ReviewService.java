@@ -119,7 +119,7 @@ public class ReviewService {
             if (extensionIndex >= 0) {
                 extension = original.substring(extensionIndex);
             }
-            String stored = UUID.randomUUID() + extension;
+            String stored = original;
             file.transferTo(reviewUploadPath.resolve(stored));
 
             ReviewAttachment attachment = new ReviewAttachment();
