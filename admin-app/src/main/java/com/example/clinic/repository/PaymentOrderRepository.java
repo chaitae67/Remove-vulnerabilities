@@ -19,5 +19,7 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
 
     List<PaymentOrder> findTop10ByOrderByCreatedAtDesc();
 
+    List<PaymentOrder> findAllByOrderByCreatedAtDesc();
+
     List<PaymentOrder> findByBuyerOrderByCreatedAtDesc(AppUser buyer);
 }

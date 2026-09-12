@@ -27,9 +27,42 @@ public class ProcedureService {
         return procedureRepository.findByActiveTrueOrderByIdAsc();
     }
 
+    public List<ProcedureProduct> findAllProcedures() {
+        return procedureRepository.findAllByOrderByIdAsc();
+    }
+
     public ProcedureProduct findById(Long id) {
         return procedureRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("시술 상품을 찾을 수 없습니다."));
+    }
+
+    /**
+     * 시술/상담 패키지의 가격을 포함한 기본 정보를 수정한다.
+     */
+    @Transactional
+    public ProcedureProduct update(
+        Long id,
+        String name,
+        String category,
+        String summary,
+        String description,
+        BigDecimal price,
+        boolean active
+    ) {
+        ProcedureProduct product = findById(id);
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("시술명을 입력해 주세요.");
+        }
+        if (price == null || price.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("가격은 0원 이상이어야 합니다.");
+        }
+        product.setName(name.trim());
+        product.setCategory(category == null ? "" : category.trim());
+        product.setSummary(summary == null ? "" : summary.trim());
+        product.setDescription(description == null ? "" : description.trim());
+        product.setPrice(price);
+        product.setActive(active);
+        return procedureRepository.save(product);
     }
 
     @Transactional

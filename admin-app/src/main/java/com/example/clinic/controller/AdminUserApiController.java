@@ -9,6 +9,7 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
 @Controller
@@ -21,12 +22,14 @@ public class AdminUserApiController {
     }
 
     @GetMapping("/admin/users")
-    public String usersPage(Model model) {
-        List<AppUser> users = userService.findAllUsers();
-        model.addAttribute("users", users);
-        model.addAttribute("adminCount", users.stream().filter(user -> user.getRole() == Role.ADMIN).count());
-        model.addAttribute("userCount", users.stream().filter(user -> user.getRole() == Role.USER).count());
-        model.addAttribute("totalPointBalance", users.stream().mapToInt(AppUser::getPointBalance).sum());
+    public String usersPage(@RequestParam(required = false) String keyword, Model model) {
+        List<AppUser> allUsers = userService.findAllUsers();
+        model.addAttribute("users", userService.searchUsers(keyword));
+        model.addAttribute("keyword", keyword);
+        model.addAttribute("totalCount", allUsers.size());
+        model.addAttribute("adminCount", allUsers.stream().filter(user -> user.getRole() == Role.ADMIN).count());
+        model.addAttribute("userCount", allUsers.stream().filter(user -> user.getRole() == Role.USER).count());
+        model.addAttribute("totalPointBalance", allUsers.stream().mapToInt(AppUser::getPointBalance).sum());
         return "admin/users";
     }
 

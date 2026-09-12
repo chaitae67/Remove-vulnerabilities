@@ -31,6 +31,9 @@ public class QuickConsultation {
     @Column(length = 1000)
     private String message;
 
+    @Column(length = 1000)
+    private String adminNote;
+
     private LocalDate preferredDate;
 
     @Column(nullable = false)
@@ -86,6 +89,14 @@ public class QuickConsultation {
 
     public void setMessage(String message) {
         this.message = message;
+    }
+
+    public String getAdminNote() {
+        return adminNote;
+    }
+
+    public void setAdminNote(String adminNote) {
+        this.adminNote = adminNote;
     }
 
     public LocalDate getPreferredDate() { return preferredDate; }
