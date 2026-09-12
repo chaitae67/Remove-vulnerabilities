@@ -20,7 +20,7 @@
             <input id="qna-files" name="files" type="file" multiple>
             <label class="check"><input type="checkbox" name="privatePost" value="true" <#if formPrivatePost!false>checked</#if>> 비공개 상담으로 등록</label>
             <div class="form-actions">
-                <button id="qna-preview-button" class="button secondary" type="button">미리보기</button>
+                <button id="qna-preview-button" class="button secondary" type="submit" formaction="/qna/preview" formenctype="application/x-www-form-urlencoded">미리보기</button>
                 <button class="button" type="submit">등록하기</button>
             </div>
         </form>

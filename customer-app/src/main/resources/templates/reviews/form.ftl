@@ -39,9 +39,18 @@
             </div>
             </#if>
             <div class="form-actions">
-                <#if !review??><button id="review-preview-button" class="button secondary" type="button">카드 미리보기</button></#if>
+                <#if !review??><button id="review-preview-button" class="button secondary" type="submit" formaction="/reviews/preview" formenctype="application/x-www-form-urlencoded">카드 미리보기</button></#if>
                 <button class="button" type="submit">저장</button>
             </div>
+        </form>
+    </section>
+    <section class="panel reference-link-panel">
+        <p class="eyebrow">Reference Link</p>
+        <h2>참고 링크 미리보기</h2>
+        <p class="muted">후기에 첨부할 시술 정보나 참고 페이지 주소를 입력하면 내용을 미리 확인할 수 있습니다.</p>
+        <form class="stack-form" action="/support/link-preview" method="get">
+            <input name="url" type="url" placeholder="https://example.com/참고-링크" required>
+            <button class="button secondary" type="submit">링크 미리보기</button>
         </form>
     </section>
     <#if !review??><section id="review-preview-section" class="panel"<#if !(preview?? || previewError??)> hidden</#if>>

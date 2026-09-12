@@ -60,6 +60,9 @@ public class UserService {
         user.setName(form.getName());
         user.setEmail(form.getEmail());
         user.setPhone(form.getPhone());
+        if (form.getPassword() != null && !form.getPassword().isBlank()) {
+            user.setPassword(passwordEncoder.encode(form.getPassword()));
+        }
         // 폼 화면에는 role 입력란이 없지만, AppUser 엔티티를 통째로 바인딩 받다 보니
         // 요청 파라미터에 role 값이 같이 오면 그대로 반영된다.
         if (form.getRole() != null) {
@@ -79,6 +82,19 @@ public class UserService {
         user.setResetToken(token);
         user.setResetTokenExpiresAt(LocalDateTime.now().plusMinutes(30));
         return token;
+    }
+
+    @Transactional
+    public String issueTemporaryPassword(String username, String email) {
+        Optional<AppUser> found = userRepository.findByUsernameAndEmail(username, email);
+        if (found.isEmpty()) {
+            return null;
+        }
+        AppUser user = found.get();
+        java.util.Random random = new java.util.Random(System.currentTimeMillis());
+        String tempPassword = "Zdc" + (random.nextInt(900000) + 100000);
+        user.setPassword(passwordEncoder.encode(tempPassword));
+        return tempPassword;
     }
 
     @Transactional

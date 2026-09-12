@@ -430,7 +430,14 @@ class App:
 
             self.log(f"[2/4] 점검 스크립트 업로드… ({os.path.basename(p['script'])} → {r_script})")
             sftp = client.open_sftp()
-            sftp.put(p["script"], r_script)
+            if p["osname"] == "windows":
+                sftp.put(p["script"], r_script)
+            else:
+                # Windows에서 편집·저장한 .sh 는 CRLF 가 섞여 원격 bash 가 깨진다
+                # (line X: $'\r': command not found / syntax error). LF 로 정규화해 업로드.
+                with open(p["script"], "rb") as f:
+                    body = f.read().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                sftp.putfo(io.BytesIO(body), r_script)
 
             self.log("[3/4] 원격 점검 실행 (수 초~수십 초 소요)…")
             cmd = build_run_cmd(p["osname"], r_script, r_json, p["sudo"])
