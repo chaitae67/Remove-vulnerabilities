@@ -17,6 +17,19 @@
     </section>
 
     <section class="content-band">
+        <div class="panel">
+            <h2>진료기록 / 동의서 업로드</h2>
+            <form action="/admin/records/upload" method="post" enctype="multipart/form-data" class="stack-form">
+                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
+                <input type="file" name="file" required>
+                <div class="form-actions">
+                    <button class="button" type="submit">업로드</button>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <section class="content-band">
         <div class="section-head">
             <h2>보관 문서</h2>
             <span class="muted">${files?size}건</span>

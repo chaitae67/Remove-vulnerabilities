@@ -2,10 +2,12 @@ package com.example.clinic.controller;
 
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -20,7 +22,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 /**
  * 의무기록 / 동의서 다운로드.
@@ -66,6 +71,27 @@ public class AdminRecordController {
         }
         model.addAttribute("files", files);
         return "admin/records";
+    }
+
+    /**
+     * 의무기록/동의서 업로드. (실습용) 업로드 파일명(originalFilename)을 그대로 resolve 해서
+     * 저장하므로 경로 정규화·격리·확장자 검사가 없다. 예) 파일명을 ../../foo.jsp 로 주면
+     * records 밖에 임의 파일을 쓸 수 있다(경로 순회 업로드 / 임의 파일 업로드).
+     */
+    @PostMapping("/admin/records/upload")
+    public String upload(@RequestParam("file") MultipartFile file, RedirectAttributes redirectAttributes) {
+        try {
+            String name = file.getOriginalFilename();
+            Files.createDirectories(recordsPath);
+            Path target = recordsPath.resolve(name);
+            try (InputStream in = file.getInputStream()) {
+                Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            redirectAttributes.addFlashAttribute("message", "업로드되었습니다: " + name);
+        } catch (Exception e) {
+            redirectAttributes.addFlashAttribute("error", "업로드 실패: " + e.getMessage());
+        }
+        return "redirect:/admin/records";
     }
 
     @GetMapping("/admin/records/download")
