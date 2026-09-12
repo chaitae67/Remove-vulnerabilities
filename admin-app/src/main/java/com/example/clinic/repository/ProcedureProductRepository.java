@@ -6,4 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ProcedureProductRepository extends JpaRepository<ProcedureProduct, Long> {
     List<ProcedureProduct> findByActiveTrueOrderByIdAsc();
+
+    List<ProcedureProduct> findAllByOrderByIdAsc();
 }

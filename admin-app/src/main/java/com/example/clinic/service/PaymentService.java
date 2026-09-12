@@ -110,4 +110,56 @@ public class PaymentService {
     public List<PaymentOrder> findRecentOrders() {
         return paymentOrderRepository.findTop10ByOrderByCreatedAtDesc();
     }
+
+    public List<PaymentOrder> findAllOrders() {
+        return paymentOrderRepository.findAllByOrderByCreatedAtDesc();
+    }
+
+    public List<PaymentOrder> findOrdersByBuyer(AppUser buyer) {
+        return paymentOrderRepository.findByBuyerOrderByCreatedAtDesc(buyer);
+    }
+
+    public PaymentOrder findById(Long id) {
+        return paymentOrderRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("결제 내역을 찾을 수 없습니다."));
+    }
+
+    /**
+     * 관리자가 결제 건의 금액/결제수단/예약일을 정정한다.
+     * 포인트 정산이 얽힌 상태 변경은 {@link #refund(Long)} 로만 처리해 잔액이 어긋나지 않도록 한다.
+     */
+    @Transactional
+    public PaymentOrder updateOrder(Long id, BigDecimal amount, String method, LocalDate reservationDate) {
+        PaymentOrder order = findById(id);
+        if (order.getStatus() == PaymentStatus.CANCELED) {
+            throw new IllegalArgumentException("환불된 결제 건은 수정할 수 없습니다.");
+        }
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("결제 금액은 0원 이상이어야 합니다.");
+        }
+        order.setAmount(amount);
+        order.setMethod(method == null || method.isBlank() ? order.getMethod() : method.trim());
+        order.setReservationDate(reservationDate);
+        return paymentOrderRepository.save(order);
+    }
+
+    /**
+     * 결제를 환불 처리하고, 결제에 사용된 포인트는 돌려주고 적립된 포인트는 회수한다.
+     */
+    @Transactional
+    public PaymentOrder refund(Long id) {
+        PaymentOrder order = findById(id);
+        if (order.getStatus() != PaymentStatus.PAID) {
+            throw new IllegalArgumentException("결제 완료 상태인 건만 환불할 수 있습니다.");
+        }
+        AppUser buyer = order.getBuyer();
+        int restored = buyer.getPointBalance() + order.getPointsUsed() - order.getEarnedPoints();
+        buyer.setPointBalance(Math.max(restored, 0));
+        appUserRepository.save(buyer);
+
+        // 결제 시각은 이력으로 남겨 두고, 환불 시각을 따로 기록한다.
+        order.setStatus(PaymentStatus.CANCELED);
+        order.setRefundedAt(LocalDateTime.now());
+        return paymentOrderRepository.save(order);
+    }
 }

@@ -54,6 +54,65 @@ public class UserService {
         return userRepository.findAll();
     }
 
+    /**
+     * 아이디 / 이름 / 이메일 / 연락처 중 하나라도 키워드를 포함하는 회원을 찾는다.
+     */
+    public List<AppUser> searchUsers(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return findAllUsers();
+        }
+        return userRepository.searchByKeyword(keyword.trim());
+    }
+
+    /**
+     * 관리자 화면에서 회원 정보를 수정한다.
+     * 권한(role)은 별도의 {@link #changeRole} 로만 바꿀 수 있도록 분리해 두었다.
+     */
+    @Transactional
+    public AppUser updateByAdmin(Long id, String name, String email, String phone, int pointBalance) {
+        AppUser user = findById(id);
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("이름을 입력해 주세요.");
+        }
+        if (email == null || email.isBlank()) {
+            throw new IllegalArgumentException("이메일을 입력해 주세요.");
+        }
+        if (pointBalance < 0) {
+            throw new IllegalArgumentException("포인트는 0 이상이어야 합니다.");
+        }
+        userRepository.findByEmail(email.trim())
+            .filter(other -> !other.getId().equals(user.getId()))
+            .ifPresent(other -> {
+                throw new IllegalArgumentException("이미 다른 회원이 사용 중인 이메일입니다.");
+            });
+
+        user.setName(name.trim());
+        user.setEmail(email.trim());
+        user.setPhone(phone == null || phone.isBlank() ? null : phone.trim());
+        user.setPointBalance(pointBalance);
+        return userRepository.save(user);
+    }
+
+    /**
+     * 직원 계정에 관리자 권한을 부여하거나 회수한다.
+     * 잠금 상태를 막기 위해 본인 계정의 관리자 권한은 스스로 내릴 수 없다.
+     */
+    @Transactional
+    public AppUser changeRole(Long id, Role role, String actingUsername) {
+        AppUser user = findById(id);
+        if (role == null) {
+            throw new IllegalArgumentException("변경할 권한을 선택해 주세요.");
+        }
+        if (role == Role.USER && user.getUsername().equals(actingUsername)) {
+            throw new IllegalArgumentException("본인 계정의 관리자 권한은 회수할 수 없습니다.");
+        }
+        if (user.isWithdrawn() && role == Role.ADMIN) {
+            throw new IllegalArgumentException("탈퇴한 회원에게는 관리자 권한을 부여할 수 없습니다.");
+        }
+        user.setRole(role);
+        return userRepository.save(user);
+    }
+
     @Transactional
     public AppUser updateProfile(Long userId, AppUser form) {
         AppUser user = findById(userId);

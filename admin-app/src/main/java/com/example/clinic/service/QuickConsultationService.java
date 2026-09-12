@@ -38,4 +38,53 @@ public class QuickConsultationService {
     public List<QuickConsultation> findRecentConsultations() {
         return consultationRepository.findTop10ByOrderByCreatedAtDesc();
     }
+
+    public List<QuickConsultation> findAllConsultations() {
+        return consultationRepository.findAllByOrderByCreatedAtDesc();
+    }
+
+    public List<QuickConsultation> search(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return findAllConsultations();
+        }
+        return consultationRepository.searchByKeyword(keyword.trim());
+    }
+
+    public QuickConsultation findById(Long id) {
+        return consultationRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("상담 신청 내역을 찾을 수 없습니다."));
+    }
+
+    @Transactional
+    public QuickConsultation update(
+        Long id,
+        String name,
+        String phone,
+        String area,
+        String preferredContact,
+        LocalDate preferredDate,
+        String message,
+        String adminNote
+    ) {
+        QuickConsultation consultation = findById(id);
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("신청자 이름을 입력해 주세요.");
+        }
+        if (phone == null || phone.isBlank()) {
+            throw new IllegalArgumentException("연락처를 입력해 주세요.");
+        }
+        consultation.setName(name.trim());
+        consultation.setPhone(phone.trim());
+        consultation.setArea(area == null ? "" : area.trim());
+        consultation.setPreferredContact(preferredContact == null ? "" : preferredContact.trim());
+        consultation.setPreferredDate(preferredDate);
+        consultation.setMessage(message);
+        consultation.setAdminNote(adminNote);
+        return consultationRepository.save(consultation);
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        consultationRepository.delete(findById(id));
+    }
 }

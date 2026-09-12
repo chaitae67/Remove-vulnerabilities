@@ -143,6 +143,7 @@ CREATE TABLE payment_order (
     method VARCHAR2(40 CHAR),
     created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
     paid_at TIMESTAMP,
+    refunded_at TIMESTAMP,
 
     CONSTRAINT pk_payment_order PRIMARY KEY (id),
     CONSTRAINT uk_payment_order_no UNIQUE (order_number),
@@ -164,6 +165,7 @@ CREATE TABLE quick_consultation (
     area VARCHAR2(60 CHAR) NOT NULL,
     preferred_contact VARCHAR2(30 CHAR) NOT NULL,
     message VARCHAR2(1000 CHAR),
+    admin_note VARCHAR2(1000 CHAR),
     privacy_agreed NUMBER(1) DEFAULT 1 NOT NULL,
     created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
 

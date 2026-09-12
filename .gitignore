@@ -8,3 +8,6 @@
 # Python
 __pycache__/
 *.pyc
+
+# 실습용 의무기록 샘플 파일(런타임 생성)
+**/records/

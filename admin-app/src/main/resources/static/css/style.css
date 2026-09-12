@@ -843,28 +843,33 @@ textarea {
     padding-top: 24px;
 }
 
-.admin-user-table-wrap {
+.admin-user-table-wrap,
+.admin-table-wrap {
     overflow-x: auto;
     border: 1px solid #d8e3df;
     background: #fff;
     box-shadow: var(--shadow);
 }
 
-.admin-user-table {
+.admin-user-table,
+.admin-table {
     width: 100%;
     min-width: 860px;
     border-collapse: collapse;
 }
 
 .admin-user-table th,
-.admin-user-table td {
+.admin-user-table td,
+.admin-table th,
+.admin-table td {
     padding: 18px 20px;
     border-bottom: 1px solid var(--line);
     text-align: left;
     vertical-align: middle;
 }
 
-.admin-user-table th {
+.admin-user-table th,
+.admin-table th {
     background: #eef4f1;
     color: #52625d;
     font-size: 12px;
@@ -872,11 +877,13 @@ textarea {
     letter-spacing: .08em;
 }
 
-.admin-user-table tbody tr {
+.admin-user-table tbody tr,
+.admin-table tbody tr {
     transition: background .2s ease;
 }
 
-.admin-user-table tbody tr:hover {
+.admin-user-table tbody tr:hover,
+.admin-table tbody tr:hover {
     background: #f7faf8;
 }
 
@@ -907,7 +914,9 @@ textarea {
 
 .admin-user-profile small,
 .admin-user-contact small,
-.admin-user-table time {
+.admin-user-table time,
+.admin-table time,
+.admin-table small {
     color: var(--muted);
     font-size: 12px;
 }
@@ -1367,4 +1376,183 @@ textarea {
     .payment-detail-head { display: grid; }
     .care-journey > div { grid-template-columns: 1fr; }
     .care-journey article + article, .care-journey article:nth-child(3) { padding-left: 0; border-top: 1px solid rgba(255,255,255,.18); border-left: 0; }
+}
+
+
+/* 관리자 목록 / 상세 화면 */
+.header-inner {
+    display: flex;
+    width: 100%;
+    gap: 24px;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.admin-nav {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.admin-nav a {
+    padding: 6px 0;
+    border-bottom: 2px solid transparent;
+    color: #52625d;
+}
+
+.admin-nav a:hover {
+    color: var(--green);
+}
+
+.admin-nav a.active {
+    border-bottom-color: var(--green);
+    color: var(--green-dark);
+}
+
+.admin-page {
+    min-height: 100vh;
+    background: #f5f8f6;
+}
+
+.admin-search {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-width: min(360px, 100%);
+}
+
+.admin-search input {
+    min-width: 0;
+}
+
+.admin-table {
+    min-width: 900px;
+}
+
+.admin-table tbody tr[data-href] {
+    cursor: pointer;
+}
+
+.cell-link {
+    font-weight: 700;
+}
+
+.cell-link:hover {
+    color: var(--green);
+    text-decoration: underline;
+}
+
+.cell-action {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.cell-action a {
+    color: var(--green);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.cell-ellipsis {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+}
+
+.state.status-paid {
+    background: #e9f6ef;
+    color: #1e5d48;
+}
+
+.state.status-ready {
+    background: #fdf3e3;
+    color: #8b6a2f;
+}
+
+.state.status-canceled {
+    background: #fff1ed;
+    color: #9b3e2d;
+}
+
+.admin-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 28px;
+    align-items: start;
+    padding-bottom: 56px;
+}
+
+.admin-detail .page-title {
+    padding-bottom: 8px;
+}
+
+.admin-detail .stack-form label {
+    display: grid;
+    gap: 6px;
+    color: #52625d;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.admin-detail .stack-form label.check {
+    display: flex;
+    font-weight: 700;
+}
+
+.check input[type="checkbox"],
+.check input[type="radio"] {
+    width: auto;
+    flex: 0 0 auto;
+}
+
+.back-link {
+    color: var(--green);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.danger-form,
+.role-form {
+    margin-top: 26px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+}
+
+.danger-form p {
+    margin: 0 0 12px;
+    font-size: 13px;
+}
+
+.role-form h2 {
+    margin-top: 0;
+}
+
+.admin-detail .summary-list div {
+    grid-template-columns: 96px minmax(0, 1fr);
+}
+
+.admin-detail .summary-list dd {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 1024px) {
+    .admin-detail-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .admin-user-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .admin-search {
+        width: 100%;
+    }
 }

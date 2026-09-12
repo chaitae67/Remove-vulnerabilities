@@ -59,6 +59,8 @@ public class PaymentOrder {
 
     private LocalDateTime paidAt;
 
+    private LocalDateTime refundedAt;
+
     private LocalDate reservationDate;
 
     @PrePersist
@@ -139,6 +141,14 @@ public class PaymentOrder {
 
     public void setPaidAt(LocalDateTime paidAt) {
         this.paidAt = paidAt;
+    }
+
+    public LocalDateTime getRefundedAt() {
+        return refundedAt;
+    }
+
+    public void setRefundedAt(LocalDateTime refundedAt) {
+        this.refundedAt = refundedAt;
     }
 
     public LocalDate getReservationDate() { return reservationDate; }
