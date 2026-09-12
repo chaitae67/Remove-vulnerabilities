@@ -41,7 +41,7 @@ spring:
     open-in-view: false
 
 app:
-  base-url: ${APP_BASE_URL:http://localhost:8081}
+  base-url: ${APP_BASE_URL:https://www.zerodayclinic.p-e.kr}
   admin-url: ${ADMIN_APP_URL:https://admin.zerodayclinic.p-e.kr:443/admin/sso}
   local-admin-url: ${LOCAL_ADMIN_APP_URL:http://localhost:8081/admin/sso}
   admin-login-secret: ${ADMIN_LOGIN_SECRET:clinic-admin-login}

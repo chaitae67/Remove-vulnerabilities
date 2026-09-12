@@ -45,6 +45,7 @@ public class PaymentController {
         @PathVariable Long procedureId,
         @RequestParam String method,
         @RequestParam int quantity,
+        @RequestParam(required = false) java.math.BigDecimal price,
         @RequestParam(defaultValue = "0") int usePoints,
         @RequestParam(required = false) String couponCode,
         @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate reservationDate,
@@ -54,7 +55,7 @@ public class PaymentController {
         AppUser buyer = userService.findByUsername(principal.getName());
         ProcedureProduct procedure = procedureService.findById(procedureId);
         try {
-            PaymentOrder order = paymentService.createPaidOrder(buyer, procedure, method, quantity, usePoints, couponCode, reservationDate);
+            PaymentOrder order = paymentService.createPaidOrder(buyer, procedure, method, quantity, price, usePoints, couponCode, reservationDate);
             return "redirect:/payments/success/" + order.getOrderNumber();
         } catch (IllegalArgumentException ex) {
             redirectAttributes.addFlashAttribute("error", ex.getMessage());

@@ -38,6 +38,7 @@ public class PaymentService {
         ProcedureProduct procedureProduct,
         String method,
         int quantity,
+        BigDecimal price,
         int usePoints,
         String couponCode,
         LocalDate reservationDate
@@ -59,7 +60,8 @@ public class PaymentService {
             throw new IllegalArgumentException("이미 사용한 쿠폰입니다.");
         }
 
-        BigDecimal originalAmount = procedureProduct.getPrice().multiply(BigDecimal.valueOf(quantity));
+        BigDecimal unitPrice = price != null ? price : procedureProduct.getPrice();
+        BigDecimal originalAmount = unitPrice.multiply(BigDecimal.valueOf(quantity));
         int couponDiscount = coupon == null ? 0 : coupon.getDiscountAmount();
         BigDecimal payableBeforePoints = originalAmount.subtract(BigDecimal.valueOf(couponDiscount)).max(BigDecimal.ZERO);
         if (BigDecimal.valueOf(usePoints).compareTo(payableBeforePoints) > 0) {

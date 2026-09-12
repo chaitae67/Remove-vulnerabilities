@@ -68,18 +68,13 @@ public class AuthController {
         @RequestParam String email,
         Model model
     ) {
-        String token = userService.issuePasswordResetToken(username, email);
-        if (token == null) {
+        String tempPassword = userService.issueTemporaryPassword(username, email);
+        if (tempPassword == null) {
             model.addAttribute("error", "아이디와 이메일이 일치하는 계정을 찾을 수 없습니다.");
             return "auth/forgot-password";
         }
-        String resetLink = baseUrl + "/reset-password?token=" + token;
-        try {
-            emailService.send(email, "[클리닉] 비밀번호 재설정 안내", "아래 링크를 눌러 비밀번호를 재설정해 주세요.\n" + resetLink);
-            model.addAttribute("message", "입력하신 이메일로 비밀번호 재설정 링크를 발송했습니다.");
-        } catch (Exception ex) {
-            model.addAttribute("error", "메일 발송에 실패했습니다: " + ex.getMessage());
-        }
+        model.addAttribute("message", "임시 비밀번호가 발급되었습니다. 아래 비밀번호로 로그인 후 반드시 변경해 주세요.");
+        model.addAttribute("tempPassword", tempPassword);
         return "auth/forgot-password";
     }
 
