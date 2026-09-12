@@ -79,12 +79,15 @@
         <div class="panel">
             <div class="section-head">
                 <h2>Q&A 답변 관리</h2>
+                <a href="/admin/qna">전체 보기 &rsaquo;</a>
             </div>
+            <#if qnas?has_content>
             <ul class="mini-list">
                 <#list qnas as post>
                 <li><a href="/admin/qna/${post.id}">${post.title?html}</a><span>${post.answered?then('답변완료', '대기')}</span></li>
                 </#list>
             </ul>
+            <#else><p class="muted">등록된 문의가 없습니다.</p></#if>
         </div>
     </section>
 </main>

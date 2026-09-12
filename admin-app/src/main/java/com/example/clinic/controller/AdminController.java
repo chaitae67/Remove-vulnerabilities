@@ -33,7 +33,7 @@ public class AdminController {
     public String dashboard(Model model) {
         model.addAttribute("consultations", consultationService.findRecentConsultations());
         model.addAttribute("orders", paymentService.findRecentOrders());
-        model.addAttribute("qnas", qnaService.findAll());
+        model.addAttribute("qnas", qnaService.findLatest());
         model.addAttribute("procedures", procedureService.findActiveProcedures());
         return "admin/dashboard";
     }

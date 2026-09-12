@@ -22,10 +22,19 @@ public class AdminUserApiController {
     }
 
     @GetMapping("/admin/users")
-    public String usersPage(@RequestParam(required = false) String keyword, Model model) {
+    public String usersPage(
+        @RequestParam(required = false) String keyword,
+        @RequestParam(required = false) Role role,
+        Model model
+    ) {
         List<AppUser> allUsers = userService.findAllUsers();
-        model.addAttribute("users", userService.searchUsers(keyword));
+        List<AppUser> users = userService.searchUsers(keyword);
+        if (role != null) {
+            users = users.stream().filter(user -> user.getRole() == role).toList();
+        }
+        model.addAttribute("users", users);
         model.addAttribute("keyword", keyword);
+        model.addAttribute("role", role);
         model.addAttribute("totalCount", allUsers.size());
         model.addAttribute("adminCount", allUsers.stream().filter(user -> user.getRole() == Role.ADMIN).count());
         model.addAttribute("userCount", allUsers.stream().filter(user -> user.getRole() == Role.USER).count());

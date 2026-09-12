@@ -65,5 +65,6 @@
     </section>
 </main>
 <script src="/js/admin-rowlink.js"></script>
+<script src="/js/admin-showmore.js"></script>
 </body>
 </html>
