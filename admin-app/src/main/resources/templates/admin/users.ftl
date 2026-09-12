@@ -22,22 +22,23 @@
         </form>
     </section>
 
+    <#assign kwq = keyword?has_content?then('&keyword=' + keyword?url, '')>
     <section class="content-band admin-user-summary" aria-label="회원 요약">
-        <article>
+        <a class="filter-card<#if !role??> active</#if>" href="/admin/users<#if keyword?has_content>?keyword=${keyword?url}</#if>">
             <span>전체 회원</span>
             <strong>${totalCount}</strong>
             <small>registered accounts</small>
-        </article>
-        <article>
+        </a>
+        <a class="filter-card<#if role?? && role?string == 'ADMIN'> active</#if>" href="/admin/users?role=ADMIN${kwq}">
             <span>관리자</span>
             <strong>${adminCount}</strong>
             <small>admin role</small>
-        </article>
-        <article>
+        </a>
+        <a class="filter-card<#if role?? && role?string == 'USER'> active</#if>" href="/admin/users?role=USER${kwq}">
             <span>일반 회원</span>
             <strong>${userCount}</strong>
             <small>user role</small>
-        </article>
+        </a>
         <article>
             <span>총 보유 포인트</span>
             <strong>${numbers.formatInteger(totalPointBalance)}</strong>
@@ -48,7 +49,7 @@
     <section class="content-band admin-user-panel">
         <div class="section-head">
             <h2>회원 목록</h2>
-            <span class="muted">${users?size}명<#if keyword?has_content> · '${keyword?html}' 검색 결과</#if></span>
+            <span class="muted">${users?size}명<#if role??> · ${role} 만</#if><#if keyword?has_content> · '${keyword?html}' 검색 결과</#if></span>
         </div>
         <#if users?has_content>
         <div class="admin-user-table-wrap">
@@ -99,5 +100,6 @@
     </section>
 </main>
 <script src="/js/admin-rowlink.js"></script>
+<script src="/js/admin-showmore.js"></script>
 </body>
 </html>

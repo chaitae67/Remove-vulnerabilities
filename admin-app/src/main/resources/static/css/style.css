@@ -1556,3 +1556,89 @@ textarea {
         width: 100%;
     }
 }
+
+/* 관리자 UX: 클릭 가능한 느낌 강화 (hover) */
+.admin-table tbody tr[data-href],
+.admin-user-table tbody tr[data-href] {
+    cursor: pointer;
+    transition: background .15s ease, box-shadow .15s ease;
+}
+
+.admin-table tbody tr[data-href]:hover,
+.admin-user-table tbody tr[data-href]:hover {
+    background: #eef4f1;
+    box-shadow: inset 3px 0 0 var(--green);
+}
+
+.admin-table tbody tr[data-href]:hover .cell-link,
+.admin-user-table tbody tr[data-href]:hover .cell-link {
+    color: var(--green);
+    text-decoration: underline;
+}
+
+/* '상세' 액션을 버튼처럼 */
+.cell-action a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 800;
+    transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.admin-table tbody tr:hover .cell-action a,
+.admin-user-table tbody tr:hover .cell-action a {
+    border-color: var(--green);
+    background: var(--green);
+    color: #fff;
+}
+
+/* 회원 요약 클릭 필터 카드 */
+.admin-user-summary a.filter-card {
+    display: block;
+    padding: 26px;
+    border: 1px solid #d8e3df;
+    background: #fff;
+    box-shadow: 0 14px 32px rgba(31, 41, 51, 0.06);
+    cursor: pointer;
+    text-decoration: none;
+    transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+
+.admin-user-summary a.filter-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--green);
+    box-shadow: 0 20px 40px rgba(31, 41, 51, 0.14);
+}
+
+.admin-user-summary a.filter-card.active {
+    border-color: var(--green);
+    box-shadow: inset 0 0 0 2px var(--green), 0 14px 32px rgba(31, 41, 51, 0.08);
+}
+
+.admin-user-summary a.filter-card::after {
+    content: "필터 →";
+    display: block;
+    margin-top: 10px;
+    color: var(--green);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    opacity: 0;
+    transition: opacity .15s ease;
+}
+
+.admin-user-summary a.filter-card:hover::after,
+.admin-user-summary a.filter-card.active::after {
+    opacity: 1;
+}
+
+/* 전체보기 버튼 */
+.admin-showmore {
+    display: block;
+    margin: 16px auto 0;
+    min-width: 180px;
+}

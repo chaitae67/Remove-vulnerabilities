@@ -19,6 +19,12 @@ public class AdminQnaController {
         this.qnaService = qnaService;
     }
 
+    @GetMapping("/admin/qna")
+    public String list(Model model) {
+        model.addAttribute("posts", qnaService.findAll());
+        return "admin/qna";
+    }
+
     @GetMapping("/admin/qna/{id}")
     public String detail(@PathVariable Long id, Model model) {
         QnaPost post = qnaService.findByIdWithAttachments(id);
