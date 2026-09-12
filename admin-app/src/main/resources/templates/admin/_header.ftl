@@ -8,6 +8,8 @@
             <a href="/admin/payments"<#if (navActive!'') == 'payments'> class="active"</#if>>결제 관리</a>
             <a href="/admin/users"<#if (navActive!'') == 'users'> class="active"</#if>>회원 관리</a>
             <a href="/admin/procedures"<#if (navActive!'') == 'procedures'> class="active"</#if>>시술 관리</a>
+            <a href="/admin/coupons"<#if (navActive!'') == 'coupons'> class="active"</#if>>쿠폰 관리</a>
+            <a href="/admin/records"<#if (navActive!'') == 'records'> class="active"</#if>>의무기록</a>
             <a href="/logout">로그아웃</a>
         </nav>
     </div>
