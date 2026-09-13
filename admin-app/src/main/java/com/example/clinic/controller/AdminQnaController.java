@@ -43,6 +43,6 @@ public class AdminQnaController {
     public String delete(@PathVariable Long id, RedirectAttributes redirectAttributes) {
         qnaService.delete(id);
         redirectAttributes.addFlashAttribute("message", "상담 글이 삭제되었습니다.");
-        return "redirect:/admin";
+        return "redirect:/admin/qna";
     }
 }

@@ -43,10 +43,11 @@ spring:
 app:
   base-url: ${APP_BASE_URL:https://www.zerodayclinic.p-e.kr}
   admin-url: ${ADMIN_APP_URL:https://admin.zerodayclinic.p-e.kr:443/admin/sso}
-  local-admin-url: ${LOCAL_ADMIN_APP_URL:http://localhost:8081/admin/sso}
+  local-admin-url: ${LOCAL_ADMIN_APP_URL:http://localhost:8082/admin/sso}
   admin-login-secret: ${ADMIN_LOGIN_SECRET:clinic-admin-login}
   mail-from-name: ${MAIL_FROM_NAME:zeroday_clinic}
-  upload-dir: uploads
+  # 두 앱이 같은 첨부파일 디렉터리를 봐야 하므로 관리자 앱과 같은 환경변수를 쓴다.
+  upload-dir: ${APP_UPLOAD_DIR:uploads}
   chatbot:
     ai:
       enabled: ${OLLAMA_ENABLED:true}

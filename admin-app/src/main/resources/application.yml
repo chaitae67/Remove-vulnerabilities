@@ -32,6 +32,10 @@ spring:
     suffix: .ftl
     settings:
       api_builtin_enabled: "true"
+      # ?url 빌트인은 출력 인코딩이 지정되어 있지 않으면 예외를 던진다.
+      # (회원 검색 결과의 ?keyword=... 링크, 의무기록 다운로드 링크에서 사용)
+      output_encoding: UTF-8
+      url_escaping_charset: UTF-8
   jpa:
     database-platform: org.hibernate.dialect.OracleDialect
     hibernate:
@@ -53,10 +57,14 @@ app:
       endpoint: ${OLLAMA_CHAT_URL:http://localhost:11434/api/chat}
 
 ---
+# 로컬에서는 고객 앱(8081)과 함께 띄울 수 있도록 8082를 쓴다. (운영은 WAS가 분리되어 8081 유지)
+server:
+  port: ${SERVER_PORT:8082}
+
 spring:
   config:
     activate:
-      on-profile: h2-local
+      on-profile: local
   datasource:
     url: jdbc:h2:file:./work/clinic-local;MODE=Oracle;DATABASE_TO_UPPER=false;NON_KEYWORDS=USER
     username: sa

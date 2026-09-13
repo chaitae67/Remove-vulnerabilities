@@ -55,7 +55,11 @@ public class ReviewController {
     }
 
     @GetMapping("/reviews/new")
-    public String createForm(Model model) {
+    public String createForm(Principal principal, Model model) {
+        // 작성 폼은 로그인한 회원의 id를 필요로 하므로, 비로그인 상태면 로그인 화면으로 보낸다.
+        if (principal == null) {
+            return "redirect:/login?redirect=/reviews/new";
+        }
         model.addAttribute("products", procedureService.findActiveProcedures());
         return "reviews/form";
     }

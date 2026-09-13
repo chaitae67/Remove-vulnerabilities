@@ -17,6 +17,7 @@
             <p>회원 계정과 포인트 현황을 한눈에 확인할 수 있습니다.</p>
         </div>
         <form class="admin-search" action="/admin/users" method="get">
+            <#if role??><input type="hidden" name="role" value="${role}"></#if>
             <input name="keyword" type="search" placeholder="아이디 · 이름 · 이메일 · 연락처" value="${(keyword!'')?html}">
             <button class="button button-small" type="submit">회원 찾기</button>
         </form>

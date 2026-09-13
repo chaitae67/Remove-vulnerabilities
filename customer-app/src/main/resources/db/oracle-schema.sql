@@ -9,6 +9,8 @@ CREATE TABLE app_user (
     point_balance NUMBER(10) DEFAULT 0 NOT NULL,
     withdrawn NUMBER(1) DEFAULT 0 NOT NULL,
     withdrawn_at TIMESTAMP,
+    reset_token VARCHAR2(255 CHAR),
+    reset_token_expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
 
     CONSTRAINT pk_app_user PRIMARY KEY (id),
@@ -52,6 +54,7 @@ CREATE TABLE notice (
     title VARCHAR2(160 CHAR) NOT NULL,
     content VARCHAR2(4000 CHAR) NOT NULL,
     author_id NUMBER(19) NOT NULL,
+    image_url VARCHAR2(500 CHAR),
     created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at TIMESTAMP,
 
@@ -141,8 +144,10 @@ CREATE TABLE payment_order (
     coupon_id NUMBER(19),
     status VARCHAR2(20 CHAR) DEFAULT 'READY' NOT NULL,
     method VARCHAR2(40 CHAR),
+    reservation_date DATE,
     created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
     paid_at TIMESTAMP,
+    refunded_at TIMESTAMP,
 
     CONSTRAINT pk_payment_order PRIMARY KEY (id),
     CONSTRAINT uk_payment_order_no UNIQUE (order_number),
@@ -163,7 +168,9 @@ CREATE TABLE quick_consultation (
     phone VARCHAR2(30 CHAR) NOT NULL,
     area VARCHAR2(60 CHAR) NOT NULL,
     preferred_contact VARCHAR2(30 CHAR) NOT NULL,
+    preferred_date DATE,
     message VARCHAR2(1000 CHAR),
+    admin_note VARCHAR2(1000 CHAR),
     privacy_agreed NUMBER(1) DEFAULT 1 NOT NULL,
     created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
 

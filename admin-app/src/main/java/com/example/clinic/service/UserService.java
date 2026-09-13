@@ -61,7 +61,19 @@ public class UserService {
         if (keyword == null || keyword.isBlank()) {
             return findAllUsers();
         }
-        return userRepository.searchByKeyword(keyword.trim());
+        return userRepository.searchByKeywordPattern(toLikePattern(keyword.trim()));
+    }
+
+    /**
+     * 검색어를 소문자 {@code %키워드%} LIKE 패턴으로 바꾼다.
+     * 사용자가 입력한 '%', '_' 는 와일드카드가 아닌 글자로 취급하도록 '!' 로 이스케이프한다.
+     */
+    private String toLikePattern(String keyword) {
+        String escaped = keyword.toLowerCase()
+            .replace("!", "!!")
+            .replace("%", "!%")
+            .replace("_", "!_");
+        return "%" + escaped + "%";
     }
 
     /**

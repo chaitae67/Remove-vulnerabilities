@@ -20,13 +20,17 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
 
     Optional<AppUser> findByEmail(String email);
 
+    /**
+     * {@code pattern} 은 이미 소문자로 변환하고 LIKE 와일드카드를 '!' 로 이스케이프한
+     * {@code %키워드%} 형태여야 한다. ({@code UserService#searchUsers} 참고)
+     */
     @Query("""
         select u from AppUser u
-        where lower(u.username) like lower(concat('%', :keyword, '%'))
-           or lower(u.name) like lower(concat('%', :keyword, '%'))
-           or lower(u.email) like lower(concat('%', :keyword, '%'))
-           or u.phone like concat('%', :keyword, '%')
+        where lower(u.username) like :pattern escape '!'
+           or lower(u.name) like :pattern escape '!'
+           or lower(u.email) like :pattern escape '!'
+           or lower(u.phone) like :pattern escape '!'
         order by u.id asc
         """)
-    List<AppUser> searchByKeyword(@Param("keyword") String keyword);
+    List<AppUser> searchByKeywordPattern(@Param("pattern") String pattern);
 }

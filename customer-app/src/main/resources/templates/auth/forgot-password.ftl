@@ -20,7 +20,7 @@
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input name="username" placeholder="아이디" required>
             <input name="email" type="email" placeholder="가입 시 등록한 이메일" required>
-            <button class="button" type="submit">재설정 링크 받기</button>
+            <button class="button" type="submit">임시 비밀번호 발급</button>
         </form>
     </section>
 </main>
