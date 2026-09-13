@@ -3,6 +3,7 @@ package com.example.clinic.service;
 import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.Role;
 import com.example.clinic.repository.AppUserRepository;
+import com.example.clinic.repository.AdminUserSearchRepository;
 import jakarta.transaction.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -14,10 +15,16 @@ import org.springframework.stereotype.Service;
 public class UserService {
 
     private final AppUserRepository userRepository;
+    private final AdminUserSearchRepository userSearchRepository;
     private final PasswordEncoder passwordEncoder;
 
-    public UserService(AppUserRepository userRepository, PasswordEncoder passwordEncoder) {
+    public UserService(
+        AppUserRepository userRepository,
+        AdminUserSearchRepository userSearchRepository,
+        PasswordEncoder passwordEncoder
+    ) {
         this.userRepository = userRepository;
+        this.userSearchRepository = userSearchRepository;
         this.passwordEncoder = passwordEncoder;
     }
 
@@ -61,19 +68,7 @@ public class UserService {
         if (keyword == null || keyword.isBlank()) {
             return findAllUsers();
         }
-        return userRepository.searchByKeywordPattern(toLikePattern(keyword.trim()));
-    }
-
-    /**
-     * 검색어를 소문자 {@code %키워드%} LIKE 패턴으로 바꾼다.
-     * 사용자가 입력한 '%', '_' 는 와일드카드가 아닌 글자로 취급하도록 '!' 로 이스케이프한다.
-     */
-    private String toLikePattern(String keyword) {
-        String escaped = keyword.toLowerCase()
-            .replace("!", "!!")
-            .replace("%", "!%")
-            .replace("_", "!_");
-        return "%" + escaped + "%";
+        return userSearchRepository.search(keyword.trim());
     }
 
     /**

@@ -10,16 +10,22 @@
 <body>
 <#include "/admin/_header.ftl">
 <main class="admin-page">
-    <section class="page-title">
-        <p class="eyebrow">PROCEDURES</p>
-        <h1>시술 관리</h1>
-        <p>시술을 클릭하면 가격과 설명을 수정하거나 판매 여부를 바꿀 수 있습니다.</p>
+    <section class="page-title with-action">
+        <div>
+            <p class="eyebrow">PROCEDURES</p>
+            <h1>시술 관리</h1>
+            <p>시술을 클릭하면 가격과 설명을 수정하거나 판매 여부를 바꿀 수 있습니다.</p>
+        </div>
+        <form class="admin-search" action="/admin/procedures" method="get">
+            <input name="keyword" type="search" placeholder="시술명 검색" value="${(keyword!'')?html}">
+            <button class="button button-small" type="submit">검색</button>
+        </form>
     </section>
 
     <section class="content-band">
         <div class="section-head">
             <h2>시술/상담 패키지</h2>
-            <span class="muted">${procedures?size}건</span>
+            <span class="muted">${procedures?size}건<#if keyword?has_content> · '${keyword?html}' 검색 결과</#if></span>
         </div>
         <#if procedures?has_content>
         <div class="admin-table-wrap">

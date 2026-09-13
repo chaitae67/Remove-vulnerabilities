@@ -2,6 +2,7 @@ package com.example.clinic.service;
 
 import com.example.clinic.domain.ProcedureProduct;
 import com.example.clinic.repository.ProcedureProductRepository;
+import com.example.clinic.repository.ProcedureSearchRepository;
 import java.io.StringReader;
 import java.math.BigDecimal;
 import java.util.List;
@@ -18,9 +19,14 @@ import org.xml.sax.InputSource;
 public class ProcedureService {
 
     private final ProcedureProductRepository procedureRepository;
+    private final ProcedureSearchRepository procedureSearchRepository;
 
-    public ProcedureService(ProcedureProductRepository procedureRepository) {
+    public ProcedureService(
+        ProcedureProductRepository procedureRepository,
+        ProcedureSearchRepository procedureSearchRepository
+    ) {
         this.procedureRepository = procedureRepository;
+        this.procedureSearchRepository = procedureSearchRepository;
     }
 
     public List<ProcedureProduct> findActiveProcedures() {
@@ -29,6 +35,13 @@ public class ProcedureService {
 
     public List<ProcedureProduct> findAllProcedures() {
         return procedureRepository.findAllByOrderByIdAsc();
+    }
+
+    public List<ProcedureProduct> searchProcedures(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return findAllProcedures();
+        }
+        return procedureSearchRepository.searchByName(keyword.trim());
     }
 
     public ProcedureProduct findById(Long id) {

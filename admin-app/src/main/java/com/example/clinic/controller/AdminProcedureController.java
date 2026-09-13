@@ -20,8 +20,9 @@ public class AdminProcedureController {
     }
 
     @GetMapping("/admin/procedures")
-    public String list(Model model) {
-        model.addAttribute("procedures", procedureService.findAllProcedures());
+    public String list(@RequestParam(required = false) String keyword, Model model) {
+        model.addAttribute("procedures", procedureService.searchProcedures(keyword));
+        model.addAttribute("keyword", keyword);
         return "admin/procedures";
     }
 

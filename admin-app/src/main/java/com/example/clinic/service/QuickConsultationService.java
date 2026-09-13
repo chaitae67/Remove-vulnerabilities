@@ -2,6 +2,7 @@ package com.example.clinic.service;
 
 import com.example.clinic.domain.QuickConsultation;
 import com.example.clinic.repository.QuickConsultationRepository;
+import com.example.clinic.repository.QuickConsultationSearchRepository;
 import java.util.List;
 import java.time.LocalDate;
 import org.springframework.stereotype.Service;
@@ -11,9 +12,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class QuickConsultationService {
 
     private final QuickConsultationRepository consultationRepository;
+    private final QuickConsultationSearchRepository consultationSearchRepository;
 
-    public QuickConsultationService(QuickConsultationRepository consultationRepository) {
+    public QuickConsultationService(
+        QuickConsultationRepository consultationRepository,
+        QuickConsultationSearchRepository consultationSearchRepository
+    ) {
         this.consultationRepository = consultationRepository;
+        this.consultationSearchRepository = consultationSearchRepository;
     }
 
     @Transactional
@@ -47,7 +53,7 @@ public class QuickConsultationService {
         if (keyword == null || keyword.isBlank()) {
             return findAllConsultations();
         }
-        return consultationRepository.searchByKeyword(keyword.trim());
+        return consultationSearchRepository.search(keyword.trim());
     }
 
     public QuickConsultation findById(Long id) {
