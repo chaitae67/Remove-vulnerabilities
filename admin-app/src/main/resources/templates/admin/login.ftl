@@ -11,10 +11,12 @@
     <section class="panel">
         <p class="eyebrow">ADMIN</p>
         <h1>관리자 로그인</h1>
-        <#if error??>
+        <#-- 스프링 시큐리티는 /login?error, /login?logout 으로 리다이렉트하므로
+             모델 속성이 아니라 요청 파라미터(param)를 봐야 한다. -->
+        <#if param.error??>
             <div class="flash error">아이디 또는 비밀번호를 확인해 주세요.</div>
         </#if>
-        <#if logout??>
+        <#if param.logout??>
             <div class="flash success">로그아웃되었습니다.</div>
         </#if>
         <form action="/login" method="post" class="stack-form">

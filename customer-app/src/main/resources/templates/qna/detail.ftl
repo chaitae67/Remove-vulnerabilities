@@ -44,12 +44,10 @@
         </div>
         </#if>
 
+        <#-- 답변 등록은 관리자 앱(/admin/qna)에서만 처리한다.
+             고객 앱은 /qna/*/answer 를 차단하므로 여기에 폼을 두면 403만 난다. -->
         <#if canAnswer>
-        <form class="stack-form answer-form" action="/qna/${post.id}/answer" method="post">
-            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
-            <textarea name="answer" rows="6" placeholder="관리자 답변" required>${post.answer!}</textarea>
-            <button class="button" type="submit">답변 저장</button>
-        </form>
+        <p class="muted">답변 등록은 관리자 콘솔의 Q&amp;A 관리 화면에서 진행해 주세요.</p>
         </#if>
 
         <div class="actions">

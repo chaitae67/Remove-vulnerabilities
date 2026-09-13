@@ -36,7 +36,7 @@ public class GlobalModelAdvice {
     public GlobalModelAdvice(
             UserService userService,
             @Value("${app.admin-url:https://admin.zerodayclinic.p-e.kr:443/}") String adminUrl,
-            @Value("${app.local-admin-url:http://localhost:8081/admin}") String localAdminUrl,
+            @Value("${app.local-admin-url:http://localhost:8082/admin/sso}") String localAdminUrl,
             @Value("${app.admin-login-secret:clinic-admin-login}") String adminLoginSecret) {
         this.userService = userService;
         this.adminUrl = adminUrl;
