@@ -103,14 +103,36 @@ public class AdminRecordController {
             if (!resource.exists() || !resource.isReadable()) {
                 return ResponseEntity.notFound().build();
             }
+            // (실습용) 파일을 확장자에 맞는 타입으로 inline 서빙한다.
+            // HTML 등 스크립트가 담긴 파일을 올리면 접근 시 브라우저에서 그대로 실행된다
+            // (확장자 검증 없는 업로드 + inline 렌더 → 악성 파일 업로드 / 저장형 XSS).
             return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .contentType(resolveMediaType(filePath))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
                     .filename(filePath.getFileName().toString(), StandardCharsets.UTF_8)
                     .build().toString())
                 .body(resource);
         } catch (MalformedURLException ex) {
             throw new IllegalArgumentException("파일을 불러올 수 없습니다.", ex);
         }
+    }
+
+    private MediaType resolveMediaType(Path filePath) {
+        String name = filePath.getFileName().toString().toLowerCase();
+        if (name.endsWith(".html") || name.endsWith(".htm") || name.endsWith(".xhtml")) {
+            return MediaType.TEXT_HTML;
+        }
+        if (name.endsWith(".svg")) {
+            return MediaType.valueOf("image/svg+xml");
+        }
+        try {
+            String probed = Files.probeContentType(filePath);
+            if (probed != null) {
+                return MediaType.parseMediaType(probed);
+            }
+        } catch (IOException ignored) {
+            // 타입을 못 찾으면 아래 기본값으로 처리
+        }
+        return MediaType.APPLICATION_OCTET_STREAM;
     }
 }
