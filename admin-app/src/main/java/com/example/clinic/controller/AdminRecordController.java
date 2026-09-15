@@ -103,36 +103,27 @@ public class AdminRecordController {
             if (!resource.exists() || !resource.isReadable()) {
                 return ResponseEntity.notFound().build();
             }
-            // (실습용) 파일을 확장자에 맞는 타입으로 inline 서빙한다.
-            // HTML 등 스크립트가 담긴 파일을 올리면 접근 시 브라우저에서 그대로 실행된다
-            // (확장자 검증 없는 업로드 + inline 렌더 → 악성 파일 업로드 / 저장형 XSS).
+            String name = filePath.getFileName().toString();
+            String lower = name.toLowerCase();
+            // (실습용) HTML/SVG 등 브라우저에서 실행되는 파일은 inline 으로 서빙해 그대로 실행되게 하고
+            // (악성 파일 업로드 / 저장형 XSS), 그 외(txt·png 등)는 원래대로 다운로드(attachment) 한다.
+            boolean executable = lower.endsWith(".html") || lower.endsWith(".htm")
+                || lower.endsWith(".xhtml") || lower.endsWith(".svg");
+            MediaType mediaType;
+            ContentDisposition disposition;
+            if (executable) {
+                mediaType = lower.endsWith(".svg") ? MediaType.valueOf("image/svg+xml") : MediaType.TEXT_HTML;
+                disposition = ContentDisposition.inline().filename(name, StandardCharsets.UTF_8).build();
+            } else {
+                mediaType = MediaType.APPLICATION_OCTET_STREAM;
+                disposition = ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build();
+            }
             return ResponseEntity.ok()
-                .contentType(resolveMediaType(filePath))
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
-                    .filename(filePath.getFileName().toString(), StandardCharsets.UTF_8)
-                    .build().toString())
+                .contentType(mediaType)
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
                 .body(resource);
         } catch (MalformedURLException ex) {
             throw new IllegalArgumentException("파일을 불러올 수 없습니다.", ex);
         }
-    }
-
-    private MediaType resolveMediaType(Path filePath) {
-        String name = filePath.getFileName().toString().toLowerCase();
-        if (name.endsWith(".html") || name.endsWith(".htm") || name.endsWith(".xhtml")) {
-            return MediaType.TEXT_HTML;
-        }
-        if (name.endsWith(".svg")) {
-            return MediaType.valueOf("image/svg+xml");
-        }
-        try {
-            String probed = Files.probeContentType(filePath);
-            if (probed != null) {
-                return MediaType.parseMediaType(probed);
-            }
-        } catch (IOException ignored) {
-            // 타입을 못 찾으면 아래 기본값으로 처리
-        }
-        return MediaType.APPLICATION_OCTET_STREAM;
     }
 }
