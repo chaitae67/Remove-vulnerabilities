@@ -1,10 +1,56 @@
 # infra_auto_diag — 취약점 빼기 팀 인프라 진단 자동화 (스크립트)
 
-서버(Linux/Windows)와 클라우드(AWS/Azure/GCP/Naver)의 기술적 취약점을 점검하는 **스크립트 모음**.
+클라우드·서버·웹서버·DBMS 의 기술적 취약점을 점검하는 **스크립트 모음**.
 KISA 주통기 / SK Shieldus·네이버 클라우드 보안가이드 기준. GUI 없이 터미널/서버에서 바로 실행한다.
+각 스크립트는 **파일 하나만 대상에 올리면** 돌아가고(설치 불필요), 끝나면 **CSV + (셀프) HTML 리포트**를 남긴다.
 
-- **클라우드**: `python cloud_scan.py <csp>` — 클라우드 쉘/로컬에서 실행 → 결과 CSV(+선택 xlsx)
-- **서버**: 대상 서버에서 `kisa_unix_check.sh` / `kisa_win_check.ps1` 직접 실행
+## 진단 분류(4 + DB)
+
+| 분류 | 실행 스크립트 | 대상 | 항목 |
+|---|---|---|---|
+| **클라우드** | `cloudscan_all.py` (단일파일) 또는 `cloud_scan.py` | AWS/Azure/GCP/Naver | CSP별 |
+| **리눅스** | `kisa_unix_check.sh` | Linux 서버 | U-01~U-67 |
+| **윈도우** | `kisa_win_check.ps1` | Windows 서버 | W-01~W-64 |
+| **웹서버** | `web_linux_check.sh` (Nginx·Tomcat) / `web_windows_check.ps1` (IIS) | web·was | WEB-01~WEB-26 |
+| DBMS | `db_oracle_check.sh` | Oracle DB | D-01~D-26 |
+
+> 웹서버는 소프트웨어가 OS를 걸쳐 있어(IIS=Windows, Nginx/Tomcat=Linux) 리눅스용 `.sh` + 윈도우용 `.ps1`
+> 두 파일로 나뉘지만 **항목 코드(WEB-01~26)는 동일**하다. 서버(리눅스/윈도우)·웹서버·DB 스크립트는
+> 점검을 대상에서 셸/파워셸로 직접 수행하므로 **파이썬이 필요 없다**(클라우드만 파이썬).
+>
+> 이 환경 대상: web-adm1(Nginx 1.18.0) · web1(IIS 10.0) · was1/was-adm1(Tomcat 10.1.31, Spring Boot 내장) · db(Oracle XE 21c).
+
+### 대상에 어떻게 넣고 돌리나 (SSH 없이)
+
+EC2 콘솔의 **인스턴스 연결(EC2 Instance Connect)** 또는 RDP 로 접속해, 해당 파일 하나만 올려서 실행하면 된다.
+
+```bash
+# 리눅스 계열(서버/웹서버/DB) — 붙여넣기로 올려도 됨
+sudo bash kisa_unix_check.sh                 # 리눅스 서버
+sudo bash web_linux_check.sh                 # 웹서버(Nginx/Tomcat 자동감지)
+bash db_oracle_check.sh --conn "sys/pw@//localhost:1521/XEPDB1 as sysdba"   # Oracle
+```
+```powershell
+# 윈도우 계열(서버/IIS)
+powershell -ExecutionPolicy Bypass -File kisa_win_check.ps1        # 윈도우 서버
+powershell -ExecutionPolicy Bypass -File web_windows_check.ps1     # 웹서버(IIS)
+```
+결과는 현재 폴더에 `*.csv` 와 `*.html`(브라우저로 바로 열리는 리포트)로 남는다. 사설망이면 그 파일만 내려받으면 된다.
+
+### 정형 보고서(양식 xlsx)로 만들기
+
+CSV/HTML 외에 **표지/진단대상/요약그래프(레이더)/요약결과/상세** 5시트 보고서가 필요하면, 대상에서 `--json` 으로
+결과를 뽑아 워크스테이션(파이썬)에서 `make_report.py` 로 변환한다. 웹서버/DBMS 는 **양식 파일 없이** 생성된다.
+
+```bash
+# 1) 대상에서 JSON 출력
+sudo bash web_linux_check.sh --target tomcat --app-jar /opt/app.jar --app-url http://localhost:8080 --json was1.json
+bash db_oracle_check.sh --conn "sys/pw@//localhost:1521/XEPDB1 as sysdba" --json db.json
+# 2) JSON → 보고서 xlsx
+python make_report.py web  --result was1.json --host was1 --ip 10.0.10.226
+python make_report.py dbms --result db.json  --host db   --ip 10.0.20.139
+python make_report.py linux --result linux.json --ip 10.0.10.61   # 서버는 양식(_Linux.xlsx) 필요
+```
 
 ---
 
@@ -136,7 +182,13 @@ cloud_check/         클라우드 진단 코어 (CSP별 분리, GUI/SSH 비의�
   ncp.py    ncp_items.py    Naver(NCP) 31항목 (네이버 양식 v1.2)
 kisa_unix_check.sh   Linux 서버 점검 (U-01~U-67, 계열 자동분기)
 kisa_win_check.ps1   Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
-보고서_양식_*.xlsx    클라우드 결과 엑셀 양식 (AWS/Azure/GCP/Naver)
+web_linux_check.sh   웹서버(Nginx/Tomcat) 점검 (WEB-01~26, 자동감지, CSV/JSON/HTML)
+web_windows_check.ps1 웹서버(IIS) 점검 (WEB-01~26, UTF-8 BOM 필수)
+db_oracle_check.sh   DBMS(Oracle) 점검 (D-01~26, sqlplus, CSV/JSON/HTML)
+make_report.py       진단 JSON → 보고서 xlsx (linux/windows=양식, web/dbms=양식 없이 생성)
+infra_report.py      웹서버/DBMS 보고서(5시트+레이더) 생성 코어
+server_report.py     리눅스/윈도우 보고서 양식 채우기 코어
+보고서_양식_*.xlsx    서버 결과 엑셀 양식 (Linux/Windows)
 requirements.txt     클라우드 CLI 의존성 (CSP별 SDK + openpyxl)
 ```
 

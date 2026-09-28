@@ -42,14 +42,20 @@ def _find_template(os_kind, explicit):
     return None
 
 
+# 서버(리눅스/윈도우)는 양식 파일에 채우고, 인프라(웹서버/DBMS)는 양식 없이 생성한다.
+INFRA_KINDS = {"web", "webserver", "nginx", "iis", "tomcat", "dbms", "db", "oracle"}
+
+
 def main():
-    ap = argparse.ArgumentParser(description="서버 진단 JSON → 보고서 양식 엑셀 생성")
-    ap.add_argument("os", choices=["linux", "windows"], help="계열")
+    ap = argparse.ArgumentParser(description="진단 JSON → 보고서 엑셀(xlsx) 생성")
+    ap.add_argument("kind", choices=["linux", "windows", "web", "webserver", "nginx", "iis", "tomcat",
+                                     "dbms", "db", "oracle"],
+                    help="대상: linux/windows(서버, 양식 필요) · web/webserver·nginx·iis·tomcat(웹서버) · dbms/oracle(DB)")
     ap.add_argument("--result", "-r", required=True, help="점검 스크립트가 낸 JSON 파일")
-    ap.add_argument("--template", "-t", help="보고서 양식 xlsx (기본: 폴더에서 _Linux/_Windows 자동 탐색)")
+    ap.add_argument("--template", "-t", help="서버 보고서 양식 xlsx (linux/windows 만; 기본 자동 탐색)")
     ap.add_argument("--host", help="진단 대상 호스트명(기본: JSON host)")
     ap.add_argument("--ip", help="진단 대상 IP(기본: -)")
-    ap.add_argument("--output", "-o", help="출력 xlsx (기본: report_<계열>_<host>.xlsx)")
+    ap.add_argument("--output", "-o", help="출력 xlsx (기본: report_<대상>_<host>.xlsx)")
     args = ap.parse_args()
 
     try:
@@ -64,20 +70,27 @@ def main():
     host = args.host or data.get("host", "") or "server"
     osver = data.get("os", "")
     ip = args.ip or "-"
-
-    tpl = _find_template(args.os, args.template)
-    if not tpl:
-        sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[args.os]}). "
-                 f"--template 으로 경로를 지정하세요.")
-
     out = args.output or os.path.join(
         os.getcwd(),
-        "report_{}_{}.xlsx".format(args.os, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
+        "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
 
-    try:
-        server_report.fill_report(args.os, results, host, ip, osver, tpl, out)
-    except Exception as e:  # noqa: BLE001
-        sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
+    if args.kind in INFRA_KINDS:
+        # 웹서버/DBMS — 양식 파일 없이 openpyxl 로 5시트 보고서 생성(레이더 차트 포함)
+        import infra_report  # noqa: E402
+        target = {"web": "web", "webserver": "web", "db": "dbms", "oracle": "dbms"}.get(args.kind, args.kind)
+        try:
+            infra_report.build_report(target, host, osver, results, out)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
+    else:
+        tpl = _find_template(args.kind, args.template)
+        if not tpl:
+            sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[args.kind]}). "
+                     f"--template 으로 경로를 지정하세요.")
+        try:
+            server_report.fill_report(args.kind, results, host, ip, osver, tpl, out)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
 
     n_vuln = sum(1 for r in results if (r.get("final") or r.get("status")) == "취약")
     print(f"[+] 보고서 저장: {out}")
