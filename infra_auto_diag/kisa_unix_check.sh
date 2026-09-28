@@ -558,7 +558,7 @@ done
 if [ -n "$rm_hit" ]; then
   rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" VULN "상세가이드 제거권고 파일에 SUID/SGID 설정:$rm_hit → 불필요 시 권한 제거"
 else
-  rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" GOOD "상세가이드 제거권고 목록 파일에 SUID/SGID 없음 (전체 파일시스템 SUID 목록은 관리자 수동 검토 권장)"
+  rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" MAN "상세가이드 제거권고 목록 파일에는 SUID/SGID 없음 — 다만 전체 SUID/SGID 파일의 업무상 필요성은 기계적으로 확정 불가(인터뷰 필요), 표준 패키지 소속만으로 필요성이 보장되지 않으므로 목록 검토 권장"
 fi
 
 # U-24 사용자/시스템 환경변수 파일 소유자 및 권한
