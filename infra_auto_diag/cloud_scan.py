@@ -217,6 +217,10 @@ def main():
     args = ap.parse_args()
 
     provider = args.provider.lower()
+    if args.access_key or args.secret_key or args.client_secret:
+        print("[!] 경고: 비밀키를 명령행 인자로 전달하면 ps/셸 히스토리/CI 로그에 노출됩니다. "
+              "환경변수 또는 ambient 자격(CloudShell/역할/az login/ADC) 사용을 권장합니다.",
+              file=sys.stderr)
     if args.all_regions:
         os.environ["CLOUD_SCAN_ALL_REGIONS"] = "1"
     if not cloud_check.available(provider):
@@ -246,11 +250,10 @@ def main():
         print(f"  {mark} [{r.get('code',''):<6}] {st:<8} {r.get('title','')}")
     print("  " + " | ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 
-    # 엑셀 저장
-    if not args.no_excel:
-        path = save_excel(os_label, results, host, args.output)
-        if path:
-            print(f"\n[+] 엑셀 저장: {path}")
+    # 결과 저장 — CSV 는 항상, XLSX 는 --no-excel 이 아닐 때 (save_results 가 처리)
+    saved = save_results(os_label, results, args.output, want_xlsx=not args.no_excel)
+    for _p in saved:
+        print(f"[+] 저장: {_p}")
     print("[*] 완료")
 
 

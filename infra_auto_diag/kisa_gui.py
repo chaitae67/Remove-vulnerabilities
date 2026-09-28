@@ -396,7 +396,7 @@ class App:
             self.root.after(0, self._show_results)
         except Exception as e:
             self.log(f"오류: {e}")
-            self.root.after(0, lambda: messagebox.showerror("클라우드 진단 오류", str(e)))
+            self.root.after(0, lambda msg=str(e): messagebox.showerror("클라우드 진단 오류", msg))
             self.root.after(0, lambda: self.lbl_sum.configure(text="오류 발생"))
         finally:
             self.set_busy(False)
@@ -470,7 +470,7 @@ class App:
             self.root.after(0, self._show_results)
         except Exception as e:
             self.log(f"✖ 오류: {e}")
-            self.root.after(0, lambda: messagebox.showerror("실행 오류", str(e)))
+            self.root.after(0, lambda msg=str(e): messagebox.showerror("실행 오류", msg))
             self.root.after(0, lambda: self.lbl_sum.configure(text="오류 발생"))
         finally:
             if client:

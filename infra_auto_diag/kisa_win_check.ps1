@@ -245,7 +245,7 @@ if ($pc -ne 1) { $miss += "복잡성(미사용)" }
 if ($null -eq $ml -or $ml -lt 8) { $miss += "최소길이($ml/기준 8)" }
 if ($null -eq $mxa -or $mxa -lt 1 -or $mxa -gt 90) { $miss += "최대사용기간($(if($mxa -eq 0){'무제한'}else{$mxa})/기준 1~90)" }
 if ($null -eq $mna -or $mna -lt 1) { $miss += "최소사용기간($mna/기준 1이상)" }
-if ($null -eq $ph -or $ph -lt 12) { $miss += "암호기록($ph/기준 12)" }
+if ($null -eq $ph -or $ph -lt 4) { $miss += "암호기록($ph/기준 4)" }
 if ($miss.Count -eq 0) { Rep "W-09" "비밀번호 관리정책 설정" "GOOD" @("복잡성 사용, 최소길이 $ml, 최대 $mxa 일, 최소 $mna 일, 기록 $ph 개") }
 elseif ($null -eq $pc -and $null -eq $ml) { Rep "W-09" "비밀번호 관리정책 설정" "MAN" @("보안정책 확인 불가 (관리자 권한 필요)") }
 else { Rep "W-09" "비밀번호 관리정책 설정" "VULN" @("미흡: $($miss -join ', ')") }
