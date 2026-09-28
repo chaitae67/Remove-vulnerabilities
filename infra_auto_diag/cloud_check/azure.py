@@ -145,7 +145,9 @@ def _account(rep, ctx, creds):
         guests = [u["userPrincipalName"] for u in graph_users()
                   if u.get("userType") == "Guest"]
         if guests:
-            rep.vuln("1.4", f"게스트 사용자 {len(guests)}명: {', '.join(guests[:30])}", guests)
+            # 게스트 존재 자체는 취약이 아니라 인가 여부 검토 대상(보고서 기준: 양호/인터뷰)
+            rep.man("1.4", [f"게스트 사용자 {len(guests)}명 — 인가된 게스트인지 검토 필요:"]
+                    + guests[:30], guests)
         else:
             rep.good("1.4", "게스트 사용자 계정 없음")
     safe(rep, "1.4", c14)
