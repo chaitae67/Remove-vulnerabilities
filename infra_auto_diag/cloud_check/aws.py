@@ -276,15 +276,15 @@ def _account_mgmt(rep, sess, iam, cred_rows):
                 rot = r.get(f"access_key_{idx}_last_rotated", "")
                 try:
                     age = (now - datetime.datetime.fromisoformat(rot.replace("Z", "+00:00"))).days
-                    if age > 90:
-                        vuln.append(f"{u} key{idx} {age}일 경과")
+                    if age > 60:
+                        vuln.append(f"{u} key{idx} {age}일 경과 (기준 60일)")
                 except Exception as _e:
                     if _is_denied(_e):
                         raise
         if vuln:
             rep.vuln("1.8", ["Access Key 사용주기 미관리:"] + vuln, vuln)
         else:
-            rep.good("1.8", "루트 Access Key 없음 + IAM Access Key 90일 이내 교체")
+            rep.good("1.8", "루트 Access Key 없음 + IAM Access Key 60일 이내 교체")
     safe(rep, "1.8", c18)
 
     # 1.9 MFA
@@ -312,13 +312,18 @@ def _account_mgmt(rep, sess, iam, cred_rows):
             rep.vuln("1.10", "계정 암호 정책이 설정되어 있지 않음")
             return
         bad = []
-        if p.get("MinimumPasswordLength", 0) < 8:
-            bad.append(f"최소길이 {p.get('MinimumPasswordLength')}(<8)")
-        for k, lab in [("RequireSymbols", "특수문자"), ("RequireNumbers", "숫자"),
-                       ("RequireUppercaseCharacters", "대문자"),
-                       ("RequireLowercaseCharacters", "소문자")]:
-            if not p.get(k):
-                bad.append(f"{lab} 미요구")
+        minlen = p.get("MinimumPasswordLength", 0)
+        classes = sum(bool(p.get(k)) for k in ("RequireSymbols", "RequireNumbers",
+                      "RequireUppercaseCharacters", "RequireLowercaseCharacters"))
+        # 가이드 복잡성: 문자 3종 이상 조합 시 8자 이상, 2종 조합 시 10자 이상
+        if classes >= 3:
+            if minlen < 8:
+                bad.append(f"최소길이 {minlen}(3종 조합 시 8자 이상 필요)")
+        elif classes == 2:
+            if minlen < 10:
+                bad.append(f"최소길이 {minlen}(2종 조합 시 10자 이상 필요)")
+        else:
+            bad.append(f"문자 조합 {classes}종(최소 2종 이상 필요)")
         if not p.get("MaxPasswordAge"):
             bad.append("만료기간 미설정")
         elif p.get("MaxPasswordAge", 999) > 90:

@@ -1,47 +1,24 @@
-# infra_auto_diag — 취약점 빼기 팀 인프라 진단 자동화 툴
+# infra_auto_diag — 취약점 빼기 팀 인프라/클라우드 진단 도구 (CLI)
 
-서버(Linux/Windows)와 클라우드(AWS/Azure/GCP)의 기술적 취약점을 점검하고
-KISA 주통기 / SK Shieldus 클라우드 보안가이드 양식으로 결과 엑셀을 뽑는 GUI 도구.
+서버(Linux/Windows)와 클라우드(AWS/Azure/GCP/Naver)의 기술적 취약점을 점검하고
+KISA 주통기 / SK Shieldus 클라우드 보안가이드 양식으로 결과를 뽑는다.
+
+> **구성 변경 안내**: SSH 기반 GUI(`kisa_gui.py`)와 그 부속 모듈은 제거되었다.
+> 현재는 **클라우드 진단 CLI(`cloud_scan.py`)** 와 **서버에서 직접 실행하는 점검 스크립트**로 구성된다.
+> 자동 판정을 실제로 검증·유지하는 대상은 **AWS** 이며, Azure/GCP/Naver 코드는 참고용으로 남겨둔 상태(미검증)다.
 
 ## 설치
 
 ```bash
-git clone <repo>
-cd infra_auto_diag
-pip install -r requirements.txt
-python kisa_gui.py
+pip install -r requirements.txt          # 최소: openpyxl + boto3 (AWS)
 ```
 
-- Python 3.9+ / Tkinter 포함 배포판
-- `requirements.txt` : 서버는 `paramiko`+`openpyxl`, AWS `boto3`, Azure `azure-*`,
-  GCP `google-api-python-client`+`google-auth`. 필요한 CSP 것만 설치해도 됨
-  (미설치 시 그 버튼만 안내 메시지).
-- **Azure**: `azure-mgmt-resource` 는 SubscriptionClient/ManagementLockClient 통합을 위해
-  `>=23,<24` 로 고정. 26.x 는 클라이언트가 분리돼 일부 항목이 수동확인으로 빠진다.
+- Python 3.9+
+- 점검할 CSP 의 SDK 만 설치해도 된다(미설치 시 해당 provider 만 비활성). NCP 는 표준 라이브러리만 사용.
 
-## 진단 대상별 사용법
+## 클라우드 진단 — `cloud_scan.py`
 
-상단 **진단 유형** 에서 `인프라 진단(서버)` / `클라우드 진단(AWS/Azure/GCP)` 을 먼저 고른다.
-
-### 인프라 진단 — Linux / Windows 서버 (SSH)
-1. `인프라 진단` → "진단 대상" 에서 `Linux 서버` 또는 `Windows 서버`
-2. IP/호스트 · 계정 · 비밀번호(또는 SSH 키) 입력, 필요 시 게이트웨이 설정
-3. `▶ 점검 실행` → 결과 표에서 행 더블클릭으로 최종판정 조정 → `엑셀로 추출`
-4. 점검 스크립트(`kisa_unix_check.sh` / `kisa_win_check.ps1`)는 READ-ONLY.
-   root/sudo(또는 관리자)로 실행해야 shadow·sshd -T·secedit 등이 정확히 읽힘.
-
-### 클라우드 진단 — AWS / Azure / GCP / Naver (API)
-1. `클라우드 진단` → "진단 대상" 에서 `AWS` / `Azure` / `GCP` / `Naver`
-2. 왼쪽 **클라우드 자격증명** 패널에 CSP별 필드가 뜬다 → 키 입력
-   (Access Key/Secret, Tenant/Client/Secret+Subscription, SA JSON 키+Project,
-    NCP Access/Secret Key 등. 비우면 `~/.aws` 프로필 / `az login` / `gcloud ADC` 자격을 사용)
-3. `▶ 클라우드 진단` → 표/엑셀은 서버와 동일하게 사용
-
-클라우드 진단은 **읽기 전용** (`describe_* / list_* / get_*` 만 호출). 리소스를 변경하지 않음.
-
-#### GUI 없이 실행 — `cloud_scan.py` (CLI)
-
-터미널에서 바로 실행 → 진단 → 엑셀 저장까지 한 번에. GUI/SSH 불필요.
+터미널에서 바로 실행 → 진단 → CSV/엑셀 저장까지 한 번에. GUI/SSH 불필요, **읽기 전용**(`describe_* / list_* / get_*` 만 호출).
 
 **클라우드 쉘에서 키 없이 그대로** (권장 — 쉘에 이미 로그인된 자격을 자동 사용):
 
@@ -63,25 +40,39 @@ python cloud_scan.py gcp   --sa-key sa.json --project my-proj
 python cloud_scan.py naver --access-key .. --secret-key .. --region KR   # 또는 env NCP_ACCESS_KEY/NCP_SECRET_KEY
 ```
 
-- AWS/Azure/GCP 는 인자를 비우면 **쉘 기본 자격증명(ambient: CloudShell/역할/`az login`/ADC)**을 자동 사용(프롬프트 없음).
+- AWS/Azure/GCP 는 인자를 비우면 **쉘 기본 자격증명(ambient: CloudShell/역할/`az login`/ADC)** 을 자동 사용.
 - 네이버(NCP)는 쉘 기본자격이 없어 키가 필요 → 인자·환경변수, 없으면 실행 중 물어본다.
-- 끝나면 콘솔에 항목별 판정 요약을 찍고, 해당 CSP 보고서 양식(`보고서_양식_*.xlsx`)에
-  채워 현재 폴더에 저장한다(`-o` 로 경로 지정, `--no-excel` 로 저장 생략).
+- 끝나면 콘솔에 항목별 판정 요약을 찍고, **항상 CSV** 를 저장하며, 해당 CSP 보고서 양식(`보고서_양식_*.xlsx`)이 있으면 엑셀도 채워 저장한다(`-o` 로 경로 지정, `--no-excel` 로 엑셀 생략).
+- ⚠ 보안: **비밀키를 명령행 인자로 주면 `ps`/셸 히스토리/CI 로그에 노출**된다. 가능하면 환경변수나 ambient 자격을 사용하라(실행 시 경고를 출력한다).
 
-#### 필요 권한 (읽기 전용)
+### 필요 권한 (읽기 전용)
 
 | CSP | 권한 | 비고 |
 |---|---|---|
-| AWS | 관리형 정책 **`SecurityAudit`** 를 진단용 IAM 사용자/역할에 연결 | Access Key 또는 `~/.aws` 프로필 |
+| AWS | 관리형 정책 **`SecurityAudit`** | Access Key 또는 `~/.aws` 프로필 |
 | Azure | 구독 **`Reader`** (서비스 주체) + (선택) Graph **`Directory.Read.All`** | Tenant/Client/Secret + Subscription ID |
 | GCP | **`roles/iam.securityReviewer`** + **`roles/viewer`** | 서비스계정 JSON 키 + Project ID |
+| Naver | 서브 계정 API 인증키 + Server/VPC 조회 권한 | Access Key/Secret Key |
 
-> Azure 의 AD 항목(1.1~1.9, 2.3, 4.6)은 Microsoft Graph 권한이 있어야 자동 판정된다.
-> GCP 의 Cloud ID / Google 계정 항목(1.1~1.4, 1.9, 4.15~4.16)은 Admin SDK(조직 관리자)
-> 권한이 필요해 "인터뷰 필요" 로 처리된다. 없으면 해당 항목은 근거만 수집.
+> Azure AD 항목·GCP Cloud ID 항목 등 조직 관리 권한이 필요한 항목은 자동 판정이 안 되면 "인터뷰 필요" 로 표기된다.
+> 자격증명이 유효하지 않으면 진단이 즉시 중단된다(엉뚱한 "양호" 방지).
 
-> 자격증명이 유효하지 않으면 진단이 즉시 중단된다(엉뚱한 "양호" 결과 방지).
-> 권한이 일부 모자라면 해당 항목은 "인터뷰 필요(수동확인)" 로 표기된다.
+## 서버 점검 스크립트 (대상 서버에서 직접 실행)
+
+`kisa_unix_check.sh`(Linux, U-01~U-67) / `kisa_win_check.ps1`(Windows, W-01~W-64)는
+점검 대상 서버에 올려 **직접 실행**한다(READ-ONLY, 자동 조치 없음). 별도 파이썬 패키지 불필요.
+
+```bash
+# Linux (root/sudo 권장 — shadow/sshd -T/iptables 등 정확 판독)
+sudo bash kisa_unix_check.sh --json result.json
+
+# Windows (관리자 PowerShell — secedit/SAM ACL/감사정책)
+powershell -ExecutionPolicy Bypass -File kisa_win_check.ps1 -Json result.json
+```
+
+- 콘솔에 판정 요약을 출력하고, `--json`/`-Json` 로 결과 JSON 을 남긴다.
+- `.sh` 는 LF 개행이어야 한다(저장소 `.gitattributes` 로 강제). Windows 에서 편집 시 CRLF 로 바뀌면 원격/직접 bash 실행이 깨진다.
+- `.ps1` 은 UTF-8 **BOM** 이어야 PowerShell 5.1 에서 한글이 안 깨진다.
 
 ## 판정값
 
@@ -95,26 +86,15 @@ python cloud_scan.py naver --access-key .. --secret-key .. --region KR   # 또�
 ## 파일 구성
 
 ```
-kisa_gui.py          메인 GUI (App 클래스, SSH 실행, 결과 표)
-common.py            공용 상수/헬퍼
-excel_export.py      엑셀 추출 (서버 양식 = zip/XML 직접편집, 클라우드 = openpyxl)
-gateway_dialog.py    게이트웨이(bastion) 설정
-detail_dialog.py     행 더블클릭 상세/최종판정
-cloud_dialog.py      클라우드 자격증명 입력
-cloud_check/         클라우드 진단 (CSP별 분리)
-  __init__.py          run(provider, creds) 디스패처
-  base.py              Reporter / 상태 상수 / safe() 래퍼
-  aws.py    aws_items.py    AWS 41항목 (SK Shieldus 2024 가이드)
-  azure.py  azure_items.py  Azure 41항목
-  gcp.py    gcp_items.py    GCP 52항목
-kisa_unix_check.sh   Linux 서버 점검 (U-01~U-67, 계열 자동분기)
-kisa_win_check.ps1   Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
-보고서_양식_*.xlsx    결과 엑셀 양식
+cloud_scan.py         클라우드 진단 CLI (진단 → CSV/엑셀 저장)
+cloud_check/          클라우드 진단 엔진 (CSP별 분리, 읽기 전용)
+  __init__.py           run(provider, creds) 디스패처
+  base.py               Reporter / 상태 상수 / safe() 래퍼
+  aws.py    aws_items.py    AWS 41항목  (검증 대상)
+  azure.py  azure_items.py  Azure 41항목 (참고용·미검증)
+  gcp.py    gcp_items.py    GCP 52항목  (참고용·미검증)
+  ncp.py    ncp_items.py    Naver 31항목(자체 양식·미검증)
+kisa_unix_check.sh    Linux 서버 점검 (U-01~U-67, 계열 자동분기)
+kisa_win_check.ps1    Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
+보고서_양식_*.xlsx    결과 엑셀 양식 (cloud_scan 이 클라우드 양식을 사용)
 ```
-
-## 개발 메모
-
-- Windows 점검 스크립트(`.ps1`)는 **UTF-8 BOM** 이어야 PowerShell 5.1 에서 한글이 안 깨진다.
-- 서버 엑셀 양식은 차트가 있어 openpyxl 로 열었다 저장하면 깨진다 → `excel_export.py`
-  가 zip/워크시트 XML 만 직접 편집한다. 클라우드 양식은 차트가 없어 openpyxl 직접 사용.
-- 클라우드 진단은 GUI 프로세스 안에서 스레드로 실행된다(SSH 없음).
