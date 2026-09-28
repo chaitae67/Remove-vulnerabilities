@@ -38,7 +38,8 @@ python cloud_scan.py naver --access-key .. --secret-key .. --region KR   # 또�
 - 네이버(NCP)는 쉘 기본자격이 없어 키가 필요 → 인자·환경변수, 없으면 실행 중 물어본다.
 - **AWS 는 기본적으로 지정 리전만** 스캔(빠름). 전 리전은 `--all-regions`.
 - 끝나면 콘솔에 항목별 판정 요약을 찍고, **CSV** 로 저장한다(현재 폴더, ASCII 파일명).
-  `openpyxl` 과 보고서 양식(`보고서_양식_*.xlsx`)이 있으면 xlsx 도 함께 저장.
+  `openpyxl` 이 있으면 **다중시트 보고서 xlsx**(표지/진단대상/요약그래프(레이더)/요약결과/상세)도
+  함께 생성한다 — 항목은 provider 가이드(AWS/Azure/GCP=SK Shieldus, Naver=네이버) 자동 반영, 양식 파일 불필요.
   (`-o` 저장 경로, `--no-excel` xlsx 생략, `--all-regions` 전 리전)
 
 ### 단일 파일로 실행 (`cloudscan_all.py`) — 파일 하나만 올리면 끝
