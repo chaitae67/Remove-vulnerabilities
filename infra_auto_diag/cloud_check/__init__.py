@@ -19,13 +19,14 @@ GUI(kisa_gui.py)는 run(provider, creds) 하나만 호출하면 되고,
 status : 양호 / 취약 / N/A / 수동확인   (서버 진단과 동일, REPORT_STATUS 로 매핑)
 """
 
-PROVIDERS = ("aws", "azure", "gcp")
+PROVIDERS = ("aws", "azure", "gcp", "naver")
 
 # CSP → (모듈경로, 사람이 읽는 이름, 설치 안내 pip 패키지, import 로 존재확인할 모듈명)
 _IMPL = {
     "aws":   (".aws",   "AWS",   "boto3",                     "boto3"),
     "azure": (".azure", "Azure", "azure-identity azure-mgmt-resource", "azure.identity"),
     "gcp":   (".gcp",   "GCP",   "google-api-python-client google-auth", "googleapiclient"),
+    "naver": (".ncp",   "Naver", "",                          "urllib"),
 }
 
 

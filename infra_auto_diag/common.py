@@ -19,10 +19,10 @@ SCRIPT_BY_OS = {"linux": LOCAL_CHECK_LINUX, "windows": LOCAL_CHECK_WINDOWS}
 #   서버(SSH) : linux / windows      → 원격 접속 후 스크립트 실행
 #   클라우드   : aws / azure / gcp    → 로컬에서 CSP API 호출 (cloud_check 패키지)
 SERVER_TARGETS = ("linux", "windows")
-CLOUD_TARGETS = ("aws", "azure", "gcp")
+CLOUD_TARGETS = ("aws", "azure", "gcp", "naver")
 TARGET_LABEL = {
     "linux": "Linux 서버", "windows": "Windows 서버",
-    "aws": "AWS", "azure": "Azure", "gcp": "GCP",
+    "aws": "AWS", "azure": "Azure", "gcp": "GCP", "naver": "Naver",
 }
 
 

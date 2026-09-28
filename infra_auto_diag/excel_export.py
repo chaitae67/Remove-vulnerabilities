@@ -160,6 +160,9 @@ CLOUD_SPECS = {
     "GCP": {"template": os.path.join(SCRIPT_DIR, "보고서_양식_GCP.xlsx"),
             "sheet": "진단 결과(GCP)", "first_row": 4, "code_col": 2,
             "result_col": 7, "detail_col": 8, "resource_col": 9},
+    "NAVER": {"template": os.path.join(SCRIPT_DIR, "보고서_양식_Naver.xlsx"),
+              "sheet": "진단 결과(Naver)", "first_row": 4, "code_col": 2,
+              "result_col": 7, "detail_col": 8, "resource_col": 9},
 }
 
 

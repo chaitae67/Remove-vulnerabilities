@@ -42,6 +42,14 @@ CLOUD_FIELDS = {
             ("Project ID", "project_id", False, ""),
         ],
     },
+    "naver": {
+        "note": "필요 권한: 서브 계정 API 인증키(Access Key/Secret Key)와 Server/VPC 조회 권한(읽기 전용).",
+        "fields": [
+            ("Access Key ID", "access_key", False, ""),
+            ("Secret Key", "secret_key", True, ""),
+            ("리전 코드", "region", False, "KR"),
+        ],
+    },
 }
 
 
@@ -182,4 +190,7 @@ def creds_summary(provider, creds):
     if p == "azure":
         s = creds.get("subscription_id", "")
         return f"구독 {s[:8]}…" if s else "미설정"
+    if p == "naver":
+        ak = creds.get("access_key", "")
+        return f"{ak[:4]}…{ak[-4:]} / {creds.get('region','KR')}" if ak else "미설정"
     return creds.get("project_id") or "미설정"

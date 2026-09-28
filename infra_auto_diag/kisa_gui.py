@@ -62,7 +62,7 @@ class App:
         ttk.Label(modebar, text="진단 유형:").pack(side="left", padx=(2, 8))
         ttk.Radiobutton(modebar, text="인프라 진단(서버)", variable=self.mode,
                         value="infra", command=self._on_mode_change).pack(side="left")
-        ttk.Radiobutton(modebar, text="클라우드 진단(AWS/Azure/GCP)", variable=self.mode,
+        ttk.Radiobutton(modebar, text="클라우드 진단(AWS/Azure/GCP/Naver)", variable=self.mode,
                         value="cloud", command=self._on_mode_change).pack(side="left", padx=8)
 
         # 상단: (접속 정보 | 클라우드 자격증명) + 진단 대상 좌우 분할
@@ -185,7 +185,7 @@ class App:
         return SCRIPT_BY_OS.get(self.os_choice.get(), LOCAL_CHECK_LINUX)
 
     _TARGETS = {"infra": (("Linux 서버", "linux"), ("Windows 서버", "windows")),
-                "cloud": (("AWS", "aws"), ("Azure", "azure"), ("GCP", "gcp"))}
+                "cloud": (("AWS", "aws"), ("Azure", "azure"), ("GCP", "gcp"), ("Naver", "naver"))}
 
     def _on_mode_change(self):
         mode = self.mode.get()
@@ -366,7 +366,8 @@ class App:
             return
         creds = self._collect_cloud_creds(target)
         # 필수값 안내 (비우면 환경/ADC 자격 시도)
-        need = {"azure": ["subscription_id"], "gcp": ["project_id"]}.get(target, [])
+        need = {"azure": ["subscription_id"], "gcp": ["project_id"],
+                "naver": ["access_key", "secret_key"]}.get(target, [])
         missing = [k for k in need if not creds.get(k)]
         if missing:
             messagebox.showwarning(
