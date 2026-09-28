@@ -30,14 +30,29 @@ python kisa_gui.py
 4. 점검 스크립트(`kisa_unix_check.sh` / `kisa_win_check.ps1`)는 READ-ONLY.
    root/sudo(또는 관리자)로 실행해야 shadow·sshd -T·secedit 등이 정확히 읽힘.
 
-### 클라우드 진단 — AWS / Azure / GCP (API)
-1. `클라우드 진단` → "진단 대상" 에서 `AWS` / `Azure` / `GCP`
+### 클라우드 진단 — AWS / Azure / GCP / Naver (API)
+1. `클라우드 진단` → "진단 대상" 에서 `AWS` / `Azure` / `GCP` / `Naver`
 2. 왼쪽 **클라우드 자격증명** 패널에 CSP별 필드가 뜬다 → 키 입력
-   (Access Key/Secret, Tenant/Client/Secret+Subscription, SA JSON 키+Project 등.
-    비우면 `~/.aws` 프로필 / `az login` / `gcloud ADC` 자격을 사용)
+   (Access Key/Secret, Tenant/Client/Secret+Subscription, SA JSON 키+Project,
+    NCP Access/Secret Key 등. 비우면 `~/.aws` 프로필 / `az login` / `gcloud ADC` 자격을 사용)
 3. `▶ 클라우드 진단` → 표/엑셀은 서버와 동일하게 사용
 
 클라우드 진단은 **읽기 전용** (`describe_* / list_* / get_*` 만 호출). 리소스를 변경하지 않음.
+
+#### GUI 없이 실행 — `cloud_scan.py` (CLI)
+
+터미널에서 바로 실행 → 진단 → 엑셀 저장까지 한 번에. GUI/SSH 불필요.
+
+```bash
+python cloud_scan.py aws   --access-key AKIA... --secret-key ... --region ap-northeast-2
+python cloud_scan.py azure --tenant-id .. --client-id .. --client-secret .. --subscription-id ..
+python cloud_scan.py gcp   --sa-key sa.json --project my-proj
+python cloud_scan.py naver --access-key .. --secret-key .. --region KR
+```
+
+- 자격증명 인자를 빼면 실행 중에 물어본다(입력만 하면 진행).
+- 끝나면 콘솔에 항목별 판정 요약을 찍고, 해당 CSP 보고서 양식(`보고서_양식_*.xlsx`)에
+  채워 현재 폴더에 저장한다(`-o` 로 경로 지정, `--no-excel` 로 저장 생략).
 
 #### 필요 권한 (읽기 전용)
 
