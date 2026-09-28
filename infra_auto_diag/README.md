@@ -94,6 +94,23 @@ powershell -ExecutionPolicy Bypass -File kisa_win_check.ps1   # W-01 ~ W-64
 - `.ps1` 은 **UTF-8 BOM** 이어야 PowerShell 5.1 에서 한글이 안 깨진다.
 - 서버가 사설망이면, 생성된 CSV 를 SCP/파일전송으로 내려받으면 된다(클라우드 쉘과 동일).
 
+#### 보고서 양식(다중시트 xlsx) 만들기 — `make_report.py`
+
+CSV 외에 **표지/진단대상/요약그래프/요약결과/상세** 5시트 보고서(양식 그대로, 차트 포함)를 만든다.
+점검을 `--json` 으로 뽑아서 양식에 채운다(양식 `보고서_양식_Linux.xlsx` / `_Windows.xlsx` 필요).
+
+```bash
+# 1) 대상 서버에서 JSON 출력
+sudo bash kisa_unix_check.sh --json result.json
+powershell -File kisa_win_check.ps1 -Json result.json
+
+# 2) JSON → 보고서 양식 엑셀 (양식이 있는 곳에서)
+python make_report.py linux   --result result.json --ip 3.38.228.213
+python make_report.py windows --result result.json --ip 10.0.0.5
+```
+- 표지 작성일은 자동, 진단대상(호스트/IP/OS)·상세(판정 F열, 근거 G열)·요약·그래프가 채워진다.
+- 판정 색: 취약=빨강, 인터뷰 필요=파랑(조건부서식). 서버 1대당 1개 보고서.
+
 ---
 
 ## 판정값
