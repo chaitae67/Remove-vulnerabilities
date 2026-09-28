@@ -2,17 +2,25 @@
 # -*- coding: utf-8 -*-
 """클라우드 취약점 진단 — GUI 없이 실행하는 단독 스크립트(CLI).
 
-사용 예:
+★ 클라우드 쉘에서 키 없이 그대로:
+    (AWS CloudShell)      python cloud_scan.py aws
+    (GCP Cloud Shell)     python cloud_scan.py gcp
+    (Azure Cloud Shell)   python cloud_scan.py azure --subscription-id <ID>
+  → 쉘에 이미 로그인된 자격(ambient: CloudShell/역할/az login/ADC)을 자동 사용한다.
+    GCP 프로젝트는 Cloud Shell 환경변수에서 자동 인식(없으면 --project).
+
+키를 직접 줄 수도 있다(쉘 밖·CI 등):
     python cloud_scan.py aws   --access-key AKIA... --secret-key ... --region ap-northeast-2
     python cloud_scan.py azure --tenant-id .. --client-id .. --client-secret .. --subscription-id ..
     python cloud_scan.py gcp   --sa-key sa.json --project my-proj
-    python cloud_scan.py naver --access-key .. --secret-key .. --region KR
+    python cloud_scan.py naver --access-key .. --secret-key .. --region KR   (또는 환경변수 NCP_ACCESS_KEY/NCP_SECRET_KEY)
 
-자격증명을 인자로 안 주면 실행 중에 물어본다(눌러서 넣으면 진행).
+네이버(NCP)는 쉘 기본자격이 없어 키가 필요하며, 안 주면 실행 중 물어본다.
 진단이 끝나면 콘솔에 요약을 찍고, 해당 CSP 보고서 양식(.xlsx)에 채워 저장한다.
 
 의존성: 해당 CSP SDK (aws=boto3, azure=azure-identity/mgmt, gcp=google-api-python-client,
 naver=표준 라이브러리) + openpyxl. tkinter/GUI 불필요.
+클라우드 쉘에는 boto3/gcloud SDK 가 대개 미리 깔려 있어 바로 실행된다.
 """
 import argparse
 import datetime
@@ -54,38 +62,55 @@ def _ask(label, secret=False, default=""):
     return (val or default).strip()
 
 
+def _env(*names):
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v
+    return ""
+
+
 def collect_creds(provider, args):
+    """자격증명을 모은다. AWS/Azure/GCP 는 클라우드 쉘/로그인 자격(ambient)을 그대로 쓰도록
+    인자·환경변수만 참고하고 프롬프트하지 않는다. NCP 만 없으면 물어본다."""
     p = provider.lower()
     if p == "aws":
-        ak = args.access_key or os.environ.get("AWS_ACCESS_KEY_ID", "")
-        sk = args.secret_key or os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-        if not ak and not args.profile:
-            ak = _ask("AWS Access Key ID (비우면 프로필/환경 자격)")
-            if ak:
-                sk = _ask("AWS Secret Access Key", secret=True)
+        # 키를 안 주면 boto3 기본 체인(CloudShell/EC2 역할/env/~/.aws)을 사용
+        ak = args.access_key or _env("AWS_ACCESS_KEY_ID")
+        sk = args.secret_key or _env("AWS_SECRET_ACCESS_KEY")
         creds = {
             "access_key": ak, "secret_key": sk,
-            "session_token": args.session_token or os.environ.get("AWS_SESSION_TOKEN", ""),
-            "profile": args.profile or "", "region": args.region or "ap-northeast-2",
+            "session_token": args.session_token or _env("AWS_SESSION_TOKEN"),
+            "profile": args.profile or "",
+            "region": args.region or _env("AWS_REGION", "AWS_DEFAULT_REGION") or "ap-northeast-2",
         }
         creds["mode"] = "key" if ak else ("profile" if creds["profile"] else "env")
         return creds
     if p == "azure":
+        # 비우면 DefaultAzureCredential(az login / Cloud Shell / 관리 ID) 사용
         return {
-            "tenant_id": args.tenant_id or _ask("Azure Tenant ID (비우면 az login)"),
-            "client_id": args.client_id or _ask("Azure Client ID", default=""),
-            "client_secret": args.client_secret or (_ask("Azure Client Secret", secret=True) if args.client_id else ""),
-            "subscription_id": args.subscription_id or _ask("Azure Subscription ID"),
+            "tenant_id": args.tenant_id or _env("AZURE_TENANT_ID"),
+            "client_id": args.client_id or _env("AZURE_CLIENT_ID"),
+            "client_secret": args.client_secret or _env("AZURE_CLIENT_SECRET"),
+            "subscription_id": args.subscription_id or _env("AZURE_SUBSCRIPTION_ID"),
         }
     if p == "gcp":
+        # 비우면 ADC. Cloud Shell 은 프로젝트가 환경변수로 들어있음
         return {
-            "sa_key_path": args.sa_key or _ask("GCP 서비스계정 JSON 키 경로 (비우면 ADC)"),
-            "project_id": args.project or _ask("GCP Project ID"),
+            "sa_key_path": args.sa_key or _env("GOOGLE_APPLICATION_CREDENTIALS"),
+            "project_id": args.project or _env("GOOGLE_CLOUD_PROJECT", "DEVSHELL_PROJECT_ID",
+                                               "GCLOUD_PROJECT", "GCP_PROJECT"),
         }
     if p == "naver":
-        ak = args.access_key or _ask("NCP Access Key ID")
-        sk = args.secret_key or _ask("NCP Secret Key", secret=True)
-        return {"access_key": ak, "secret_key": sk, "region": args.region or "KR"}
+        # NCP 는 ambient 자격이 없어 키가 필요 → 인자/환경변수, 없으면 물어본다
+        ak = args.access_key or _env("NCP_ACCESS_KEY", "NCP_ACCESS_KEY_ID")
+        sk = args.secret_key or _env("NCP_SECRET_KEY", "NCP_SECRET_ACCESS_KEY")
+        if not ak:
+            ak = _ask("NCP Access Key ID")
+        if not sk:
+            sk = _ask("NCP Secret Key", secret=True)
+        return {"access_key": ak, "secret_key": sk,
+                "region": args.region or _env("NCP_REGION") or "KR"}
     raise SystemExit(f"알 수 없는 provider: {provider}")
 
 

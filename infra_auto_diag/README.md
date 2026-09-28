@@ -43,14 +43,28 @@ python kisa_gui.py
 
 터미널에서 바로 실행 → 진단 → 엑셀 저장까지 한 번에. GUI/SSH 불필요.
 
+**클라우드 쉘에서 키 없이 그대로** (권장 — 쉘에 이미 로그인된 자격을 자동 사용):
+
+```bash
+# AWS CloudShell
+python cloud_scan.py aws
+# GCP Cloud Shell (프로젝트는 환경변수에서 자동 인식)
+python cloud_scan.py gcp
+# Azure Cloud Shell
+python cloud_scan.py azure --subscription-id <구독ID>
+```
+
+**키를 직접 줄 때** (쉘 밖 / CI):
+
 ```bash
 python cloud_scan.py aws   --access-key AKIA... --secret-key ... --region ap-northeast-2
 python cloud_scan.py azure --tenant-id .. --client-id .. --client-secret .. --subscription-id ..
 python cloud_scan.py gcp   --sa-key sa.json --project my-proj
-python cloud_scan.py naver --access-key .. --secret-key .. --region KR
+python cloud_scan.py naver --access-key .. --secret-key .. --region KR   # 또는 env NCP_ACCESS_KEY/NCP_SECRET_KEY
 ```
 
-- 자격증명 인자를 빼면 실행 중에 물어본다(입력만 하면 진행).
+- AWS/Azure/GCP 는 인자를 비우면 **쉘 기본 자격증명(ambient: CloudShell/역할/`az login`/ADC)**을 자동 사용(프롬프트 없음).
+- 네이버(NCP)는 쉘 기본자격이 없어 키가 필요 → 인자·환경변수, 없으면 실행 중 물어본다.
 - 끝나면 콘솔에 항목별 판정 요약을 찍고, 해당 CSP 보고서 양식(`보고서_양식_*.xlsx`)에
   채워 현재 폴더에 저장한다(`-o` 로 경로 지정, `--no-excel` 로 저장 생략).
 
