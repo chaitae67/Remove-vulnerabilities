@@ -133,6 +133,16 @@ perm_le() {
 # (perm & mask) 비트가 하나라도 켜져 있으면 참  (예: 타 사용자 쓰기 검사 perm_has 002)
 perm_has() { [ "$(( 8#${1:-0} & 8#$2 ))" -ne 0 ]; }
 
+# 그룹/기타 권한이 기준을 넘지 않으면 참(소유자 권한은 무시).
+#   "권한 640 이하" 의 올바른 해석 — 숫자 크기가 아니라 그룹/기타 비트가 기준의 부분집합인지로 판단.
+#   예) 700 은 그룹/기타 권한이 없으므로 640 보다 제한적 → 참(perm_le 의 700>640 오판 보정).
+perm_go_le() {  # $1=파일권한  $2=기준(기본 640)
+  local p m
+  p=$(( 8#${1:-777} )) 2>/dev/null || return 1
+  m=$(( 8#${2:-640} ))
+  [ $(( (p & 8#070) & ~(m & 8#070) )) -eq 0 ] && [ $(( (p & 8#007) & ~(m & 8#007) )) -eq 0 ]
+}
+
 # 파일 소유자·권한 → GOOD/VULN/NA 직접 판정
 chk_perm() {  # code title file maxperm "owner1 owner2 ..."
   local code=$1 title=$2 f=$3 maxp=$4 owners=$5 p o
@@ -336,9 +346,14 @@ while IFS=: read -r u _ uid _ _ _ sh; do
   case "$uid" in ''|*[!0-9]*) continue;; esac
   { [ "$uid" -ge "$UID_MIN" ] && [ "$uid" -lt 60000 ]; } || continue
   echo "$sh" | grep -qE 'nologin|false' && continue
-  case "$CLOUD_DEFAULT" in *" $u "*) continue;; esac
-  if acct_locked "$u"; then review="$review ${u}(잠금)"; continue; fi
-  never_login "$u" && review="$review ${u}(로그인이력없음)"
+  # 클라우드 기본계정(ec2-user 등)도 '미사용(로그인 이력 없음)/잠금' 이면 방치 의심으로 검토 대상에 포함한다.
+  #   (실제로 사용 중이면 로그인 이력이 있어 걸리지 않음 — 미사용 관리자 계정 방치를 놓치지 않기 위함)
+  cd_tag=""; case "$CLOUD_DEFAULT" in *" $u "*) cd_tag="클라우드기본,";; esac
+  # 관리자 권한(sudo/wheel/GID0) 보유 여부 표시 → 미사용 관리자 계정을 우선 검토
+  adm_tag=""
+  { id -nG "$u" 2>/dev/null | grep -qwE 'wheel|sudo|root|adm'; } && adm_tag="관리자권한,"
+  if acct_locked "$u"; then review="$review ${u}(${adm_tag}${cd_tag}잠금)"; continue; fi
+  never_login "$u" && review="$review ${u}(${adm_tag}${cd_tag}로그인이력없음)"
 done < /etc/passwd
 logins=$(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $7 !~ /(nologin|false)/ {print $1}' /etc/passwd | tr '\n' ' ')
 if [ -n "$badsys" ]; then
@@ -725,23 +740,35 @@ if [ -n "$r_hit" ]; then rep U-36 "r 계열 서비스 비활성화" VULN "r계�
 else rep U-36 "r 계열 서비스 비활성화" GOOD "rlogin/rsh/rexec 미실행"; fi
 
 # U-37 crontab 설정파일 권한 설정
-# [기준] 양호 - 일반 사용자 crontab 실행 제한 + cron/at 관련 파일 권한 640 이하 / 취약 - 아님
+# [기준] 양호 - cron/at '설정파일'의 소유자 root + 그룹/기타 과도권한 없음(640 이하) / 취약 - 아님
+#   ※ 점검 대상은 cron 작업을 정의하는 설정파일이다:
+#      /etc/crontab, /etc/cron.allow, /etc/cron.deny, /etc/at.allow, /etc/at.deny,
+#      /etc/cron.d/*, /var/spool/cron/ 하위 사용자 crontab.
+#   ※ run-parts 스크립트 디렉터리(cron.hourly/daily/weekly/monthly)의 실행 스크립트는
+#      설정파일이 아니라 실행 권한(x)이 필요한 스크립트이므로 상세가이드 점검 대상이 아니다.
+#   ※ 권한은 숫자 크기가 아니라 그룹/기타 비트로 비교(perm_go_le) — 700 은 640 보다 제한적이라 양호.
 cron_bad=""
 for f in /etc/crontab /etc/cron.allow /etc/cron.deny /etc/at.allow /etc/at.deny; do
   [ -e "$f" ] || continue; p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
-  { [ "$o" = root ] && perm_le "$p" 640; } || cron_bad="$cron_bad $f($o,$p)"
+  { [ "$o" = root ] && perm_go_le "$p" 640; } || cron_bad="$cron_bad $f($o,$p)"
 done
-for d in /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /etc/cron.monthly; do
-  [ -d "$d" ] || continue
-  for f in "$d"/*; do [ -f "$f" ] || continue; p=$(stat -c '%a' "$f"); perm_le "$p" 640 || cron_bad="$cron_bad $f($p)"; done
+if [ -d /etc/cron.d ]; then
+  for f in /etc/cron.d/*; do
+    [ -f "$f" ] || continue; p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
+    { [ "$o" = root ] && perm_go_le "$p" 640; } || cron_bad="$cron_bad $f($o,$p)"
+  done
+fi
+for f in /var/spool/cron/* /var/spool/cron/crontabs/*; do
+  [ -f "$f" ] || continue; p=$(stat -c '%a' "$f")
+  perm_go_le "$p" 600 || cron_bad="$cron_bad $f($p)"
 done
 [ -e /etc/cron.allow ] && cron_restrict="cron.allow 존재(허용목록 방식)" || cron_restrict="cron.allow 없음(전체 사용자 crontab 가능)"
-if [ -z "$cron_bad" ] && [ -e /etc/cron.allow ]; then
-  rep U-37 "crontab 설정파일 권한 설정" GOOD "$cron_restrict + cron/at 파일 640 이하"
-elif [ -n "$cron_bad" ]; then
-  rep U-37 "crontab 설정파일 권한 설정" VULN "권한 기준(640 이하) 초과:$cron_bad. $cron_restrict"
+if [ -n "$cron_bad" ]; then
+  rep U-37 "crontab 설정파일 권한 설정" VULN "cron/at 설정파일 권한 기준(소유자 root, 그룹/기타 640 이하) 초과:$cron_bad. $cron_restrict"
+elif [ -e /etc/cron.allow ]; then
+  rep U-37 "crontab 설정파일 권한 설정" GOOD "cron/at 설정파일 소유자 root + 그룹/기타 과도권한 없음(640 이하), $cron_restrict"
 else
-  rep U-37 "crontab 설정파일 권한 설정" VULN "$cron_restrict → cron.allow 로 일반 사용자 실행 제한 필요"
+  rep U-37 "crontab 설정파일 권한 설정" MAN "cron/at 설정파일 권한은 양호. 다만 $cron_restrict → cron.allow 로 일반 사용자 crontab 제한 권고(인터뷰)"
 fi
 
 # U-38 DoS 취약 서비스 비활성화   [기준] 양호 - 비활성화 / 취약 - 활성화
@@ -812,22 +839,24 @@ mail_kind="none"
 
 # U-45 메일 서비스 버전 점검
 # [기준] 양호 - SMTP 서비스를 사용하지 않거나, 사용 시 알려진 취약점이 없는 최신(패치) 버전 / 취약 - 구버전
-#  ※ 로컬(127.0.0.1) 전용 postfix 는 외부 SMTP 서비스 제공이 아니므로 양호로 본다.
+#  ※ 판정 근거는 '리스닝 범위'가 아니라 '버전(미적용 보안 업데이트)' 이다.
+#    localhost 전용이라도 서비스가 기동 중이면 버전으로 판정하고, 외부/로컬 노출 여부는 근거에 함께 기재한다.
 if [ "$mail_kind" = none ]; then
   rep U-45 "메일 서비스 버전 점검" GOOD "sendmail/postfix/exim 등 메일 서비스 미설치"
-elif ! port_listen_ext 25; then
-  rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 설치되어 있으나 외부 인터페이스로 SMTP(25) 미제공 (localhost 전용/미기동)"
+elif [ "${mail_run:-0}" -ne 1 ]; then
+  rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 설치되어 있으나 미기동 (SMTP 서비스 미사용)"
 else
+  expose="localhost 전용"; port_listen_ext 25 && expose="외부(25) 제공"
   mv=""
   [ "$mail_kind" = postfix ] && mv=$(postconf mail_version 2>/dev/null | awk '{print $3}')
   [ -z "$mv" ] && mv=$( (sendmail -d0.1 -bv root 2>/dev/null; echo) | grep -i 'Version' | head -1)
   pend=$(sec_update_count 'postfix|sendmail' '^(postfix|sendmail)/')
   if [ "$pend" = "?" ]; then
-    rep U-45 "메일 서비스 버전 점검" MAN "$mail_kind 외부 제공 중 (버전=${mv:-확인필요}) — 패키지 관리자 없음, 최신 버전 여부 수동 확인 필요"
+    rep U-45 "메일 서비스 버전 점검" MAN "$mail_kind 기동 중($expose, 버전=${mv:-확인필요}) — 패키지 관리자 없음, 최신 버전 여부 수동 확인 필요"
   elif [ "${pend:-0}" -gt 0 ]; then
-    rep U-45 "메일 서비스 버전 점검" VULN "$mail_kind 외부 제공 중 (버전=${mv:-확인필요}) + 보안 업데이트 ${pend}건 미적용"
+    rep U-45 "메일 서비스 버전 점검" VULN "$mail_kind 기동 중($expose, 버전=${mv:-확인필요}) + 보안 업데이트 ${pend}건 미적용(구버전)"
   else
-    rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 외부 제공 중 (버전=${mv:-확인필요}), 미적용 보안 업데이트 없음"
+    rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 기동 중($expose, 버전=${mv:-확인필요}), 미적용 보안 업데이트 없음(최신)"
   fi
 fi
 
