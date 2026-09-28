@@ -228,6 +228,10 @@ def main():
     args = ap.parse_args()
 
     provider = args.provider.lower()
+    if args.access_key or args.secret_key or args.client_secret:
+        print("[!] 경고: 비밀키를 명령행 인자로 전달하면 ps/셸 히스토리/CI 로그에 노출됩니다. "
+              "환경변수 또는 ambient 자격(CloudShell/역할/az login/ADC) 사용을 권장합니다.",
+              file=sys.stderr)
     if args.all_regions:
         os.environ["CLOUD_SCAN_ALL_REGIONS"] = "1"
     if not cloud_check.available(provider):

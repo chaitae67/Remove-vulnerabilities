@@ -143,6 +143,21 @@ perm_go_le() {  # $1=파일권한  $2=기준(기본 640)
   [ $(( (p & 8#070) & ~(m & 8#070) )) -eq 0 ] && [ $(( (p & 8#007) & ~(m & 8#007) )) -eq 0 ]
 }
 
+# find 미사용 파일 순회 — 지정한 디렉터리들을 순수 bash(globstar)로 재귀 순회하며
+#   "일반 파일" 경로만 한 줄씩 출력한다. (find 명령을 쓰지 않기 위한 대체 구현)
+#   * 전체 파일시스템(/) 이 아니라 범위가 한정된 디렉터리에만 사용할 것(메모리·성능).
+#   * 심볼릭 링크는 대상이 일반 파일이면 포함(find -L -type f 와 동일한 취지).
+walk_reg_files() {
+  local d f
+  ( shopt -s nullglob dotglob globstar 2>/dev/null
+    for d in "$@"; do
+      [ -d "$d" ] || continue
+      for f in "$d"/**; do
+        [ -f "$f" ] && printf '%s\n' "$f"
+      done
+    done )
+}
+
 # 파일 소유자·권한 → GOOD/VULN/NA 직접 판정
 chk_perm() {  # code title file maxperm "owner1 owner2 ..."
   local code=$1 title=$2 f=$3 maxp=$4 owners=$5 p o
@@ -465,23 +480,23 @@ fi
 
 # U-15 파일 및 디렉터리 소유자 설정
 # [기준] 양호 - 소유자/그룹이 없는 파일·디렉터리 없음 / 취약 - 존재
-if [ "$IS_ROOT" -ne 1 ]; then
-  rep U-15 "파일 및 디렉터리 소유자 설정" MAN "전체 파일시스템 탐색은 root 필요 → root로 'find / -xdev -nouser -o -nogroup' 재점검"
-else
-  orphan=$(timeout 120 find / -xdev \( -nouser -o -nogroup \) -not -path '/proc/*' 2>/dev/null)
-  oc=$(printf '%s\n' "$orphan" | grep -c . )
-  if [ "$oc" -eq 0 ]; then rep U-15 "파일 및 디렉터리 소유자 설정" GOOD "소유자/그룹 없는 파일·디렉터리 없음"
-  else rep U-15 "파일 및 디렉터리 소유자 설정" VULN "소유자/그룹 없는 항목 ${oc}개 (예: $(printf '%s ' $(printf '%s\n' "$orphan" | head -5)))"; fi
-fi
+#   전체 파일시스템 소유자 점검은 부하가 크고(find 미사용 정책) 자동 판정이 어려워 수동확인으로 둔다.
+rep U-15 "파일 및 디렉터리 소유자 설정" MAN "전체 파일시스템의 소유자/그룹 없는(orphan) 파일 유무는 관리자 수동 점검 필요 (예: 파일 소유권 감사 도구 활용)"
 
 # U-16 /etc/passwd
 chk_perm U-16 "/etc/passwd 파일 소유자 및 권한 설정" /etc/passwd 644 "root"
 
 # U-17 시스템 시작 스크립트 권한 설정
 # [기준] 양호 - 시작 스크립트 소유자 root + 일반 사용자 쓰기 권한 없음 / 취약 - 아님
-ssbad=$(find -L /etc/init.d /etc/rc.d /etc/rc*.d /lib/systemd/system /usr/lib/systemd/system /etc/systemd/system -maxdepth 2 -type f 2>/dev/null \
-        | while read -r f; do o=$(stat -Lc '%U' "$f" 2>/dev/null); p=$(stat -Lc '%a' "$f" 2>/dev/null)
-            { [ "$o" != root ] || perm_has "$p" 022; } && echo "$f($o,$p)"; done | head -5 | tr '\n' ' ')
+ssbad=$( shopt -s nullglob
+  for f in /etc/init.d/* /etc/rc.d/* /etc/rc.d/*/* /etc/rc*.d/* \
+           /lib/systemd/system/* /lib/systemd/system/*/* \
+           /usr/lib/systemd/system/* /usr/lib/systemd/system/*/* \
+           /etc/systemd/system/* /etc/systemd/system/*/*; do
+    [ -f "$f" ] || continue     # 심볼릭 링크는 대상이 일반 파일이면 -f 로 참
+    o=$(stat -Lc '%U' "$f" 2>/dev/null); p=$(stat -Lc '%a' "$f" 2>/dev/null)
+    { [ "$o" != root ] || perm_has "$p" 022; } && echo "$f($o,$p)"
+  done | head -5 | tr '\n' ' ')
 if [ -z "$ssbad" ]; then rep U-17 "시스템 시작 스크립트 권한 설정" GOOD "시작 스크립트 소유자 root + group/other 쓰기 권한 없음"
 else rep U-17 "시스템 시작 스크립트 권한 설정" VULN "부적절: $ssbad (기준: root 소유, g/o 쓰기 없음)"; fi
 
@@ -532,17 +547,18 @@ chk_perm U-22 "/etc/services 파일 소유자 및 권한 설정" /etc/services 6
 # U-23 SUID/SGID/Sticky bit 설정 파일 점검
 # [기준] 양호 - 주요 실행 파일에 불필요한 SUID/SGID 없음 / 취약 - 상세가이드 제거권고 파일에 SUID/SGID 설정
 KISA_SUID_RM="/sbin/dump /sbin/restore /sbin/unix_chkpwd /usr/bin/at /usr/bin/lpq /usr/bin/lpq-lpd /usr/bin/lpr /usr/bin/lpr-lpd /usr/bin/lprm /usr/bin/lprm-lpd /usr/bin/newgrp /usr/sbin/lpc /usr/sbin/lpc-lpd /usr/sbin/traceroute /usr/bin/traceroute6 /usr/bin/wall /usr/bin/write"
-if [ "$IS_ROOT" -ne 1 ]; then
-  rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" MAN "전체 SUID/SGID 탐색은 root 필요 → root로 'find / -xdev -perm /6000' 재점검"
+# 전체 파일시스템 SUID/SGID 탐색(find / -perm)은 부하가 크고 금지되어, 상세가이드
+# '제거 권고' 목록 파일에 SUID/SGID 비트가 남아있는지만 stat 로 직접 점검한다.
+rm_hit=""
+for f in $KISA_SUID_RM; do
+  [ -f "$f" ] || continue
+  p=$(stat -Lc '%a' "$f" 2>/dev/null)
+  perm_has "$p" 6000 && rm_hit="$rm_hit $f($p)"
+done
+if [ -n "$rm_hit" ]; then
+  rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" VULN "상세가이드 제거권고 파일에 SUID/SGID 설정:$rm_hit → 불필요 시 권한 제거"
 else
-  rm_hit=""
-  for f in $KISA_SUID_RM; do [ -f "$f" ] && [ -n "$(find "$f" -perm /6000 2>/dev/null)" ] && rm_hit="$rm_hit $f"; done
-  suid_cnt=$(timeout 90 find / -xdev -type f -perm /6000 2>/dev/null | wc -l)
-  if [ -n "$rm_hit" ]; then
-    rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" VULN "상세가이드 제거권고 파일에 SUID/SGID:$rm_hit (총 SUID/SGID 파일 ${suid_cnt}개)"
-  else
-    rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" GOOD "제거권고 목록 파일에 SUID/SGID 없음 (총 ${suid_cnt}개는 배포판 표준 → 목록 검토 권장)"
-  fi
+  rep U-23 "SUID, SGID, Sticky bit 설정 파일 점검" GOOD "상세가이드 제거권고 목록 파일에 SUID/SGID 없음 (전체 파일시스템 SUID 목록은 관리자 수동 검토 권장)"
 fi
 
 # U-24 사용자/시스템 환경변수 파일 소유자 및 권한
@@ -570,18 +586,14 @@ else rep U-24 "사용자, 시스템 환경변수 파일 소유자 및 권한" VU
 
 # U-25 world writable 파일 점검
 # [기준] 양호 - world writable 파일 없음(또는 사유 인지) / 취약 - 사유 미인지 world writable 존재
-if [ "$IS_ROOT" -ne 1 ]; then
-  rep U-25 "world writable 파일 점검" MAN "전체 탐색 root 필요 → root로 'find / -xdev -type f -perm -0002' 재점검"
-else
-  ww=$(timeout 90 find / -xdev -type f -perm -0002 -not -path '/proc/*' 2>/dev/null)
-  wc_=$(printf '%s\n' "$ww" | grep -c .)
-  if [ "$wc_" -eq 0 ]; then rep U-25 "world writable 파일 점검" GOOD "world writable 일반 파일 없음"
-  else rep U-25 "world writable 파일 점검" VULN "world writable 파일 ${wc_}개 (예: $(printf '%s ' $(printf '%s\n' "$ww" | head -5))) → 사유 없으면 권한 제거"; fi
-fi
+#   전체 파일시스템 탐색은 부하가 크고(find 미사용 정책) 사유 인지 여부 판단이 필요해 수동확인으로 둔다.
+rep U-25 "world writable 파일 점검" MAN "전체 파일시스템의 world-writable(기타 쓰기) 일반 파일 유무는 관리자 수동 점검 필요 → 사유 없는 파일은 기타 쓰기 권한 제거"
 
 # U-26 /dev에 존재하지 않는 device 파일 점검
 # [기준] 양호 - /dev 내 비정상 일반 파일 없음 / 취약 - 존재
-devf=$(find /dev -type f ! -path '/dev/shm/*' ! -path '/dev/mqueue/*' ! -path '/dev/hugepages/*' ! -name MAKEDEV ! -name .udev ! -name core 2>/dev/null | head -10)
+devf=$(walk_reg_files /dev 2>/dev/null \
+       | grep -Ev '^/dev/(shm|mqueue|hugepages)/' \
+       | grep -Ev '/(MAKEDEV|\.udev|core)$' | head -10)
 devc=$(printf '%s\n' "$devf" | grep -c .)
 if [ "$devc" -eq 0 ]; then rep U-26 "/dev에 존재하지 않는 device 파일 점검" GOOD "/dev 내 비정상 일반 파일 없음"
 else rep U-26 "/dev에 존재하지 않는 device 파일 점검" VULN "/dev 내 일반 파일 ${devc}개: $(echo $devf | cut -c1-150)"; fi
@@ -699,7 +711,11 @@ else rep U-32 "홈 디렉토리로 지정한 디렉토리의 존재 관리" VULN
 
 # U-33 숨겨진 파일 및 디렉토리 검색 및 제거
 # [기준] 양호 - 불필요/의심 숨김 파일·디렉토리 없음 / 취약 - 존재
-susp=$(find /tmp /var/tmp /dev/shm -maxdepth 2 -name '.*' ! -name '.' ! -name '..' ! -name '.X11-unix' ! -name '.ICE-unix' ! -name '.font-unix' ! -name '.Test-unix' ! -name '.XIM-unix' 2>/dev/null | head -10 | tr '\n' ' ')
+susp=$( shopt -s nullglob dotglob
+  for f in /tmp/.* /var/tmp/.* /dev/shm/.* /tmp/*/.* /var/tmp/*/.* /dev/shm/*/.*; do
+    case "${f##*/}" in .|..|.X11-unix|.ICE-unix|.font-unix|.Test-unix|.XIM-unix) continue;; esac
+    printf '%s\n' "$f"
+  done 2>/dev/null | head -10 | tr '\n' ' ')
 if [ -z "$susp" ]; then rep U-33 "숨겨진 파일 및 디렉토리 검색 및 제거" GOOD "임시 디렉토리(/tmp,/var/tmp,/dev/shm)에 비정상 숨김 파일 없음"
 else rep U-33 "숨겨진 파일 및 디렉토리 검색 및 제거" VULN "임시 디렉토리에 숨김 파일 존재:$susp → 사유 확인 후 제거"; fi
 
@@ -1055,8 +1071,12 @@ fi
 if [ ! -e /etc/sudoers ]; then rep U-63 "sudo 명령어 접근 관리" NA "/etc/sudoers 없음"
 else
   so=$(stat -c '%U' /etc/sudoers); sp=$(stat -c '%a' /etc/sudoers)
-  d_bad=$(find /etc/sudoers.d -maxdepth 1 -type f 2>/dev/null | while read -r f; do
-            p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f"); { [ "$o" != root ] || ! perm_le "$p" 640; } && echo "$f($o,$p)"; done | tr '\n' ' ')
+  d_bad=$( shopt -s nullglob
+    for f in /etc/sudoers.d/*; do
+      [ -f "$f" ] || continue
+      p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
+      { [ "$o" != root ] || ! perm_le "$p" 640; } && echo "$f($o,$p)"
+    done | tr '\n' ' ')
   nopw=$(grep -rhE '^[^#]*NOPASSWD:[[:space:]]*ALL' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | grep -vE '^[[:space:]]*#' | awk '{print $1}' | tr '\n' ' ')
   if [ "$so" = root ] && perm_le "$sp" 640 && [ -z "$d_bad" ]; then
     rep U-63 "sudo 명령어 접근 관리" GOOD "/etc/sudoers 소유자=$so 권한=$sp + sudoers.d 권한 적절 (NOPASSWD:ALL 대상=${nopw:-없음})"

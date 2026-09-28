@@ -182,17 +182,17 @@ def _account(rep, ctx):
                 vb = k.get("validAfterTime", "")
                 try:
                     age = (now - datetime.datetime.fromisoformat(vb.replace("Z", "+00:00"))).days
-                    if age > 90:
-                        old.append(f"{sa['email']} 키 {age}일")
+                    if age > 60:
+                        old.append(f"{sa['email']} 키 {age}일 (기준 60일)")
                 except Exception:
                     pass
         ev = [f"활성 API {len(enabled)}개, 사용자 관리 서비스계정 {len(sas)}개, 사용자 관리 키 {total_keys}개"]
         if old:
-            rep.vuln("1.5", ev + ["90일 초과 서비스계정 키:"] + old, old)
+            rep.vuln("1.5", ev + ["60일 초과 서비스계정 키:"] + old, old)
         elif total_keys == 0:
             rep.na("1.5", ev + ["다운로드된 사용자 관리 서비스계정 키가 없음(권장 상태)"])
         else:
-            rep.good("1.5", ev + ["90일 초과 서비스계정 키 없음"])
+            rep.good("1.5", ev + ["60일 초과 서비스계정 키 없음"])
     safe(rep, "1.5", c15)
 
     # 1.6 SSH 키 사용 관리 (OS Login / block-project-ssh-keys)

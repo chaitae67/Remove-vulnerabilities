@@ -3,7 +3,7 @@
 """클라우드(AWS/Azure/GCP) 취약점 진단 — CSP별 파일로 분리.
 
 SK Shieldus 2024 클라우드 보안가이드 체크리스트 기준.
-GUI(kisa_gui.py)는 run(provider, creds) 하나만 호출하면 되고,
+호출부(cloud_scan.py)는 run(provider, creds) 하나만 호출하면 되고,
 반환값은 서버 진단(kisa_unix_check.sh 등)과 동일한 JSON 계약을 따른다:
 
     {
