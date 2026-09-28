@@ -38,10 +38,15 @@ def _session(creds):
 
 
 def _regions(sess):
+    import os
+    # 기본은 세션(지정) 리전만 조회 → 빠름. 전 리전 스캔은 CLOUD_SCAN_ALL_REGIONS=1 로 opt-in.
+    if str(os.environ.get("CLOUD_SCAN_ALL_REGIONS", "")).lower() not in ("1", "true", "yes", "all"):
+        if sess.region_name:
+            return [sess.region_name]
     try:
         ec2 = sess.client("ec2", region_name="us-east-1")
         rs = [r["RegionName"] for r in ec2.describe_regions(AllRegions=False)["Regions"]]
-        return rs or ["us-east-1"]
+        return rs or [sess.region_name or "us-east-1"]
     except Exception:
         return [sess.region_name or "us-east-1"]
 
