@@ -126,11 +126,11 @@ def _base_name(os_label, out_path):
     return os.path.join(os.getcwd(), f"cloud_{(os_label or 'result').upper()}_{stamp}")
 
 
-def save_results(os_label, results, out_path=None, want_xlsx=True):
-    """CSV(항상, 설치 불필요) + XLSX(openpyxl·양식 있으면) 로 저장하고 경로 목록 반환."""
+def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True):
+    """CSV(항상, 설치 불필요) + 다중시트 보고서 XLSX(openpyxl 있으면) 저장, 경로 목록 반환."""
     base = _base_name(os_label, out_path)
     saved = []
-    # 1) CSV — 표준 라이브러리, 한글 깨짐 방지(utf-8-sig). 설치·양식 없이도 항상 저장.
+    # 1) CSV — 표준 라이브러리, 한글 깨짐 방지(utf-8-sig). 설치 없이도 항상 저장.
     import csv
     csv_path = base + ".csv"
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -142,11 +142,15 @@ def save_results(os_label, results, out_path=None, want_xlsx=True):
                         verdict, " / ".join(r.get("evidence", [])),
                         " / ".join(r.get("resources", []))])
     saved.append(csv_path)
-    # 2) XLSX — openpyxl + 보고서 양식이 있을 때만(없으면 CSV 로 충분)
+    # 2) 보고서 XLSX(표지/진단대상/요약그래프/요약결과/상세) — openpyxl 있으면 코드로 생성
     if want_xlsx:
-        x = _write_xlsx(os_label, results, base + ".xlsx")
-        if x:
-            saved.append(x)
+        try:
+            import cloud_check.report as _rep
+            saved.append(_rep.build_report(provider, host, results, base + ".xlsx"))
+        except ImportError:
+            pass  # openpyxl 미설치 → CSV 로 충분
+        except Exception as e:  # noqa: BLE001
+            print(f"    (엑셀 보고서 생성 실패: {type(e).__name__}: {e} → CSV 로 저장됨)")
     return saved
 
 
@@ -253,13 +257,13 @@ def main():
         print(f"  {mark} [{r.get('code',''):<6}] {st:<8} {r.get('title','')}")
     print("  " + " | ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 
-    # 저장: CSV(항상) + XLSX(openpyxl·양식 있으면)
-    paths = save_results(os_label, results, args.output, want_xlsx=not args.no_excel)
+    # 저장: CSV(항상) + 보고서 XLSX(openpyxl 있으면)
+    paths = save_results(provider, os_label, host, results, args.output, want_xlsx=not args.no_excel)
     print()
     for pth in paths:
         print(f"[+] 저장: {pth}")
     if not any(p.endswith(".xlsx") for p in paths) and not args.no_excel:
-        print("    (xlsx 는 openpyxl/양식이 없어 생략 — CSV 를 열거나 pip install openpyxl 후 재실행)")
+        print("    (xlsx 보고서는 openpyxl 이 없어 생략 — CSV 를 열거나 pip install openpyxl 후 재실행)")
     print("[*] 완료")
 
 
