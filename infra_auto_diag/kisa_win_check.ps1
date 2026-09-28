@@ -18,6 +18,8 @@
 [CmdletBinding()]
 param(
     [string]$Json = "",
+    [string]$Csv = "",
+    [switch]$NoSave,
     [switch]$NoColor
 )
 
@@ -790,11 +792,32 @@ Write-Host "==============================================================" -For
 Write-Host " 수동확인 항목은 정책 수립 여부 등 인터뷰가 필요한 잔여 항목입니다."
 Write-Host ""
 
-# ---------------- JSON 파일 출력 (GUI 연동) ----------------
+# ---------------- JSON 파일 출력 (--Json <파일> 지정 시) ----------------
 if ($Json -ne "") {
     $out = [pscustomobject]@{
         host = $HOSTN; os = $OS_NAME; family = "windows"; results = @($script:results)
     }
     $out | ConvertTo-Json -Depth 5 -Compress | Out-File -FilePath $Json -Encoding UTF8
     Write-Host (" JSON 저장: {0}" -f $Json)
+}
+
+# ---------------- CSV 파일 출력 (기본 자동 저장. -Csv <파일> 지정, -NoSave 로 생략) ----------------
+if ($Csv -eq "" -and -not $NoSave) {
+    $h = ($HOSTN -replace '[^A-Za-z0-9._-]', ''); if ($h -eq "") { $h = "windows" }
+    $Csv = "server_windows_{0}_{1}.csv" -f $h, (Get-Date -Format "yyyyMMdd_HHmm")
+}
+if ($Csv -ne "") {
+    $rows = $script:results | ForEach-Object {
+        $st = $_.status
+        $rstat = switch ($st) { "수동확인" { "인터뷰 필요" } "N/A" { "양호" } default { $st } }
+        [pscustomobject][ordered]@{
+            "항목코드" = $_.code
+            "중요도"   = $_.importance
+            "진단항목" = $_.title
+            "진단결과" = $rstat
+            "상세"     = ($_.evidence -join " | ")
+        }
+    }
+    $rows | Export-Csv -Path $Csv -NoTypeInformation -Encoding UTF8
+    Write-Host (" CSV 저장: {0}   (엑셀에서 바로 열림)" -f $Csv)
 }

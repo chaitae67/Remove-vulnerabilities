@@ -25,10 +25,12 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 
 # ---- 인자 파싱 ----
-JSON_FILE=""; NOCOLOR=0
+JSON_FILE=""; CSV_FILE=""; NO_SAVE=0; NOCOLOR=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --json)     JSON_FILE="${2:-}"; shift 2 ;;
+    --csv)      CSV_FILE="${2:-}"; shift 2 ;;
+    --no-save)  NO_SAVE=1; shift ;;
     --no-color) NOCOLOR=1; shift ;;
     *)          shift ;;
   esac
@@ -52,11 +54,20 @@ declare -A IMP=(
   [U-64]=상 [U-65]=중 [U-66]=중 [U-67]=중
 )
 
-JBUF=""
+JBUF=""; CBUF=""
 json_escape() {
   local s=$1
   s=${s//\\/\\\\}; s=${s//\"/\\\"}
   s=${s//$'\t'/ }; s=${s//$'\r'/ }; s=${s//$'\n'/ }
+  printf '%s' "$s"
+}
+
+csv_escape() {   # CSV 필드 이스케이프(콤마/따옴표/줄바꿈 포함 시 큰따옴표로 감싸고 내부 " 는 "")
+  local s=$1
+  s=${s//$'\r'/ }; s=${s//$'\n'/ }
+  case "$s" in
+    *[,\"]* ) s=${s//\"/\"\"}; s="\"$s\"" ;;
+  esac
   printf '%s' "$s"
 }
 
@@ -79,6 +90,11 @@ rep() {
     if [ "$first" -eq 1 ]; then ev="\"$e\""; first=0; else ev="$ev,\"$e\""; fi
   done
   JBUF="${JBUF}{\"code\":\"$code\",\"importance\":\"${IMP[$code]}\",\"title\":\"$(json_escape "$title")\",\"status\":\"$kstat\",\"evidence\":[$ev]},"
+  # CSV 한 줄(근거는 ' | ' 로 합침, 상태는 보고서 표기로)
+  local evtext="" rstat="$kstat"; [ "$kstat" = "수동확인" ] && rstat="인터뷰 필요"; [ "$kstat" = "N/A" ] && rstat="양호"
+  for l in "$@"; do evtext="${evtext:+$evtext | }$l"; done
+  CBUF="${CBUF}$(csv_escape "$code"),$(csv_escape "${IMP[$code]}"),$(csv_escape "$title"),$(csv_escape "$rstat"),$(csv_escape "$evtext")
+"
 }
 
 #------------------------------------------------------------------------------
@@ -1097,7 +1113,7 @@ echo -e " ${B}수동확인${N} 항목은 정책 수립 여부 등 인터뷰가 �
 echo -e " 이 스크립트는 읽기 전용입니다. 조치는 각 항목 [기준] 에 맞춰 별도 수행하세요."
 echo
 
-# ---- JSON 파일 출력 (GUI 연동: --json <파일>) ----
+# ---- JSON 파일 출력 (--json <파일> 지정 시) ----
 if [ -n "$JSON_FILE" ]; then
   {
     printf '{"host":"%s","os":"%s","family":"%s","results":[' \
@@ -1106,4 +1122,18 @@ if [ -n "$JSON_FILE" ]; then
     printf ']}'
   } > "$JSON_FILE"
   echo " JSON 저장: $JSON_FILE"
+fi
+
+# ---- CSV 파일 출력 (기본 자동 저장. --csv <파일> 지정, --no-save 로 생략) ----
+if [ -z "$CSV_FILE" ] && [ "$NO_SAVE" -ne 1 ]; then
+  _h=$(hostname 2>/dev/null | tr -cd 'A-Za-z0-9._-'); [ -z "$_h" ] && _h=linux
+  CSV_FILE="server_linux_${_h}_$(date +%Y%m%d_%H%M).csv"
+fi
+if [ -n "$CSV_FILE" ]; then
+  {
+    printf '\357\273\277'                              # UTF-8 BOM (엑셀 한글)
+    printf '항목코드,중요도,진단항목,진단결과,상세\n'
+    printf '%s' "$CBUF"
+  } > "$CSV_FILE"
+  echo " CSV 저장: $CSV_FILE   (엑셀에서 바로 열림)"
 fi

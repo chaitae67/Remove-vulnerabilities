@@ -76,8 +76,11 @@ sudo bash kisa_unix_check.sh          # U-01 ~ U-67, RHEL/Debian 계열 자동�
 powershell -ExecutionPolicy Bypass -File kisa_win_check.ps1   # W-01 ~ W-64
 ```
 
+- 실행하면 콘솔에 판정+근거를 찍고, **결과 CSV 를 자동 저장**한다(현재 폴더, 엑셀에서 바로 열림):
+  `server_linux_<host>_<날짜>.csv` / `server_windows_<host>_<날짜>.csv`.
+  경로 지정은 Linux `--csv <파일>` / Windows `-Csv <파일>`, 저장 생략은 `--no-save` / `-NoSave`.
 - `.ps1` 은 **UTF-8 BOM** 이어야 PowerShell 5.1 에서 한글이 안 깨진다.
-- 판정 + 근거를 텍스트로 출력한다.
+- 서버가 사설망이면, 생성된 CSV 를 SCP/파일전송으로 내려받으면 된다(클라우드 쉘과 동일).
 
 ---
 
