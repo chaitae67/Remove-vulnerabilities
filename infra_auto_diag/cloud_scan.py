@@ -31,6 +31,13 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
+# 콘솔 인코딩이 UTF-8 이 아니어도(윈도우 cp949 등) 한글/기호 출력이 깨지거나 죽지 않게
+for _s in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import cloud_check  # noqa: E402  (같은 폴더의 패키지)
 
 MANUAL_LABEL = "인터뷰 필요"
@@ -246,11 +253,13 @@ def main():
         print(f"  {mark} [{r.get('code',''):<6}] {st:<8} {r.get('title','')}")
     print("  " + " | ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 
-    # 엑셀 저장
-    if not args.no_excel:
-        path = save_excel(os_label, results, host, args.output)
-        if path:
-            print(f"\n[+] 엑셀 저장: {path}")
+    # 저장: CSV(항상) + XLSX(openpyxl·양식 있으면)
+    paths = save_results(os_label, results, args.output, want_xlsx=not args.no_excel)
+    print()
+    for pth in paths:
+        print(f"[+] 저장: {pth}")
+    if not any(p.endswith(".xlsx") for p in paths) and not args.no_excel:
+        print("    (xlsx 는 openpyxl/양식이 없어 생략 — CSV 를 열거나 pip install openpyxl 후 재실행)")
     print("[*] 완료")
 
 
