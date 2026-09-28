@@ -41,6 +41,18 @@ python cloud_scan.py naver --access-key .. --secret-key .. --region KR   # 또�
   `openpyxl` 과 보고서 양식(`보고서_양식_*.xlsx`)이 있으면 xlsx 도 함께 저장.
   (`-o` 저장 경로, `--no-excel` xlsx 생략, `--all-regions` 전 리전)
 
+### 단일 파일로 실행 (`cloudscan_all.py`) — 파일 하나만 올리면 끝
+
+`cloud_check/` 패키지를 통째로 내장한 **단일 파일**. 폴더·zip 없이 이거 하나만 올려서 실행하면
+스스로 풀어서 돌아간다(결과는 CSV — 양식 xlsx 도 불필요).
+
+```bash
+python cloudscan_all.py aws         # 클라우드 쉘에서 키 없이 그대로
+python cloudscan_all.py naver --access-key .. --secret-key ..
+```
+- 옵션·자격증명은 `cloud_scan.py` 와 동일.
+- 코드를 고치면 `python build_onefile.py` 로 재생성한다.
+
 ### 설치
 
 ```bash
