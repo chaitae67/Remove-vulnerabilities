@@ -29,7 +29,7 @@ for _s in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
 
 import server_report  # noqa: E402
 
-TEMPLATE_SUFFIX = {"linux": "_Linux.xlsx", "windows": "_Windows.xlsx"}
+TEMPLATE_SUFFIX = {"linux": "_Linux.xlsx", "windows": "_Windows.xlsx", "dbms": "_DBMS.xlsx"}
 
 
 def _find_template(os_kind, explicit):
@@ -42,8 +42,9 @@ def _find_template(os_kind, explicit):
     return None
 
 
-# 서버(리눅스/윈도우)는 양식 파일에 채우고, 인프라(웹서버/DBMS)와 클라우드는 양식 없이 생성한다.
-INFRA_KINDS = {"web", "webserver", "nginx", "iis", "tomcat", "dbms", "db", "oracle"}
+# 서버(리눅스/윈도우/DBMS)는 공식 양식 파일에 채우고, 웹서버(임시)·클라우드는 코드 생성.
+SERVER_KINDS = {"linux", "windows", "dbms", "db", "oracle"}   # 양식 파일 채우기(server_report)
+INFRA_KINDS = {"web", "webserver", "nginx", "iis", "tomcat"}  # 코드 생성(infra_report) — 웹서버(추후 양식화)
 CLOUD_KINDS = {"aws", "azure", "gcp", "naver"}
 
 
@@ -89,28 +90,28 @@ def main():
         os.getcwd(),
         "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
 
-    if args.kind in CLOUD_KINDS or args.kind in INFRA_KINDS:
-        # 웹서버/DBMS/클라우드 — 서버 보고서와 동일한 5시트(표지/진단대상/2-1 3차트/2-2요약/3-1상세)
+    if args.kind in SERVER_KINDS:
+        # 리눅스/윈도우/DBMS — 공식 양식 파일에 값만 채움(색·서식·차트·조건부서식 100% 보존)
+        server_kind = {"db": "dbms", "oracle": "dbms"}.get(args.kind, args.kind)
+        tpl = _find_template(server_kind, args.template)
+        if not tpl:
+            sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[server_kind]}). "
+                     f"--template 으로 경로를 지정하세요.")
+        try:
+            server_report.fill_report(server_kind, loaded, tpl, out, fix_template=args.fix_template)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
+    else:
+        # 웹서버(추후 양식화)·클라우드 — 코드 생성(infra_report)
         import infra_report  # noqa: E402
-        target = {"webserver": "web", "nginx": "web", "iis": "web", "tomcat": "web",
-                  "db": "dbms", "oracle": "dbms"}.get(args.kind, args.kind)
+        target = {"webserver": "web", "nginx": "web", "iis": "web", "tomcat": "web"}.get(args.kind, args.kind)
         try:
             infra_report.build_report(target, host or target.upper(), osver, results, out)
         except Exception as e:  # noqa: BLE001
             sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
-    else:
-        tpl = _find_template(args.kind, args.template)
-        if not tpl:
-            sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[args.kind]}). "
-                     f"--template 으로 경로를 지정하세요.")
-        try:
-            server_report.fill_report(args.kind, loaded, tpl, out,   # 다중 서버 → 열로 합침
-                                      fix_template=args.fix_template)
-        except Exception as e:  # noqa: BLE001
-            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
 
     print(f"[+] 보고서 저장: {out}")
-    if args.kind in ("linux", "windows"):
+    if args.kind in ("linux", "windows", "dbms", "db", "oracle"):
         for s in loaded:
             nv = sum(1 for r in s["results"] if (r.get("final") or r.get("status")) == "취약")
             print(f"    - {s['host']} ({s['osver']})  항목 {len(s['results'])}개, 취약 {nv}개")

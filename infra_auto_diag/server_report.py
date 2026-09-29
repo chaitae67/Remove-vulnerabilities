@@ -41,6 +41,7 @@ SPECS = {
         "label": "Linux", "id_col": "C", "detail_first": 6, "detail_last": 72,
         "result_cols": ["F", "H", "J", "L"], "evid_cols": ["G", "I", "K", "M"],
         "sum_cols": ["F", "G", "H", "I"], "servers": 4,
+        "b1": "  ※ 진단 대상 리스트 - 서버 {n}대 (Linux {n}대)",
     },
     "windows": {
         "cover": "0. 표지", "target": "1. 진단 대상", "detail": "3-1. 진단 결과(window)",
@@ -48,6 +49,14 @@ SPECS = {
         "label": "Windows", "id_col": "C", "detail_first": 6, "detail_last": 69,
         "result_cols": ["F", "H"], "evid_cols": ["G", "I"],
         "sum_cols": ["F", "G"], "servers": 2,
+        "b1": "  ※ 진단 대상 리스트 - 서버 {n}대 (Windows {n}대)",
+    },
+    "dbms": {
+        "cover": "0. 표지", "target": "1. 진단 대상", "detail": "3-1. 진단 결과(Oracle)",
+        "summary": "2-2. 요약 진단결과(Oracle)",
+        "label": "Oracle", "id_col": "C", "detail_first": 6, "detail_last": 31,
+        "result_cols": ["F"], "evid_cols": ["G"], "sum_cols": ["F"], "servers": 1,
+        "b1": "  ※ 진단 대상 리스트 - DBMS {n}대 (Oracle {n}대)",
     },
 }
 TARGET_FIRST_ROW = 5
@@ -285,7 +294,8 @@ def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_templa
         bk.put(tw, f"D{r}", (sv.get("ip") or "-").strip())
         bk.put(tw, f"E{r}", (sv.get("osver") or "").strip())
         bk.put(tw, f"F{r}", (sv.get("role") or "-").strip())
-    bk.put(tw, "B1", f"  ※ 진단 대상 리스트 - 서버 {len(servers)}대 ({spec['label']} {len(servers)}대)")
+    b1 = spec.get("b1", "  ※ 진단 대상 리스트 - 서버 {n}대 (" + spec["label"] + " {n}대)")
+    bk.put(tw, "B1", b1.format(n=len(servers)))
 
     # 3-1. 진단 결과 (서버별 판정 + 근거)
     dw = bk.sheet(spec["detail"])
