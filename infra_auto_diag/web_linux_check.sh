@@ -150,8 +150,13 @@ else
   elif [ -n "$APP_YML" ] && [ -f "$APP_YML" ]; then APP_YML_CONTENT=$(cat "$APP_YML")
   fi
   TOMCAT_VER=""
-  [ -n "$APP_JAR" ] && have unzip && TOMCAT_VER=$(unzip -p "$APP_JAR" 'META-INF/MANIFEST.MF' 2>/dev/null | sed -n 's/.*Tomcat[^0-9]*\([0-9][0-9.]*\).*/\1/p' | head -1)
+  # 내장 Tomcat 버전은 BOOT-INF/lib/tomcat-embed-core-<ver>.jar 파일명에서 추출
+  [ -n "$APP_JAR" ] && have unzip && TOMCAT_VER=$(unzip -l "$APP_JAR" 2>/dev/null | grep -oE 'tomcat-embed-core-[0-9.]+\.jar' | head -1 | sed -E 's/tomcat-embed-core-([0-9.]+)\.jar/\1/')
   SW_VER="Tomcat ${TOMCAT_VER:-내장(Spring Boot)}"
+  # 로그 디렉터리 후보(application.yml logging.file.* + 관용 경로)
+  yml_logpath=$(printf '%s\n' "$APP_YML_CONTENT" | grep -iE 'logging\.file\.(path|name)|^\s*(path|name):' | grep -iE 'log' | head -1 | sed -E 's/.*[:=] *//' | tr -d '"'"'"' \r')
+  yml_logdir=""; [ -n "$yml_logpath" ] && { case "$yml_logpath" in */*) yml_logdir=$(dirname "$yml_logpath");; *) yml_logdir="$yml_logpath";; esac; }
+  APP_LOGDIRS="$yml_logdir /var/log/clinic /opt/clinic/logs /var/log/tomcat*"
   echo -e "  대상: ${W}Apache Tomcat(Spring Boot 내장)${N} ${TOMCAT_VER:-?}   jar: ${APP_JAR:-미상}  프로세스 소유자: ${APP_OWNER:-?}"
 fi
 yml_get() { printf '%s\n' "$APP_YML_CONTENT" | grep -iE "$1" | head -1 | tr -s ' ' ' '; }
@@ -306,7 +311,7 @@ if [ "$TARGET" = nginx ]; then
   root_dir=$(conf_grep '^[[:space:]]*root[[:space:]]' | head -1 | awk '{print $2}' | tr -d ';')
   [ -n "$root_dir" ] && [ -d "$root_dir" ] && other_writable "$root_dir" && bad14="$bad14 $root_dir($(stat -c '%a' "$root_dir"))"
 else
-  logd="/var/log/clinic /opt/clinic/logs"; for d in $logd; do [ -d "$d" ] && other_writable "$d" && bad14="$bad14 $d($(stat -c '%a' "$d"))"; done
+  for d in $APP_LOGDIRS; do [ -d "$d" ] && { other_writable "$d" || other_readable "$d"; } && bad14="$bad14 $d($(stat -c '%a' "$d"))"; done
 fi
 if [ -n "$bad14" ]; then rep WEB-14 VULN "일반 사용자 접근/쓰기 가능한 주요 파일·디렉터리:$bad14 → 권한 제거"
 elif [ "$TARGET" = tomcat ]; then rep WEB-14 MAN "주요 설정/로그 디렉터리 권한 확인 권장(일반 사용자 접근 제거)"
@@ -434,7 +439,7 @@ if [ "$TARGET" = nginx ]; then
     else rep WEB-26 GOOD "$ld 권한=$lp → 일반 사용자 접근 없음"; fi
   else rep WEB-26 MAN "로그 디렉터리(/var/log/nginx) 미확인 → 일반 사용자 접근 권한 확인"; fi
 else
-  ld=""; for d in /var/log/clinic /opt/clinic/logs /var/log/tomcat*; do [ -d "$d" ] && ld="$d" && break; done
+  ld=""; for d in $APP_LOGDIRS; do [ -d "$d" ] && ld="$d" && break; done
   if [ -n "$ld" ]; then
     lp=$(stat -c '%a' "$ld" 2>/dev/null)
     if [ "$(( 8#${lp:-0} & 8#005 ))" -ne 0 ]; then rep WEB-26 VULN "$ld 권한=$lp → 일반 사용자 로그 열람/접근 허용(750 이하 권장)"

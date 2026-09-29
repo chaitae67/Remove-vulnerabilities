@@ -31,10 +31,13 @@ sudo bash web_linux_check.sh                 # 웹서버(Nginx/Tomcat 자동감�
 bash db_oracle_check.sh --conn "sys/pw@//localhost:1521/XEPDB1 as sysdba"   # Oracle
 ```
 ```powershell
-# 윈도우 계열(서버/IIS)
+# 윈도우 계열(서버/웹서버)
 powershell -ExecutionPolicy Bypass -File kisa_win_check.ps1        # 윈도우 서버
-powershell -ExecutionPolicy Bypass -File web_windows_check.ps1     # 웹서버(IIS)
+powershell -ExecutionPolicy Bypass -File web_windows_check.ps1     # 웹서버(IIS/Tomcat 자동감지)
+powershell -ExecutionPolicy Bypass -File web_windows_check.ps1 -Target tomcat -AppJar C:\app.jar -AppUrl http://localhost:8080
 ```
+> `web_windows_check.ps1` 은 IIS 와 **Windows 의 Spring Boot 내장 Tomcat(nssm)** 을 자동 감지한다.
+> 웹서버 대상: web1(IIS)·was1(Windows Tomcat)=`.ps1`, web-adm1(Nginx)·was-adm1(Linux Tomcat)=`web_linux_check.sh`.
 결과는 현재 폴더에 `*.csv` 와 `*.html`(브라우저로 바로 열리는 리포트)로 남는다. 사설망이면 그 파일만 내려받으면 된다.
 
 ### 정형 보고서(양식 xlsx)로 만들기
@@ -182,8 +185,8 @@ cloud_check/         클라우드 진단 코어 (CSP별 분리, GUI/SSH 비의�
   ncp.py    ncp_items.py    Naver(NCP) 31항목 (네이버 양식 v1.2)
 kisa_unix_check.sh   Linux 서버 점검 (U-01~U-67, 계열 자동분기)
 kisa_win_check.ps1   Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
-web_linux_check.sh   웹서버(Nginx/Tomcat) 점검 (WEB-01~26, 자동감지, CSV/JSON/HTML)
-web_windows_check.ps1 웹서버(IIS) 점검 (WEB-01~26, UTF-8 BOM 필수)
+web_linux_check.sh   웹서버(Nginx/리눅스 Tomcat) 점검 (WEB-01~26, 자동감지, CSV/JSON/HTML)
+web_windows_check.ps1 웹서버(IIS/윈도우 Tomcat) 점검 (WEB-01~26, 자동감지, UTF-8 BOM 필수)
 db_oracle_check.sh   DBMS(Oracle) 점검 (D-01~26, sqlplus, CSV/JSON/HTML)
 make_report.py       진단 JSON → 보고서 xlsx (linux/windows=양식, web/dbms=양식 없이 생성)
 infra_report.py      웹서버/DBMS 보고서(5시트+레이더) 생성 코어
