@@ -19,12 +19,17 @@ OUT = os.path.join(HERE, "cloudscan_all.py")
 
 
 def main():
-    # 1) 패키지 .py 를 base64 로
+    # 1) 패키지 .py 를 base64 로 (cloud_check/*.py → 'cloud_check/이름')
     embed = {}
     for path in sorted(glob.glob(os.path.join(HERE, "cloud_check", "*.py"))):
-        rel = os.path.basename(path)
         with open(path, "rb") as f:
-            embed[rel] = base64.b64encode(f.read()).decode("ascii")
+            embed["cloud_check/" + os.path.basename(path)] = base64.b64encode(f.read()).decode("ascii")
+    # 클라우드 직접 실행 시에도 서버 양식(5시트+3차트)으로 보고서 생성하도록 infra_report 도 내장(루트)
+    for top in ("infra_report.py",):
+        p = os.path.join(HERE, top)
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                embed[top] = base64.b64encode(f.read()).decode("ascii")
 
     # 2) cloud_scan.py 본문(부트스트랩이 cloud_check 를 먼저 심은 뒤 실행됨)
     with io.open(os.path.join(HERE, "cloud_scan.py"), encoding="utf-8") as f:
@@ -47,10 +52,9 @@ def main():
     parts.append(
         "def _bootstrap():\n"
         "    d = _os.path.join(_tf.gettempdir(), 'cloud_check_embed_' + _EMBED_ID)\n"
-        "    pkg = _os.path.join(d, 'cloud_check')\n"
-        "    _os.makedirs(pkg, exist_ok=True)\n"
         "    for _name, _b in _EMBED.items():\n"
-        "        _p = _os.path.join(pkg, _name)\n"
+        "        _p = _os.path.join(d, *_name.split('/'))\n"
+        "        _os.makedirs(_os.path.dirname(_p), exist_ok=True)\n"
         "        _data = _b64.b64decode(_b)\n"
         "        try:\n"
         "            with open(_p, 'rb') as _f: _cur = _f.read()\n"

@@ -87,20 +87,13 @@ def main():
         os.getcwd(),
         "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
 
-    if args.kind in CLOUD_KINDS:
-        # 클라우드 — 서버/웹과 동일한 5시트(표지/진단대상/요약그래프/요약결과/상세) xlsx 생성
-        from cloud_check import report as cloud_report  # noqa: E402
-        provider = args.kind if args.kind != "naver" else "naver"
-        try:
-            cloud_report.build_report(provider, host or provider.upper(), results, out)
-        except Exception as e:  # noqa: BLE001
-            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
-    elif args.kind in INFRA_KINDS:
-        # 웹서버/DBMS — 양식 파일 없이 openpyxl 로 5시트 보고서 생성(레이더 차트 포함)
+    if args.kind in CLOUD_KINDS or args.kind in INFRA_KINDS:
+        # 웹서버/DBMS/클라우드 — 서버 보고서와 동일한 5시트(표지/진단대상/2-1 3차트/2-2요약/3-1상세)
         import infra_report  # noqa: E402
-        target = {"web": "web", "webserver": "web", "db": "dbms", "oracle": "dbms"}.get(args.kind, args.kind)
+        target = {"webserver": "web", "nginx": "web", "iis": "web", "tomcat": "web",
+                  "db": "dbms", "oracle": "dbms"}.get(args.kind, args.kind)
         try:
-            infra_report.build_report(target, host, osver, results, out)
+            infra_report.build_report(target, host or target.upper(), osver, results, out)
         except Exception as e:  # noqa: BLE001
             sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
     else:

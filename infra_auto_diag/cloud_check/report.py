@@ -47,7 +47,19 @@ def _code_key(c):
 
 
 def build_report(provider, host, results, out_path):
-    """provider('aws'..'naver'), host(식별자), results(run()의 results), out_path 로 저장."""
+    """provider('aws'..'naver'), host(식별자), results(run()의 results), out_path 로 저장.
+
+    서버 보고서와 동일한 5시트+3차트 양식(infra_report)으로 생성한다.
+    infra_report 를 불러올 수 없는 환경에서만 아래 기존(단일 레이더) 생성으로 폴백한다.
+    """
+    try:
+        import infra_report
+        return infra_report.build_report(provider, host, "", results, out_path)
+    except Exception:
+        return _build_report_legacy(provider, host, results, out_path)
+
+
+def _build_report_legacy(provider, host, results, out_path):
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.chart import RadarChart, Reference
