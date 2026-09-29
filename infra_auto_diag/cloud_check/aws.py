@@ -8,6 +8,7 @@ READ-ONLY — describe_* / list_* / get_* 만 호출한다. 리소스를 변경�
 자동 판정이 가능한 항목은 boto3 로 직접 확인하고,
 업무 컨텍스트가 필요한 항목(1인 1계정, 불필요한 계정, 키 보관 위치 등)은
 근거를 수집해 '수동확인'(보고서에선 '인터뷰 필요')으로 분류한다.
+조회 권한이 없어 확인하지 못한 항목은 '양호'가 아니라 '수동확인'으로 둔다.
 """
 import datetime
 
@@ -18,7 +19,28 @@ _SENSITIVE_PORTS = {22: "SSH", 23: "Telnet", 3389: "RDP", 3306: "MySQL",
                     5432: "PostgreSQL", 6379: "Redis", 27017: "MongoDB",
                     1433: "MSSQL", 9200: "Elasticsearch", 11211: "Memcached",
                     2049: "NFS", 5900: "VNC", 137: "NetBIOS", 445: "SMB"}
-_ADMIN_POLICY_ARNS = {"arn:aws:iam::aws:policy/AdministratorAccess"}
+_ADMIN_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
+_AWS_POLICY_PREFIX = "arn:aws:iam::aws:policy/"
+_ANY4, _ANY6 = "0.0.0.0/0", "::/0"
+
+# 1.3 사용자 식별 태그로 인정하는 키(부분 일치, 소문자 비교)
+_ID_TAG_HINTS = ("name", "mail", "dept", "department", "team", "owner", "employee",
+                 "이름", "성명", "이메일", "메일", "부서", "소속", "사번")
+
+# 2.x — 서비스 역할의 신뢰 주체(서비스)로 분류, 액션 접두어로 서비스 전체권한 근거 수집
+_INSTANCE_TRUST = {"ec2", "ecs", "ecs-tasks", "eks", "eks-fargate-pods", "eks-nodegroup",
+                   "ecr", "elasticfilesystem", "rds", "s3"}
+_NETWORK_TRUST = {"apigateway", "vpc-flow-logs", "cloudfront", "route53", "directconnect",
+                  "appmesh", "servicediscovery", "elasticloadbalancing", "globalaccelerator"}
+_CAT_ACTIONS = {
+    "2.1": ("인스턴스 서비스", {"ec2", "ecs", "ecr", "eks", "elasticfilesystem", "rds", "s3"}),
+    "2.2": ("네트워크 서비스", {"ec2", "cloudfront", "route53", "apigateway", "directconnect",
+                          "appmesh", "servicediscovery"}),
+    "2.3": ("기타 서비스", {"organizations", "cloudwatch", "logs", "autoscaling", "cloudformation",
+                        "cloudtrail", "config", "ssm", "guardduty", "inspector", "inspector2",
+                        "sso", "acm", "kms", "waf", "wafv2", "waf-regional", "shield",
+                        "securityhub", "datapipeline", "glue", "kafka", "backup"}),
+}
 
 
 def _session(creds):
@@ -60,15 +82,24 @@ def _is_denied(e):
     return any(m in s for m in _DENY_MARKERS)
 
 
-def _each_region(sess, service, fn):
-    """모든 활성 리전에서 fn(client, region) 을 호출해 리스트를 합친다.
+def _pages(client, op, key, **kw):
+    """목록 조회 — 페이지네이션을 지원하는 API 는 끝까지 모은다(IAM 100건 제한 등 누락 방지)."""
+    if client.can_paginate(op):
+        out = []
+        for page in client.get_paginator(op).paginate(**kw):
+            out.extend(page.get(key, []))
+        return out
+    return getattr(client, op)(**kw).get(key, [])
+
+
+def _each_region(sess, regions, service, fn):
+    """모든 대상 리전에서 fn(client, region) 을 호출해 리스트를 합친다.
 
     권한 오류가 '모든' 리전에서 나면 PermissionError 로 올려 safe() 가 수동확인 처리한다.
     리전별 서비스 미지원(EndpointConnectionError 등)은 조용히 건너뛴다.
     """
     out, denied, ok = [], 0, 0
-    regs = _regions(sess)
-    for r in regs:
+    for r in regions:
         try:
             out.extend(fn(sess.client(service, region_name=r), r) or [])
             ok += 1
@@ -81,21 +112,232 @@ def _each_region(sess, service, fn):
     return out
 
 
-def _policy_is_admin(doc):
-    """정책 문서에 Action:* / Resource:* Allow 가 있으면 True."""
-    stmts = doc.get("Statement", [])
-    if isinstance(stmts, dict):
-        stmts = [stmts]
-    for st in stmts:
-        if st.get("Effect") != "Allow":
-            continue
-        acts = st.get("Action", [])
-        acts = [acts] if isinstance(acts, str) else acts
-        res = st.get("Resource", [])
-        res = [res] if isinstance(res, str) else res
-        if any(a == "*" or a.endswith(":*") for a in acts) and "*" in res:
+# ---- IAM 정책 문서 해석 ----------------------------------------------------------
+def _as_list(v):
+    if v is None:
+        return []
+    return [v] if isinstance(v, str) else list(v)
+
+
+def _statements(doc):
+    if not isinstance(doc, dict):
+        return []
+    st = doc.get("Statement", [])
+    return [st] if isinstance(st, dict) else [s for s in st if isinstance(s, dict)]
+
+
+def _doc_admin(doc):
+    """Allow + Action "*" + Resource "*" 가 있으면 관리자(전체권한) 정책."""
+    for st in _statements(doc):
+        if st.get("Effect") == "Allow" and "*" in _as_list(st.get("Action")) \
+                and "*" in _as_list(st.get("Resource")):
             return True
     return False
+
+
+def _doc_wildcards(doc):
+    """Resource "*" 에 대해 '서비스:*' 로 허용된 서비스 접두어 집합(관리자는 아니지만 서비스 전체권한)."""
+    out = set()
+    for st in _statements(doc):
+        if st.get("Effect") != "Allow" or "*" not in _as_list(st.get("Resource")):
+            continue
+        for a in _as_list(st.get("Action")):
+            if ":" in a and a.endswith(":*"):
+                out.add(a.split(":", 1)[0].lower())
+    return out
+
+
+def _doc_allows(doc, action):
+    svc = action.split(":", 1)[0].lower()
+    for st in _statements(doc):
+        if st.get("Effect") != "Allow":
+            continue
+        acts = [a.lower() for a in _as_list(st.get("Action"))]
+        if "*" in acts or f"{svc}:*" in acts or action.lower() in acts:
+            return True
+    return False
+
+
+def _trusted_services(role):
+    """역할 신뢰 정책의 서비스 주체 접두어(ec2, lambda ...). Principal 이 "*" 문자열이어도 안전."""
+    doc = role.get("AssumeRolePolicyDocument") or {}
+    if isinstance(doc, str):
+        import json
+        import urllib.parse
+        try:
+            doc = json.loads(urllib.parse.unquote(doc))
+        except Exception:
+            doc = {}
+    out = set()
+    for st in _statements(doc):
+        pr = st.get("Principal")
+        if isinstance(pr, dict):
+            for s in _as_list(pr.get("Service")):
+                out.add(str(s).split(".", 1)[0].lower())
+    return out
+
+
+class _IamView:
+    """IAM 주체(사용자/그룹/역할)의 연결 정책을 한 번씩만 조회해 분석한다(1.1 / 2.x / 4.8 공용)."""
+
+    def __init__(self, iam):
+        self.iam = iam
+        self._docs, self._groups = {}, {}
+        self._users = self._roles = None
+
+    def managed_doc(self, arn):
+        if arn not in self._docs:
+            p = self.iam.get_policy(PolicyArn=arn)["Policy"]
+            v = self.iam.get_policy_version(PolicyArn=arn, VersionId=p["DefaultVersionId"])
+            self._docs[arn] = v["PolicyVersion"]["Document"]
+        return self._docs[arn]
+
+    def analyze(self, attached, inline):
+        """attached=[정책 ARN], inline=[(이름, 문서)] → 관리자/고위험/FullAccess/서비스 전체권한 분류."""
+        a = {"admin": [], "high": [], "full": [], "wild": set(), "names": set(), "docs": []}
+        for arn in attached:
+            name = arn.split("/")[-1]
+            a["names"].add(name)
+            if arn == _ADMIN_ARN:
+                a["admin"].append("AdministratorAccess")
+            elif arn.startswith(_AWS_POLICY_PREFIX):
+                if name == "IAMFullAccess":
+                    a["high"].append(name)          # 스스로 권한 상승이 가능한 고위험 권한
+                elif name.endswith("FullAccess") or name == "PowerUserAccess":
+                    a["full"].append(name)
+            else:                                    # 고객 관리형 — 문서까지 확인
+                doc = self.managed_doc(arn)
+                a["docs"].append(doc)
+                if _doc_admin(doc):
+                    a["admin"].append(f"{name}(고객관리형 *:*)")
+                a["wild"] |= _doc_wildcards(doc)
+        for pname, doc in inline:
+            a["docs"].append(doc)
+            if _doc_admin(doc):
+                a["admin"].append(f"{pname}(인라인 *:*)")
+            a["wild"] |= _doc_wildcards(doc)
+        return a
+
+    def group(self, gname):
+        if gname not in self._groups:
+            iam = self.iam
+            att = [p["PolicyArn"] for p in
+                   _pages(iam, "list_attached_group_policies", "AttachedPolicies", GroupName=gname)]
+            inl = [(p, iam.get_group_policy(GroupName=gname, PolicyName=p)["PolicyDocument"])
+                   for p in _pages(iam, "list_group_policies", "PolicyNames", GroupName=gname)]
+            self._groups[gname] = self.analyze(att, inl)
+        return self._groups[gname]
+
+    def users(self):
+        if self._users is None:
+            iam, out = self.iam, []
+            for u in _pages(iam, "list_users", "Users"):
+                n = u["UserName"]
+                att = [p["PolicyArn"] for p in
+                       _pages(iam, "list_attached_user_policies", "AttachedPolicies", UserName=n)]
+                inl = [(p, iam.get_user_policy(UserName=n, PolicyName=p)["PolicyDocument"])
+                       for p in _pages(iam, "list_user_policies", "PolicyNames", UserName=n)]
+                groups = [g["GroupName"] for g in
+                          _pages(iam, "list_groups_for_user", "Groups", UserName=n)]
+                out.append({"name": n, "own": self.analyze(att, inl),
+                            "group_a": {g: self.group(g) for g in groups}})
+            self._users = out
+        return self._users
+
+    def roles(self):
+        if self._roles is None:
+            iam, out = self.iam, []
+            for r in _pages(iam, "list_roles", "Roles"):
+                n = r["RoleName"]
+                if r.get("Path", "").startswith("/aws-service-role/") or n.startswith("AWSServiceRoleFor"):
+                    continue                         # 서비스 연결 역할(AWS 관리)은 제외
+                att = [p["PolicyArn"] for p in
+                       _pages(iam, "list_attached_role_policies", "AttachedPolicies", RoleName=n)]
+                inl = [(p, iam.get_role_policy(RoleName=n, PolicyName=p)["PolicyDocument"])
+                       for p in _pages(iam, "list_role_policies", "PolicyNames", RoleName=n)]
+                out.append({"name": n, "trust": _trusted_services(r), "a": self.analyze(att, inl)})
+            self._roles = out
+        return self._roles
+
+
+# ---- 공용 조회(캐시) --------------------------------------------------------------
+def _trails(ctx):
+    """스캔 리전에서 보이는 CloudTrail 추적(다른 리전을 홈으로 둔 멀티리전 추적 포함, ARN 기준 중복 제거)."""
+    c = ctx["cache"]
+    if "trails" not in c:
+        seen = {}
+        for r in ctx["regions"]:
+            try:
+                ct = ctx["sess"].client("cloudtrail", region_name=r)
+                for t in ct.describe_trails(includeShadowTrails=True)["trailList"]:
+                    seen.setdefault(t["TrailARN"], t)
+            except Exception as e:
+                if _is_denied(e):
+                    raise
+        c["trails"] = list(seen.values())
+    return c["trails"]
+
+
+def _elbv2(ctx, r):
+    c = ctx["cache"].setdefault("elbv2", {})
+    if r not in c:
+        cli = ctx["sess"].client("elbv2", region_name=r)
+        c[r] = (cli, _pages(cli, "describe_load_balancers", "LoadBalancers"))
+    return c[r]
+
+
+def _classic_elbs(ctx, r):
+    c = ctx["cache"].setdefault("elb", {})
+    if r not in c:
+        cli = ctx["sess"].client("elb", region_name=r)
+        c[r] = (cli, _pages(cli, "describe_load_balancers", "LoadBalancerDescriptions"))
+    return c[r]
+
+
+def _lb_attrs(ctx, cli, arn):
+    c = ctx["cache"].setdefault("lb_attrs", {})
+    if arn not in c:
+        c[arn] = {a["Key"]: a["Value"] for a in
+                  cli.describe_load_balancer_attributes(LoadBalancerArn=arn)["Attributes"]}
+    return c[arn]
+
+
+def _listeners(ctx, cli, arn):
+    c = ctx["cache"].setdefault("listeners", {})
+    if arn not in c:
+        c[arn] = _pages(cli, "describe_listeners", "Listeners", LoadBalancerArn=arn)
+    return c[arn]
+
+
+def _ssl_protocols(ctx, cli, policy):
+    c = ctx["cache"].setdefault("sslpol", {})
+    if policy not in c:
+        try:
+            p = cli.describe_ssl_policies(Names=[policy])["SslPolicies"]
+            c[policy] = set(p[0].get("SslProtocols", [])) if p else set()
+        except Exception as e:
+            if _is_denied(e):
+                raise
+            c[policy] = set()
+    return c[policy]
+
+
+def _sg_peers(perm):
+    """보안그룹 규칙의 상대방 목록 [(표기, 인터넷여부)] — CIDR/IPv6/SG 참조/Prefix List."""
+    out = []
+    for ip in perm.get("IpRanges", []):
+        out.append((ip.get("CidrIp"), ip.get("CidrIp") == _ANY4))
+    for ip in perm.get("Ipv6Ranges", []):
+        out.append((ip.get("CidrIpv6"), ip.get("CidrIpv6") == _ANY6))
+    for g in perm.get("UserIdGroupPairs", []):
+        out.append((f"SG:{g.get('GroupId')}", False))
+    for p in perm.get("PrefixListIds", []):
+        out.append((f"PL:{p.get('PrefixListId')}", False))
+    return out
+
+
+def _cap(lines, n=40):
+    return lines[:n] + ([f"... 외 {len(lines) - n}건"] if len(lines) > n else [])
 
 
 # ----------------------------------------------------------------------------
@@ -107,26 +349,28 @@ def run(creds):
     try:
         ident = sess.client("sts").get_caller_identity()
         acct = ident.get("Account", "unknown")
-        arn = ident.get("Arn", "")
     except Exception as e:
         raise RuntimeError(
             "AWS 자격증명이 유효하지 않거나 만료되었습니다. "
             f"Access Key / Secret / 리전 / 프로필을 확인하세요.\n({type(e).__name__}: {e})")
 
     iam = sess.client("iam")
+    regions = _regions(sess)
+    ctx = {"sess": sess, "iam": iam, "acct": acct, "regions": regions,
+           "view": _IamView(iam), "cache": {}}
+    # ---- 자격증명 보고서(1회 생성) : 1.7 / 1.8 / 1.9 공용. 실패하면 err 에 사유 ----
+    ctx["cred_rows"], ctx["cred_err"] = _get_credential_report(iam)
 
-    # ---- 자격증명 보고서(1회 생성) : 1.8 / 1.9 에서 공용 ----
-    cred_rows = _get_credential_report(iam)
-
-    _account_mgmt(rep, sess, iam, cred_rows)
-    _permission_mgmt(rep, sess, iam)
-    _virtual_resource(rep, sess)
-    _operation_mgmt(rep, sess)
+    _account_mgmt(rep, ctx)
+    _permission_mgmt(rep, ctx)
+    _virtual_resource(rep, ctx)
+    _operation_mgmt(rep, ctx)
 
     rep.fill_missing(MAN, "이번 버전에서 자동 점검 미지원 → 콘솔에서 수동 확인 필요")
 
+    scope = ", ".join(regions) if len(regions) <= 3 else f"전 리전 {len(regions)}개"
     return {
-        "host": f"AWS 계정 {acct}",
+        "host": f"AWS 계정 {acct} (리전: {scope})",
         "os": "AWS",
         "family": "cloud",
         "results": rep.results(),
@@ -134,106 +378,122 @@ def run(creds):
 
 
 def _get_credential_report(iam):
+    """(행 목록, None) 또는 (None, 실패사유). 실패를 빈 목록으로 숨기지 않는다(거짓 양호 방지)."""
     import time
     try:
         for _ in range(10):
             try:
                 raw = iam.get_credential_report()["Content"].decode("utf-8", "replace")
                 break
-            except iam.exceptions.CredentialReportNotPresentException:
+            except (iam.exceptions.CredentialReportNotPresentException,
+                    iam.exceptions.CredentialReportExpiredException):
                 iam.generate_credential_report()
                 time.sleep(2)
-            except iam.exceptions.CredentialReportExpiredException:
-                iam.generate_credential_report()
+            except iam.exceptions.CredentialReportNotReadyException:
                 time.sleep(2)
         else:
-            return []
+            return None, "자격증명 보고서 생성 대기 시간 초과"
         lines = raw.splitlines()
         hdr = lines[0].split(",")
-        return [dict(zip(hdr, ln.split(","))) for ln in lines[1:]]
-    except Exception:
-        return []
+        rows = [dict(zip(hdr, ln.split(","))) for ln in lines[1:]]
+        if not rows:
+            return None, "자격증명 보고서가 비어 있음"
+        return rows, None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
 
 
 # ============================ 1. 계정 관리 ============================
-def _account_mgmt(rep, sess, iam, cred_rows):
+def _account_mgmt(rep, ctx):
+    sess, iam, view = ctx["sess"], ctx["iam"], ctx["view"]
+    rows, cerr = ctx["cred_rows"], ctx["cred_err"]
 
-    # 1.1 사용자 계정 관리 — 관리자 권한 다수 여부 + (불필요 계정은 인터뷰)
+    def cred_unavailable(code):
+        rep.man(code, "IAM 자격증명 보고서를 조회할 수 없어 판정 불가 → 수동 확인 필요 "
+                      "(iam:GenerateCredentialReport / iam:GetCredentialReport 권한 확인). "
+                      f"사유: {cerr}")
+
+    # 1.1 사용자 계정 관리 — 관리자급 권한 다수 여부 + (불필요 계정은 인터뷰)
     def c11():
-        users = iam.list_users()["Users"]
-        admins = []
+        users = view.users()
+        admins, full = [], []
         for u in users:
-            n = u["UserName"]
-            attached = [p["PolicyArn"] for p in
-                        iam.list_attached_user_policies(UserName=n)["AttachedPolicies"]]
-            is_admin = any(a in _ADMIN_POLICY_ARNS for a in attached)
-            if not is_admin:
-                for g in iam.list_groups_for_user(UserName=n)["Groups"]:
-                    ga = [p["PolicyArn"] for p in iam.list_attached_group_policies(
-                        GroupName=g["GroupName"])["AttachedPolicies"]]
-                    if any(a in _ADMIN_POLICY_ARNS for a in ga):
-                        is_admin = True
-                        break
-            if is_admin:
-                admins.append(n)
-        ev = [f"IAM 사용자 {len(users)}명, 관리자 권한(AdministratorAccess) 보유 {len(admins)}명: "
-              f"{', '.join(admins) if admins else '없음'}",
-              "불필요 계정(협력사 공용/테스트/퇴직자) 존재 여부는 담당자 인터뷰로 확인 필요"]
-        if len(admins) >= 2:
-            rep.vuln("1.1", ev, admins)
-        else:
-            rep.man("1.1", ev, admins)
+            src = u["own"]["admin"] + u["own"]["high"]
+            for g, ga in u["group_a"].items():
+                src += [f"{x}@그룹:{g}" for x in ga["admin"] + ga["high"]]
+            if src:
+                admins.append((u["name"], f"{u['name']}({', '.join(src)})"))
+                continue
+            fl = u["own"]["full"] + [f"{x}@그룹:{g}" for g, ga in u["group_a"].items()
+                                     for x in ga["full"]]
+            if fl:
+                full.append(f"{u['name']}({', '.join(fl)})")
+        ev = [f"IAM 사용자 {len(users)}명, 관리자급 권한(AdministratorAccess·IAMFullAccess·"
+              f"*:* 정책, 그룹 경유 포함) 보유 {len(admins)}명"] + [a[1] for a in admins]
+        if full:
+            ev.append("서비스 FullAccess/PowerUser 보유(관리자급 아님, 적정성 검토): " + "; ".join(full))
+        suspect = [u["name"] for u in users
+                   if any(k in u["name"].lower() for k in ("test", "temp", "tmp", "guest", "demo"))]
+        if suspect:
+            ev.append("테스트/임시 계정 의심(이름 기준): " + ", ".join(suspect))
+        ev.append("불필요 계정(협력사 공용/퇴직·휴직자) 존재 여부는 담당자 인터뷰로 확인 필요")
+        names = [a[0] for a in admins]
+        (rep.vuln if len(admins) >= 2 else rep.man)("1.1", ev, names)
     safe(rep, "1.1", c11)
 
     # 1.2 1인 1계정 — API로 판단 불가
     def c12():
-        users = [u["UserName"] for u in iam.list_users()["Users"]]
+        users = [u["UserName"] for u in _pages(iam, "list_users", "Users")]
         rep.man("1.2", [f"IAM 사용자 {len(users)}명: {', '.join(users)}",
-                        "동일 담당자가 복수 계정을 보유하는지는 인터뷰로 확인 필요"], users)
+                        "동일 담당자가 복수 계정을 보유하는지(서비스별 계정 생성 포함)는 인터뷰로 확인 필요"],
+                users)
     safe(rep, "1.2", c12)
 
-    # 1.3 IAM 사용자 태그(식별정보) 설정
+    # 1.3 IAM 사용자 식별 태그(이름/이메일/부서 등)
     def c13():
-        users = iam.list_users()["Users"]
-        no_tag = []
-        for u in users:
-            tags = {t["Key"].lower(): t["Value"]
-                    for t in iam.list_user_tags(UserName=u["UserName"]).get("Tags", [])}
-            if not tags:
-                no_tag.append(u["UserName"])
+        users = _pages(iam, "list_users", "Users")
         if not users:
             rep.na("1.3", "IAM 사용자 없음")
-        elif no_tag:
-            rep.vuln("1.3", f"식별 태그(이름/이메일/부서 등)가 없는 IAM 사용자: {', '.join(no_tag)}", no_tag)
+            return
+        bad = []
+        for u in users:
+            keys = [t["Key"] for t in _pages(iam, "list_user_tags", "Tags", UserName=u["UserName"])]
+            if not any(h in k.lower() for k in keys for h in _ID_TAG_HINTS):
+                bad.append((u["UserName"], f"{u['UserName']}(태그: {', '.join(keys) if keys else '없음'})"))
+        note = "※ AWS Organizations·AD 연동으로 사용자를 관리하면 태그가 없어도 양호로 볼 수 있음(가이드 비고)"
+        if bad:
+            rep.vuln("1.3", ["사용자 식별 태그(이름/이메일/부서 등)가 없는 IAM 사용자:"]
+                     + [b[1] for b in bad] + [note], [b[0] for b in bad])
         else:
-            rep.good("1.3", f"IAM 사용자 {len(users)}명 모두 태그 설정됨")
+            rep.good("1.3", f"IAM 사용자 {len(users)}명 모두 식별 태그(이름/이메일/부서 등) 설정됨")
     safe(rep, "1.3", c13)
 
     # 1.4 IAM 그룹 구성원 관리 — 인터뷰
     def c14():
-        groups = iam.list_groups()["Groups"]
+        groups = _pages(iam, "list_groups", "Groups")
         lines = []
         for g in groups:
-            m = [u["UserName"] for u in iam.get_group(GroupName=g["GroupName"])["Users"]]
+            m = [u["UserName"] for u in _pages(iam, "get_group", "Users", GroupName=g["GroupName"])]
             lines.append(f"{g['GroupName']}: {', '.join(m) if m else '(구성원 없음)'}")
+        if not groups:
+            rep.na("1.4", "IAM 그룹 없음")
+            return
         rep.man("1.4", ["IAM 그룹/구성원 현황 — 불필요 계정 포함 여부 인터뷰 확인:"] + lines,
                 [g["GroupName"] for g in groups])
     safe(rep, "1.4", c14)
 
     # 1.5 Key Pair 접근 관리 — EC2 접속 방식
     def c15():
-        no_key = []
-        total = 0
-        for r in _regions(sess):
+        no_key, total = [], 0
+        for r in ctx["regions"]:
             ec2 = sess.client("ec2", region_name=r)
-            for res in ec2.get_paginator("describe_instances").paginate(
-                    Filters=[{"Name": "instance-state-name",
-                              "Values": ["running", "stopped"]}]):
-                for resv in res["Reservations"]:
-                    for i in resv["Instances"]:
-                        total += 1
-                        if not i.get("KeyName"):
-                            no_key.append(f"{i['InstanceId']}({r})")
+            for resv in _pages(ec2, "describe_instances", "Reservations",
+                               Filters=[{"Name": "instance-state-name",
+                                         "Values": ["running", "stopped"]}]):
+                for i in resv["Instances"]:
+                    total += 1
+                    if not i.get("KeyName"):
+                        no_key.append(f"{i['InstanceId']}({r})")
         if total == 0:
             rep.na("1.5", "EC2 인스턴스 없음")
         elif no_key:
@@ -244,27 +504,39 @@ def _account_mgmt(rep, sess, iam, cred_rows):
     safe(rep, "1.5", c15)
 
     # 1.6 Key Pair 보관 위치 — 인터뷰
-    rep.man("1.6", "PEM 키 파일 보관 위치(개인 PC/공용 스토리지 등)는 담당자 인터뷰로 확인")
+    rep.man("1.6", "PEM 키 파일 보관 위치(프라이빗 S3 권장 / 퍼블릭 S3·EC2 루트(/) 디렉터리 금지)는 "
+                   "담당자 인터뷰로 확인")
 
     # 1.7 Admin Console(root) 서비스 용도 사용
     def c17():
-        root = next((r for r in cred_rows if r.get("user") == "<root_account>"), None)
-        ev = []
-        vuln = False
+        if cerr:
+            cred_unavailable("1.7")
+            return
+        root = next((r for r in rows if r.get("user") == "<root_account>"), None)
+        ev, vuln = [], False
         if root:
             if root.get("access_key_1_active") == "true" or root.get("access_key_2_active") == "true":
-                ev.append("루트 계정에 활성 Access Key 존재 → 서비스/CLI 용도 사용 의심"); vuln = True
-            last = root.get("password_last_used", "")
-            ev.append(f"루트 마지막 콘솔 사용: {last or 'N/A'}")
+                ev.append("루트 계정에 활성 Access Key 존재 → 서비스/CLI 용도 사용 의심")
+                vuln = True
+            ev.append(f"루트 마지막 콘솔 사용: {root.get('password_last_used') or 'N/A'}")
         ev.append("루트 계정의 리소스 생성·변경 이력은 CloudTrail 로 추가 확인 필요")
         (rep.vuln if vuln else rep.man)("1.7", ev)
     safe(rep, "1.7", c17)
 
-    # 1.8 루트 Access Key + IAM Access Key 사용주기(90일)
+    # 1.8 루트 Access Key + IAM Access Key 사용주기(60일)
     def c18():
-        vuln, ev = [], []
+        if cerr:
+            cred_unavailable("1.8")
+            return
+        vuln, idle = [], []
         now = datetime.datetime.now(datetime.timezone.utc)
-        for r in cred_rows:
+
+        def age(ts):
+            try:
+                return (now - datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))).days
+            except Exception:
+                return None
+        for r in rows:
             u = r.get("user")
             if u == "<root_account>":
                 if r.get("access_key_1_active") == "true" or r.get("access_key_2_active") == "true":
@@ -273,24 +545,27 @@ def _account_mgmt(rep, sess, iam, cred_rows):
             for idx in ("1", "2"):
                 if r.get(f"access_key_{idx}_active") != "true":
                     continue
-                rot = r.get(f"access_key_{idx}_last_rotated", "")
-                try:
-                    age = (now - datetime.datetime.fromisoformat(rot.replace("Z", "+00:00"))).days
-                    if age > 60:
-                        vuln.append(f"{u} key{idx} {age}일 경과 (기준 60일)")
-                except Exception as _e:
-                    if _is_denied(_e):
-                        raise
+                a = age(r.get(f"access_key_{idx}_last_rotated", ""))
+                if a is not None and a > 60:
+                    vuln.append(f"{u} key{idx} {a}일 경과 (기준 60일)")
+                used = age(r.get(f"access_key_{idx}_last_used_date", ""))
+                if used is not None and used > 30:
+                    idle.append(f"{u} key{idx} 마지막 사용 {used}일 전")
+        tail = (["참고: 마지막 활동 30일 초과 키(가이드 관리주기 기준) — " + ", ".join(idle)]
+                if idle else [])
         if vuln:
-            rep.vuln("1.8", ["Access Key 사용주기 미관리:"] + vuln, vuln)
+            rep.vuln("1.8", ["Access Key 사용주기 미관리:"] + vuln + tail, vuln)
         else:
-            rep.good("1.8", "루트 Access Key 없음 + IAM Access Key 60일 이내 교체")
+            rep.good("1.8", ["루트 Access Key 없음 + IAM Access Key 60일 이내 교체"] + tail)
     safe(rep, "1.8", c18)
 
     # 1.9 MFA
     def c19():
+        if cerr:
+            cred_unavailable("1.9")
+            return
         vuln = []
-        for r in cred_rows:
+        for r in rows:
             u = r.get("user")
             if u == "<root_account>":
                 if r.get("mfa_active") != "true":
@@ -298,10 +573,17 @@ def _account_mgmt(rep, sess, iam, cred_rows):
                 continue
             if r.get("password_enabled") == "true" and r.get("mfa_active") != "true":
                 vuln.append(f"{u} (콘솔 로그인 가능, MFA 미설정)")
+        tail = []
+        try:
+            if sess.client("sso-admin").list_instances().get("Instances"):
+                tail.append("IAM Identity Center(SSO) 사용 중 — SSO 로그인 사용자의 MFA 는 Identity Center "
+                            "설정에서 확인(가이드 비고: SSO 인증 사용 시 양호 처리 가능)")
+        except Exception:
+            pass
         if vuln:
-            rep.vuln("1.9", ["MFA 미설정:"] + vuln, vuln)
+            rep.vuln("1.9", ["MFA 미설정:"] + vuln + tail, vuln)
         else:
-            rep.good("1.9", "루트 및 콘솔 사용 IAM 계정 모두 MFA 활성")
+            rep.good("1.9", ["루트 및 콘솔 사용 IAM 계정 모두 MFA 활성"] + tail)
     safe(rep, "1.9", c19)
 
     # 1.10 패스워드 정책
@@ -337,223 +619,263 @@ def _account_mgmt(rep, sess, iam, cred_rows):
     safe(rep, "1.10", c110)
 
     # 1.11 ~ 1.13 EKS (kubectl 필요)
-    _eks_manual(rep, sess, ["1.11", "1.12", "1.13"])
+    _eks_manual(rep, ctx, ["1.11", "1.12", "1.13"])
 
 
 # ============================ 2. 권한 관리 ============================
-def _permission_mgmt(rep, sess, iam):
+def _permission_mgmt(rep, ctx):
+    view = ctx["view"]
 
-    # 2.1 인스턴스(EC2) 역할 정책 — 관리자/와일드카드 부여 여부
-    def c21():
-        bad = []
-        roles = iam.get_paginator("list_roles")
-        for page in roles.paginate():
-            for role in page["Roles"]:
-                trust = role.get("AssumeRolePolicyDocument", {})
-                s = trust.get("Statement", [])
-                s = [s] if isinstance(s, dict) else s
-                svc = []
-                for st in s:
-                    pr = st.get("Principal", {}).get("Service", [])
-                    pr = [pr] if isinstance(pr, str) else pr
-                    svc += pr
-                if "ec2.amazonaws.com" not in svc:
-                    continue
-                nm = role["RoleName"]
-                attached = [p["PolicyArn"] for p in iam.list_attached_role_policies(
-                    RoleName=nm)["AttachedPolicies"]]
-                if any(a in _ADMIN_POLICY_ARNS for a in attached):
-                    bad.append(f"{nm} (AdministratorAccess)")
-                    continue
-                for pol in iam.list_role_policies(RoleName=nm)["PolicyNames"]:
-                    doc = iam.get_role_policy(RoleName=nm, PolicyName=pol)["PolicyDocument"]
-                    if _policy_is_admin(doc):
-                        bad.append(f"{nm} (인라인 {pol}: Action*/Resource*)")
-        if bad:
-            rep.vuln("2.1", ["EC2 역할에 과도한 권한:"] + bad, bad)
-        else:
-            rep.good("2.1", "EC2 인스턴스 역할에 관리자/와일드카드 정책 없음")
-    safe(rep, "2.1", c21)
+    def cat_of(role):
+        t = role["trust"]
+        if t & _INSTANCE_TRUST:
+            return "2.1"
+        if t & _NETWORK_TRUST:
+            return "2.2"
+        return "2.3" if t else None          # None = 사람/계정이 맡는 역할
 
-    # 2.2 / 2.3 — 서비스 역할 전반에 과도 권한(AdministratorAccess / Action*/Resource*)
-    def c2x(code, label):
-        over = []
-        for page in iam.get_paginator("list_roles").paginate():
-            for role in page["Roles"]:
-                nm = role["RoleName"]
-                if nm.startswith("AWSServiceRoleFor"):
-                    continue
-                attached = [p["PolicyArn"] for p in iam.list_attached_role_policies(
-                    RoleName=nm)["AttachedPolicies"]]
-                if any(a in _ADMIN_POLICY_ARNS for a in attached):
-                    over.append(f"{nm} (AdministratorAccess)")
-                    continue
-                for pol in iam.list_role_policies(RoleName=nm)["PolicyNames"]:
-                    doc = iam.get_role_policy(RoleName=nm, PolicyName=pol)["PolicyDocument"]
-                    if _policy_is_admin(doc):
-                        over.append(f"{nm} (인라인 {pol}: Action*/Resource*)")
-                        break
+    # 2.1 인스턴스 / 2.2 네트워크 / 2.3 기타 서비스 — 서비스 역할의 과도 권한
+    def c2x(code):
+        label, prefixes = _CAT_ACTIONS[code]
+        roles = view.roles()
+        over, wild = [], []
+        for r in roles:
+            a = r["a"]
+            if cat_of(r) == code and a["admin"]:
+                over.append((r["name"], f"{r['name']} (신뢰: {', '.join(sorted(r['trust']))} / "
+                                        f"{', '.join(a['admin'])})"))
+            w = sorted(a["wild"] & prefixes)
+            if w:
+                wild.append(f"{r['name']}: {', '.join(x + ':*' for x in w)}")
+        high = [u["name"] for u in view.users()
+                if u["own"]["high"] or any(ga["high"] for ga in u["group_a"].values())]
+        high += [f"역할:{r['name']}" for r in roles if r["a"]["high"]]
+        tail = []
+        if wild:
+            tail += [f"{label} 전체권한(서비스:*) 부여 역할 — 역할에 맞는지 검토:"] + _cap(wild, 30)
+        if high:
+            tail.append("IAMFullAccess 보유(인프라 관리자에 한해 최소 인원 유지 필요): " + ", ".join(high))
         if over:
-            rep.vuln(code, [f"{label} 관점 — 과도한 권한을 가진 IAM 역할:"] + over, over)
+            rep.vuln(code, [f"{label}용 역할에 관리자 권한(AdministratorAccess/*:*) 부여:"]
+                     + [o[1] for o in over] + tail, [o[0] for o in over])
         else:
-            rep.man(code, [f"{label} 권한이 서비스 역할에 맞게 최소화됐는지 정책 검토 필요 "
-                           "(관리자/와일드카드 역할은 없음)"])
-    safe(rep, "2.2", lambda: c2x("2.2", "네트워크 서비스"))
-    safe(rep, "2.3", lambda: c2x("2.3", "기타 서비스"))
+            rep.man(code, [f"{label}용 역할에 관리자 권한 부여 없음. "
+                           "역할별 최소 권한 여부는 정책 검토 필요"] + tail)
+    for code in ("2.1", "2.2", "2.3"):
+        safe(rep, code, lambda c=code: c2x(c))
 
 
 # ======================= 3. 가상 리소스 관리 ========================
-def _virtual_resource(rep, sess):
-    regions = _regions(sess)
+def _virtual_resource(rep, ctx):
+    sess, regions = ctx["sess"], ctx["regions"]
 
-    # 3.1 보안그룹 ANY(전체 포트/프로토콜) 개방
+    # 3.1 보안그룹 인/아웃바운드 포트 Any — 가이드: 소스와 무관하게 포트 Any 허용이면 취약
     def c31():
         def scan(ec2, r):
             hits = []
-            for sg in ec2.describe_security_groups()["SecurityGroups"]:
-                for direction, key in (("인바운드", "IpPermissions"),
-                                       ("아웃바운드", "IpPermissionsEgress")):
+            for sg in _pages(ec2, "describe_security_groups", "SecurityGroups"):
+                tag = f"{sg['GroupId']}({sg.get('GroupName', '')},{r})"
+                for direction, key, arrow in (("인바운드", "IpPermissions", "←"),
+                                              ("아웃바운드", "IpPermissionsEgress", "→")):
                     for perm in sg.get(key, []):
-                        opens = any(ip.get("CidrIp") == "0.0.0.0/0"
-                                    for ip in perm.get("IpRanges", []))
-                        opens = opens or any(ip.get("CidrIpv6") == "::/0"
-                                             for ip in perm.get("Ipv6Ranges", []))
-                        if not opens:
-                            continue
-                        proto = perm.get("IpProtocol")
                         fr, to = perm.get("FromPort"), perm.get("ToPort")
-                        if proto == "-1" or (fr == 0 and to == 65535):
-                            hits.append(f"{sg['GroupId']}({r}) {direction} 전체 허용")
+                        if not (str(perm.get("IpProtocol")) == "-1" or (fr == 0 and to == 65535)):
+                            continue
+                        for peer, internet in _sg_peers(perm):
+                            hits.append((internet, f"{tag} {direction} 포트 Any {arrow} {peer} "
+                                                   f"[{'인터넷' if internet else '내부'}]"))
             return hits
-        bad = _each_region(sess, "ec2", scan)
-        if bad:
-            rep.vuln("3.1", ["보안그룹 ANY 개방:"] + sorted(set(bad)), sorted(set(bad)))
-        else:
-            rep.good("3.1", "보안그룹에 전체 포트/프로토콜(0.0.0.0/0, ANY) 개방 규칙 없음")
+        hits = sorted(set(_each_region(sess, regions, "ec2", scan)), key=lambda h: (not h[0], h[1]))
+        if not hits:
+            rep.good("3.1", "보안그룹 인/아웃바운드에 포트 Any(전체 포트/프로토콜) 규칙 없음")
+            return
+        lines = [h[1] for h in hits]
+        n_net = sum(1 for h in hits if h[0])
+        ev = [f"포트 Any 규칙 {len(lines)}건 (인터넷 {n_net}건 / 내부·SG참조 {len(lines) - n_net}건)",
+              "※ 가이드 3.1 은 소스와 무관하게 인/아웃바운드 포트 Any 허용을 취약으로 판정"]
+        rep.vuln("3.1", ev + _cap(lines), sorted({ln.split(" ")[0] for ln in lines}))
     safe(rep, "3.1", c31)
 
-    # 3.2 보안그룹 불필요 정책 — 민감 포트 인터넷 개방
+    # 3.2 보안그룹 불필요 Source/Destination — 인터넷에서 민감 포트(ALL 규칙·IPv6 포함)
     def c32():
-        hit = []
+        hit, egress_any = [], set()
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
-            for sg in ec2.describe_security_groups()["SecurityGroups"]:
+            for sg in _pages(ec2, "describe_security_groups", "SecurityGroups"):
+                tag = f"{sg['GroupId']}({sg.get('GroupName', '')},{r})"
                 for perm in sg.get("IpPermissions", []):
-                    pub = any(ip.get("CidrIp") == "0.0.0.0/0" for ip in perm.get("IpRanges", []))
-                    if not pub:
+                    srcs = [p for p, net in _sg_peers(perm) if net]
+                    if not srcs:
                         continue
+                    proto = str(perm.get("IpProtocol"))
                     fr, to = perm.get("FromPort"), perm.get("ToPort")
-                    for p, name in _SENSITIVE_PORTS.items():
-                        if fr is not None and to is not None and fr <= p <= to:
-                            hit.append(f"{sg['GroupId']}({r}) {name}/{p} 0.0.0.0/0")
+                    for src in srcs:
+                        if proto == "-1":
+                            hit.append(f"{tag} 모든 트래픽(민감 포트 전체 포함) ← {src}")
+                        elif proto in ("tcp", "udp", "6", "17") and fr is not None and to is not None:
+                            for p, name in _SENSITIVE_PORTS.items():
+                                if fr <= p <= to:
+                                    hit.append(f"{tag} {name}/{p} ← {src}")
+                for perm in sg.get("IpPermissionsEgress", []):
+                    if any(net for _, net in _sg_peers(perm)):
+                        egress_any.add(tag)
+        eg = ([f"참고: 아웃바운드 목적지가 0.0.0.0/0·::/0 인 SG {len(egress_any)}개 — "
+               "불필요한 Destination 인지 검토 필요"] if egress_any else [])
         if hit:
-            rep.vuln("3.2", ["민감 포트가 인터넷(0.0.0.0/0)에 개방:"] + sorted(set(hit)), sorted(set(hit)))
+            hit = sorted(set(hit))
+            rep.vuln("3.2", ["불필요한 Source(인터넷 0.0.0.0/0·::/0)에서 민감 포트 개방:"] + _cap(hit) + eg,
+                     sorted({h.split(" ")[0] for h in hit}))
         else:
-            rep.man("3.2", "민감 포트의 인터넷 개방은 없음. 그 외 Source/Destination 최소화 여부는 규칙 검토 필요")
+            rep.man("3.2", ["인터넷(0.0.0.0/0·::/0)에서 민감 포트로 들어오는 규칙 없음. "
+                            "그 외 Source/Destination 최소화 여부는 규칙 검토 필요"] + eg)
     safe(rep, "3.2", c32)
 
-    # 3.3 네트워크 ACL 전체 허용
+    # 3.3 네트워크 ACL 전체 허용 — 가이드: 모든 트래픽 허용이면 취약(기본 NACL 포함)
     def c33():
         allow_all = []
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
-            for acl in ec2.describe_network_acls()["NetworkAcls"]:
+            for acl in _pages(ec2, "describe_network_acls", "NetworkAcls"):
+                subnets = [a.get("SubnetId") for a in acl.get("Associations", [])]
+                if not subnets:
+                    continue                          # 서브넷 미연결 NACL 은 트래픽에 영향 없음
                 for e in acl["Entries"]:
-                    if (e["RuleAction"] == "allow" and e["Protocol"] == "-1"
-                            and e.get("CidrBlock") in ("0.0.0.0/0", None)
-                            and e["RuleNumber"] < 32767):
-                        d = "인바운드" if not e["Egress"] else "아웃바운드"
-                        allow_all.append(f"{acl['NetworkAclId']}({r}) {d} 전체 허용")
-        # 기본 NACL 은 원래 전체 허용이므로 '커스텀 규칙도 전체 허용'이면 취약으로 본다
+                    if e["RuleAction"] != "allow" or str(e["Protocol"]) != "-1" \
+                            or e["RuleNumber"] >= 32767:
+                        continue
+                    cidr = e.get("CidrBlock") or e.get("Ipv6CidrBlock")
+                    if cidr not in (_ANY4, _ANY6):
+                        continue
+                    d = "아웃바운드" if e["Egress"] else "인바운드"
+                    allow_all.append(f"{acl['NetworkAclId']}({r}{', 기본 NACL' if acl.get('IsDefault') else ''}) "
+                                     f"{d} 규칙#{e['RuleNumber']} 모든 트래픽 {cidr} 허용 "
+                                     f"(연결 서브넷 {len(subnets)}개)")
         if allow_all:
-            rep.man("3.3", ["네트워크 ACL 전체 허용 규칙 존재(기본 NACL 포함):"] + sorted(set(allow_all)),
-                    sorted(set(allow_all)))
+            rep.vuln("3.3", ["네트워크 ACL 모든 트래픽 허용 규칙:"] + sorted(set(allow_all)) +
+                     ["※ 가이드: 보안그룹 포트·소스도 ANY 허용이면 중요도 '상'으로 상향 가능"],
+                     sorted({a.split("(")[0] for a in allow_all}))
         else:
-            rep.good("3.3", "네트워크 ACL에 0.0.0.0/0 전체 허용 규칙 없음")
+            rep.good("3.3", "서브넷에 연결된 네트워크 ACL 에 모든 트래픽 허용 규칙 없음")
     safe(rep, "3.3", c33)
 
-    # 3.4 라우팅 테이블 ANY(0.0.0.0/0)
+    # 3.4 라우팅 테이블 ANY(0.0.0.0/0, ::/0)
     def c34():
         rts = []
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
-            for rt in ec2.describe_route_tables()["RouteTables"]:
+            for rt in _pages(ec2, "describe_route_tables", "RouteTables"):
                 for route in rt["Routes"]:
-                    if route.get("DestinationCidrBlock") == "0.0.0.0/0":
+                    dst = route.get("DestinationCidrBlock") or route.get("DestinationIpv6CidrBlock")
+                    if dst in (_ANY4, _ANY6):
                         tgt = route.get("GatewayId") or route.get("NatGatewayId") or \
-                            route.get("TransitGatewayId") or route.get("NetworkInterfaceId") or "?"
-                        rts.append(f"{rt['RouteTableId']}({r}) → {tgt}")
+                            route.get("TransitGatewayId") or route.get("NetworkInterfaceId") or \
+                            route.get("EgressOnlyInternetGatewayId") or "?"
+                        rts.append(f"{rt['RouteTableId']}({r}) {dst} → {tgt}")
         if rts:
-            rep.man("3.4", ["0.0.0.0/0 라우팅 존재(퍼블릭 서브넷은 정상일 수 있음, 대상 검토):"] + rts, rts)
+            rep.man("3.4", ["ANY 라우팅 존재 — 서비스 타깃별 설정 여부 검토 "
+                            "(가이드 비고: 게이트웨이/아웃바운드 통신이 필요한 경우 양호 처리 가능):"] + rts, rts)
         else:
-            rep.good("3.4", "0.0.0.0/0 라우팅 규칙 없음")
+            rep.good("3.4", "ANY(0.0.0.0/0·::/0) 라우팅 규칙 없음")
     safe(rep, "3.4", c34)
 
     # 3.5 인터넷 게이트웨이 연결 — 인터뷰
     def c35():
-        igws = []
+        igws, detached = [], []
         for r in regions:
-            ec2 = sess.client("ec2", region_name=r)
-            for igw in ec2.describe_internet_gateways()["InternetGateways"]:
+            for igw in _pages(sess.client("ec2", region_name=r), "describe_internet_gateways",
+                              "InternetGateways"):
                 att = [a["VpcId"] for a in igw.get("Attachments", [])]
-                igws.append(f"{igw['InternetGatewayId']}({r}) → {att or '미연결'}")
-        rep.man("3.5", ["IGW 목록 — 불필요 연결 여부 검토:"] + igws, igws)
+                igws.append(f"{igw['InternetGatewayId']}({r}) → {', '.join(att) if att else '미연결'}")
+                if not att:
+                    detached.append(igw["InternetGatewayId"])
+        if not igws:
+            rep.na("3.5", "인터넷 게이트웨이 없음")
+            return
+        ev = ["IGW 목록 — 불필요한 연결(NAT 게이트웨이 경로 포함) 여부 검토:"] + igws
+        if detached:
+            ev.append("VPC 미연결 IGW(정리 대상): " + ", ".join(detached))
+        rep.man("3.5", ev, igws)
     safe(rep, "3.5", c35)
 
     # 3.6 NAT 게이트웨이 연결 — 인터뷰
     def c36():
         nats = []
         for r in regions:
-            ec2 = sess.client("ec2", region_name=r)
-            for nat in ec2.describe_nat_gateways()["NatGateways"]:
+            for nat in _pages(sess.client("ec2", region_name=r), "describe_nat_gateways", "NatGateways"):
+                if nat.get("State") in ("deleted", "deleting", "failed"):
+                    continue
                 nats.append(f"{nat['NatGatewayId']}({r}) subnet={nat.get('SubnetId')} state={nat.get('State')}")
         if not nats:
             rep.na("3.6", "NAT 게이트웨이 없음")
         else:
-            rep.man("3.6", ["NAT GW 목록 — 연결 리소스 목적 확인:"] + nats, nats)
+            rep.man("3.6", ["NAT GW 목록 — 연결 리소스 목적 확인 (DBMS·개인정보 서비스는 외부 오픈 금지):"]
+                    + nats, nats)
     safe(rep, "3.6", c36)
 
-    # 3.7 S3 퍼블릭 액세스
+    # 3.7 S3 퍼블릭 액세스 — 계정/버킷 퍼블릭 액세스 차단, 버킷 정책, ACL(모든 사람·외부 계정)
     def c37():
         s3 = sess.client("s3")
         buckets = s3.list_buckets()["Buckets"]
         if not buckets:
             rep.na("3.7", "S3 버킷 없음")
             return
-        public = []
+        keys = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
+        note = []
+        try:
+            s3c = sess.client("s3control", region_name=sess.region_name or "us-east-1")
+            acfg = s3c.get_public_access_block(AccountId=ctx["acct"])["PublicAccessBlockConfiguration"]
+            if all(acfg.get(k) for k in keys):
+                rep.good("3.7", f"계정 수준 '모든 퍼블릭 액세스 차단' 활성 → S3 버킷 {len(buckets)}개 모두 보호")
+                return
+            note.append("계정 수준 퍼블릭 액세스 차단: 일부만 설정")
+        except Exception as e:
+            if _is_denied(e):
+                note.append("계정 수준 퍼블릭 액세스 차단 조회 권한 없음(s3:GetAccountPublicAccessBlock)")
+            elif "NoSuchPublicAccessBlockConfiguration" in str(e):
+                note.append("계정 수준 퍼블릭 액세스 차단: 미설정")
+            else:
+                note.append(f"계정 수준 퍼블릭 액세스 차단 조회 실패({type(e).__name__})")
+        public, unknown = [], []
         for b in buckets:
             name = b["Name"]
-            blocked = False
             try:
-                pab = s3.get_public_access_block(Bucket=name)["PublicAccessBlockConfiguration"]
-                blocked = all(pab.get(k) for k in ("BlockPublicAcls", "IgnorePublicAcls",
-                                                   "BlockPublicPolicy", "RestrictPublicBuckets"))
-            except Exception as _e:
-                if _is_denied(_e):
-                    raise
-            if blocked:
-                continue
-            try:
-                st = s3.get_bucket_policy_status(Bucket=name)["PolicyStatus"]
-                if st.get("IsPublic"):
-                    public.append(f"{name} (버킷 정책 public)")
-                    continue
-            except Exception as _e:
-                if _is_denied(_e):
-                    raise
-            try:
-                for g in s3.get_bucket_acl(Bucket=name)["Grants"]:
-                    uri = g.get("Grantee", {}).get("URI", "")
+                try:
+                    pab = s3.get_public_access_block(Bucket=name)["PublicAccessBlockConfiguration"]
+                    if all(pab.get(k) for k in keys):
+                        continue
+                except Exception as e:
+                    if _is_denied(e) or "NoSuchPublicAccessBlockConfiguration" not in str(e):
+                        raise
+                try:
+                    if s3.get_bucket_policy_status(Bucket=name)["PolicyStatus"].get("IsPublic"):
+                        public.append(f"{name} (버킷 정책 public)")
+                        continue
+                except Exception as e:
+                    if _is_denied(e) or "NoSuchBucketPolicy" not in str(e):
+                        raise
+                acl = s3.get_bucket_acl(Bucket=name)
+                owner = acl.get("Owner", {}).get("ID")
+                for g in acl.get("Grants", []):
+                    gr = g.get("Grantee", {})
+                    uri = gr.get("URI", "")
                     if "AllUsers" in uri or "AuthenticatedUsers" in uri:
-                        public.append(f"{name} (ACL {uri.split('/')[-1]})")
+                        public.append(f"{name} (ACL {uri.split('/')[-1]}: {g.get('Permission')})")
                         break
-            except Exception as _e:
-                if _is_denied(_e):
+                    if gr.get("Type") == "CanonicalUser" and owner and gr.get("ID") != owner:
+                        public.append(f"{name} (ACL 외부 계정 {gr.get('ID', '')[:12]}…: {g.get('Permission')})")
+                        break
+            except Exception as e:
+                if _is_denied(e):
                     raise
+                unknown.append(f"{name} ({type(e).__name__})")
         if public:
-            rep.vuln("3.7", ["퍼블릭 액세스 차단이 없고 공개된 버킷:"] + public, public)
+            rep.vuln("3.7", ["퍼블릭 액세스 차단이 없고 모든 사람/외부 계정에 공개된 버킷:"] + public
+                     + note + (["확인 불가: " + ", ".join(unknown)] if unknown else []),
+                     [p.split(" ")[0] for p in public])
+        elif unknown:
+            rep.man("3.7", ["일부 버킷의 공개 설정을 확인하지 못함: " + ", ".join(unknown)] + note)
         else:
-            rep.good("3.7", f"S3 버킷 {len(buckets)}개 모두 퍼블릭 액세스 차단 또는 비공개")
+            rep.good("3.7", [f"S3 버킷 {len(buckets)}개 모두 퍼블릭 액세스 차단 또는 소유자 전용 ACL"] + note)
     safe(rep, "3.7", c37)
 
     # 3.8 RDS 서브넷 가용영역 — 인터뷰 / NA
@@ -562,9 +884,8 @@ def _virtual_resource(rep, sess):
         for r in regions:
             try:
                 rds = sess.client("rds", region_name=r)
-                for g in rds.describe_db_subnet_groups()["DBSubnetGroups"]:
-                    azs = sorted({s["SubnetAvailabilityZone"]["Name"]
-                                  for s in g["Subnets"]})
+                for g in _pages(rds, "describe_db_subnet_groups", "DBSubnetGroups"):
+                    azs = sorted({s["SubnetAvailabilityZone"]["Name"] for s in g["Subnets"]})
                     found.append(f"{g['DBSubnetGroupName']}({r}) AZ={azs}")
             except Exception as _e:
                 if _is_denied(_e):
@@ -576,34 +897,107 @@ def _virtual_resource(rep, sess):
     safe(rep, "3.8", c38)
 
     # 3.9 EKS Pod 보안 — kubectl
-    _eks_manual(rep, sess, ["3.9"])
+    _eks_manual(rep, ctx, ["3.9"])
 
-    # 3.10 ELB 연결 — 인터뷰
+    # 3.10 ELB 제어 정책(ELB.1~16) 준수
     def c310():
-        lbs = []
+        total, viol, passed, notes = 0, [], [], []
         for r in regions:
             try:
-                elbv2 = sess.client("elbv2", region_name=r)
-                for lb in elbv2.describe_load_balancers()["LoadBalancers"]:
-                    lbs.append(f"{lb['LoadBalancerName']}({r}) scheme={lb['Scheme']}")
-            except Exception as _e:
-                if _is_denied(_e):
+                cli, lbs = _elbv2(ctx, r)
+            except Exception as e:
+                if _is_denied(e):
                     raise
-        if not lbs:
+                cli, lbs = None, []
+            web_acls = None
+            if any(lb.get("Type") == "application" for lb in lbs):
+                try:
+                    web_acls = sess.client("wafv2", region_name=r).list_web_acls(
+                        Scope="REGIONAL").get("WebACLs", [])
+                except Exception:
+                    notes.append(f"WAF(wafv2) 조회 불가({r}) — ELB.16 미판정")
+            waf = sess.client("wafv2", region_name=r) if web_acls else None
+            for lb in lbs:
+                typ = lb.get("Type")
+                if typ not in ("application", "network", "gateway"):
+                    continue
+                total += 1
+                arn, name = lb["LoadBalancerArn"], lb["LoadBalancerName"]
+                attrs = _lb_attrs(ctx, cli, arn)
+                probs = []
+                if typ == "application":
+                    for li in _listeners(ctx, cli, arn):
+                        if li["Protocol"] == "HTTP" and not any(
+                                a["Type"] == "redirect" and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
+                                for a in li.get("DefaultActions", [])):
+                            probs.append(f"ELB.1 HTTP:{li['Port']} → HTTPS 리디렉션 없음")
+                    if attrs.get("routing.http.drop_invalid_header_fields.enabled") != "true":
+                        probs.append("ELB.4 잘못된 HTTP 헤더 삭제 비활성")
+                    if attrs.get("access_logs.s3.enabled") != "true":
+                        probs.append("ELB.5 액세스 로깅 비활성")
+                    mode = attrs.get("routing.http.desync_mitigation_mode", "defensive")
+                    if mode not in ("defensive", "strictest"):
+                        probs.append(f"ELB.12 비동기화 완화 모드={mode}(방어/엄격 필요)")
+                    if waf:
+                        try:
+                            if not waf.get_web_acl_for_resource(ResourceArn=arn).get("WebACL"):
+                                probs.append("ELB.16 WAF Web ACL 미연결(WAF 사용 중)")
+                        except Exception:
+                            notes.append(f"{name}: WAF 연결 조회 불가 — ELB.16 미판정")
+                if attrs.get("deletion_protection.enabled") != "true":
+                    probs.append("ELB.6 삭제 방지 비활성")
+                azs = len(lb.get("AvailabilityZones", []))
+                if azs < 2:
+                    probs.append(f"ELB.13 가용영역 {azs}개(2개 이상 필요)")
+                label = f"{name}({typ},{r})"
+                (viol if probs else passed).append(f"{label}: {', '.join(probs)}" if probs else label)
+            # Classic Load Balancer
+            try:
+                ccli, clbs = _classic_elbs(ctx, r)
+            except Exception as e:
+                if _is_denied(e):
+                    raise
+                clbs = []
+            for lb in clbs:
+                total += 1
+                name = lb["LoadBalancerName"]
+                a = ccli.describe_load_balancer_attributes(LoadBalancerName=name)["LoadBalancerAttributes"]
+                probs = []
+                protos = {ld["Listener"]["Protocol"].upper() for ld in lb.get("ListenerDescriptions", [])}
+                if not protos & {"HTTPS", "SSL"}:
+                    probs.append("ELB.3 프런트엔드 HTTPS/SSL 리스너 없음")
+                if not a.get("AccessLog", {}).get("Enabled"):
+                    probs.append("ELB.5 액세스 로깅 비활성")
+                if not a.get("ConnectionDraining", {}).get("Enabled"):
+                    probs.append("ELB.7 Connection Draining 비활성")
+                if not a.get("CrossZoneLoadBalancing", {}).get("Enabled"):
+                    probs.append("ELB.9 영역 간 로드밸런싱 비활성")
+                if len(lb.get("AvailabilityZones", [])) < 2:
+                    probs.append("ELB.10 가용영역 2개 미만")
+                desync = next((x.get("Value") for x in a.get("AdditionalAttributes", [])
+                               if x.get("Key") == "elb.http.desyncmitigationmode"), "defensive")
+                if desync not in ("defensive", "strictest"):
+                    probs.append(f"ELB.14 비동기화 완화 모드={desync}")
+                label = f"{name}(classic,{r})"
+                (viol if probs else passed).append(f"{label}: {', '.join(probs)}" if probs else label)
+        if total == 0:
             rep.na("3.10", "로드밸런서 없음")
+        elif viol:
+            rep.vuln("3.10", ["ELB 제어 정책 미준수:"] + viol + notes +
+                     ["※ 가이드 비고: 연결 서비스/Third-Party 여부에 따라 예외 인정 가능(인터뷰)"],
+                     [v.split("(")[0] for v in viol])
         else:
-            rep.man("3.10", ["ELB 목록 — 연결/노출 정책 준수 여부 검토:"] + lbs, lbs)
+            rep.good("3.10", [f"로드밸런서 {total}개 ELB 제어 정책 준수: " + ", ".join(passed)] + notes)
     safe(rep, "3.10", c310)
 
 
 # ========================= 4. 운영 관리 ============================
-def _operation_mgmt(rep, sess):
-    regions = _regions(sess)
+def _operation_mgmt(rep, ctx):
+    sess, iam, view, regions = ctx["sess"], ctx["iam"], ctx["view"], ctx["regions"]
 
     # 4.1 EBS 볼륨 암호화
     def c41():
-        unenc, total = [], 0
-        default_on = []
+        unenc, total, default_on = [], 0, []
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
             try:
@@ -612,15 +1006,16 @@ def _operation_mgmt(rep, sess):
             except Exception as _e:
                 if _is_denied(_e):
                     raise
-            for v in ec2.describe_volumes()["Volumes"]:
+            for v in _pages(ec2, "describe_volumes", "Volumes"):
                 total += 1
                 if not v.get("Encrypted"):
-                    unenc.append(f"{v['VolumeId']}({r})")
+                    unenc.append(f"{v['VolumeId']}({r},{v.get('State')})")
         if total == 0:
             rep.na("4.1", "EBS 볼륨 없음")
         elif unenc:
             rep.vuln("4.1", [f"암호화 안 된 EBS 볼륨 {len(unenc)}/{total}: " + ", ".join(unenc),
-                             f"기본 암호화 활성 리전: {default_on or '없음'}"], unenc)
+                             f"기본 암호화 활성 리전: {default_on or '없음'}"],
+                     [u.split("(")[0] for u in unenc])
         else:
             rep.good("4.1", f"EBS 볼륨 {total}개 모두 암호화됨")
     safe(rep, "4.1", c41)
@@ -631,7 +1026,7 @@ def _operation_mgmt(rep, sess):
         for r in regions:
             try:
                 rds = sess.client("rds", region_name=r)
-                for db in rds.describe_db_instances()["DBInstances"]:
+                for db in _pages(rds, "describe_db_instances", "DBInstances"):
                     total += 1
                     if not db.get("StorageEncrypted"):
                         unenc.append(f"{db['DBInstanceIdentifier']}({r})")
@@ -646,77 +1041,105 @@ def _operation_mgmt(rep, sess):
             rep.good("4.2", f"RDS {total}개 모두 스토리지 암호화")
     safe(rep, "4.2", c42)
 
-    # 4.3 S3 암호화
+    # 4.3 S3 암호화 — 권한 오류는 '암호화됨'으로 간주하지 않는다
     def c43():
         s3 = sess.client("s3")
         buckets = s3.list_buckets()["Buckets"]
         if not buckets:
             rep.na("4.3", "S3 버킷 없음")
             return
-        no_enc = []
+        no_enc, unknown = [], []
         for b in buckets:
             try:
                 s3.get_bucket_encryption(Bucket=b["Name"])
             except Exception as e:
                 if "ServerSideEncryptionConfigurationNotFoundError" in str(e):
                     no_enc.append(b["Name"])
+                elif _is_denied(e):
+                    raise
+                else:
+                    unknown.append(f"{b['Name']}({type(e).__name__})")
         if no_enc:
-            rep.vuln("4.3", "기본 암호화 미설정 버킷: " + ", ".join(no_enc), no_enc)
+            rep.vuln("4.3", "기본 암호화(SSE-S3/SSE-KMS) 미설정 버킷: " + ", ".join(no_enc), no_enc)
+        elif unknown:
+            rep.man("4.3", "기본 암호화 설정을 확인하지 못한 버킷: " + ", ".join(unknown))
         else:
-            rep.good("4.3", f"S3 버킷 {len(buckets)}개 모두 서버 측 암호화(SSE) 설정")
+            rep.good("4.3", f"S3 버킷 {len(buckets)}개 모두 서버 측 암호화(SSE-S3/SSE-KMS) 설정")
     safe(rep, "4.3", c43)
 
-    # 4.4 통신구간 암호화 — ELB 리스너 TLS
+    # 4.4 통신구간 암호화 — LB 리스너 TLS(1.2 이상 정책), Classic ELB 포함
     def c44():
-        http_only = []
-        total = 0
+        total, plain, weak, unclear = 0, [], [], []
         for r in regions:
             try:
-                elbv2 = sess.client("elbv2", region_name=r)
-                for lb in elbv2.describe_load_balancers()["LoadBalancers"]:
-                    total += 1
-                    ls = elbv2.describe_listeners(
-                        LoadBalancerArn=lb["LoadBalancerArn"])["Listeners"]
-                    protos = {li["Protocol"] for li in ls}
-                    has_secure = bool(protos & {"HTTPS", "TLS"})
-                    # HTTP 이지만 HTTPS 로 redirect 하면 허용
-                    redirect = any(
-                        li["Protocol"] == "HTTP" and any(
-                            a["Type"] == "redirect" and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
-                            for a in li.get("DefaultActions", []))
-                        for li in ls)
-                    if not has_secure and not redirect:
-                        http_only.append(f"{lb['LoadBalancerName']}({r}) 리스너={sorted(protos)}")
-            except Exception as _e:
-                if _is_denied(_e):
+                cli, lbs = _elbv2(ctx, r)
+            except Exception as e:
+                if _is_denied(e):
                     raise
+                lbs = []
+            for lb in lbs:
+                typ = lb.get("Type")
+                if typ == "gateway":
+                    continue
+                total += 1
+                name = f"{lb['LoadBalancerName']}({typ},{r})"
+                ls = _listeners(ctx, cli, lb["LoadBalancerArn"])
+                protos = {li["Protocol"] for li in ls}
+                secure = [li for li in ls if li["Protocol"] in ("HTTPS", "TLS")]
+                redirect = any(
+                    li["Protocol"] == "HTTP" and any(
+                        a["Type"] == "redirect" and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
+                        for a in li.get("DefaultActions", []))
+                    for li in ls)
+                if not secure and not redirect:
+                    if typ == "network":
+                        unclear.append(f"{name} 리스너={sorted(protos)} (TCP/UDP 패스스루 — 백엔드 TLS 확인 필요)")
+                    else:
+                        plain.append(f"{name} 리스너={sorted(protos)}")
+                for li in secure:
+                    pol = li.get("SslPolicy") or ""
+                    old = _ssl_protocols(ctx, cli, pol) & {"TLSv1", "TLSv1.1"} if pol else set()
+                    if old:
+                        weak.append(f"{name} {li['Protocol']}:{li['Port']} {pol} ({'/'.join(sorted(old))} 허용)")
+            try:
+                ccli, clbs = _classic_elbs(ctx, r)
+            except Exception as e:
+                if _is_denied(e):
+                    raise
+                clbs = []
+            for lb in clbs:
+                total += 1
+                protos = {ld["Listener"]["Protocol"].upper() for ld in lb.get("ListenerDescriptions", [])}
+                if not protos & {"HTTPS", "SSL"}:
+                    plain.append(f"{lb['LoadBalancerName']}(classic,{r}) 리스너={sorted(protos)}")
         if total == 0:
-            rep.na("4.4", "로드밸런서 없음 — 통신구간 암호화는 애플리케이션 레벨에서 확인")
-        elif http_only:
-            rep.vuln("4.4", ["HTTPS/TLS 리스너가 없는 로드밸런서:"] + http_only, http_only)
+            rep.man("4.4", "로드밸런서 없음 — 서버 원격 접근(VPN/SSH)·관리 접속(TLS 1.2 이상) 등 "
+                           "통신구간 암호화 적용 여부는 인터뷰로 확인")
+        elif plain or weak:
+            ev = []
+            if plain:
+                ev += ["HTTPS/TLS 리스너(또는 HTTPS 리다이렉트)가 없는 로드밸런서:"] + plain
+            if weak:
+                ev += ["TLS 1.0/1.1 을 허용하는 보안 정책(가이드: TLS 1.2 이상):"] + weak
+            rep.vuln("4.4", ev + unclear, [x.split("(")[0] for x in plain + weak])
+        elif unclear:
+            rep.man("4.4", unclear)
         else:
-            rep.good("4.4", f"로드밸런서 {total}개 모두 HTTPS/TLS 종단 또는 HTTPS 리다이렉트")
+            rep.good("4.4", f"로드밸런서 {total}개 모두 HTTPS/TLS(1.2 이상) 종단 또는 HTTPS 리다이렉트")
     safe(rep, "4.4", c44)
 
     # 4.5 CloudTrail 암호화(SSE-KMS)
     def c45():
-        found, no_kms = [], []
-        for r in regions:
-            try:
-                ct = sess.client("cloudtrail", region_name=r)
-                for t in ct.describe_trails(includeShadowTrails=False)["trailList"]:
-                    found.append(t["Name"])
-                    if not t.get("KmsKeyId"):
-                        no_kms.append(t["Name"])
-            except Exception as _e:
-                if _is_denied(_e):
-                    raise
-        if not found:
+        trails = _trails(ctx)
+        if not trails:
             rep.na("4.5", "CloudTrail 추적 없음 (4.7 참고)")
-        elif no_kms:
-            rep.vuln("4.5", "SSE-KMS 암호화가 없는 CloudTrail: " + ", ".join(sorted(set(no_kms))))
+            return
+        no_kms = [f"{t['Name']}(홈:{t.get('HomeRegion', '?')})" for t in trails if not t.get("KmsKeyId")]
+        if no_kms:
+            rep.vuln("4.5", ["SSE-KMS 암호화가 없는 CloudTrail(기본 SSE-S3):"] + no_kms,
+                     [n.split("(")[0] for n in no_kms])
         else:
-            rep.good("4.5", "CloudTrail 로그가 SSE-KMS 로 암호화됨")
+            rep.good("4.5", f"CloudTrail {len(trails)}개 모두 SSE-KMS 로 암호화됨")
     safe(rep, "4.5", c45)
 
     # 4.6 CloudWatch Logs KMS
@@ -725,60 +1148,95 @@ def _operation_mgmt(rep, sess):
         for r in regions:
             try:
                 logs = sess.client("logs", region_name=r)
-                for pg in logs.get_paginator("describe_log_groups").paginate():
-                    for lg in pg["logGroups"]:
-                        total += 1
-                        if not lg.get("kmsKeyId"):
-                            no_kms.append(f"{lg['logGroupName']}({r})")
+                for lg in _pages(logs, "describe_log_groups", "logGroups"):
+                    total += 1
+                    if not lg.get("kmsKeyId"):
+                        no_kms.append(f"{lg['logGroupName']}({r})")
             except Exception as _e:
                 if _is_denied(_e):
                     raise
         if total == 0:
             rep.na("4.6", "CloudWatch 로그 그룹 없음")
         elif no_kms:
-            rep.vuln("4.6", [f"KMS 키 미설정 로그 그룹 {len(no_kms)}/{total}"] +
-                     no_kms[:20] + (["..."] if len(no_kms) > 20 else []), no_kms)
+            rep.vuln("4.6", [f"KMS 키 미설정 로그 그룹 {len(no_kms)}/{total}"] + _cap(no_kms, 20), no_kms)
         else:
             rep.good("4.6", f"로그 그룹 {total}개 모두 KMS 키 설정")
     safe(rep, "4.6", c46)
 
-    # 4.7 CloudTrail 관리 이벤트 로깅
+    # 4.7 CloudTrail 관리 이벤트 로깅 (멀티리전 추적은 홈 리전에서 상태 조회)
     def c47():
-        ok = []
-        for r in regions:
-            try:
-                ct = sess.client("cloudtrail", region_name=r)
-                for t in ct.describe_trails(includeShadowTrails=False)["trailList"]:
-                    stt = ct.get_trail_status(Name=t["TrailARN"])
-                    if not stt.get("IsLogging"):
-                        continue
-                    sels = ct.get_event_selectors(TrailName=t["TrailARN"])
-                    mgmt = any(s.get("IncludeManagementEvents", True)
-                               for s in sels.get("EventSelectors", [{}])) or \
-                        bool(sels.get("AdvancedEventSelectors"))
-                    if mgmt:
-                        ok.append(f"{t['Name']} (multiRegion={t.get('IsMultiRegionTrail')})")
-            except Exception as _e:
-                if _is_denied(_e):
-                    raise
+        ok, off = [], []
+        for t in _trails(ctx):
+            home = t.get("HomeRegion") or regions[0]
+            ct = sess.client("cloudtrail", region_name=home)
+            label = f"{t['Name']}(홈:{home}, 멀티리전={t.get('IsMultiRegionTrail')})"
+            if not ct.get_trail_status(Name=t["TrailARN"]).get("IsLogging"):
+                off.append(f"{label} 로깅 중지")
+                continue
+            sels = ct.get_event_selectors(TrailName=t["TrailARN"])
+            mgmt = any(s.get("IncludeManagementEvents", True) for s in sels.get("EventSelectors") or [])
+            mgmt = mgmt or any(
+                any(f.get("Field") == "eventCategory" and "Management" in (f.get("Equals") or [])
+                    for f in a.get("FieldSelectors", []))
+                for a in sels.get("AdvancedEventSelectors") or [])
+            (ok if mgmt else off).append(label if mgmt else f"{label} 관리 이벤트 미기록")
         if ok:
-            rep.good("4.7", "관리 이벤트를 기록하는 활성 CloudTrail: " + ", ".join(sorted(set(ok))))
+            rep.good("4.7", ["관리 이벤트를 기록하는 활성 CloudTrail: " + ", ".join(sorted(ok))]
+                     + (["참고: " + ", ".join(off)] if off else []))
         else:
-            rep.vuln("4.7", "관리 이벤트를 기록하는 활성 CloudTrail 추적이 없음")
+            rep.vuln("4.7", ["관리 이벤트를 기록하는 활성 CloudTrail 추적이 없음"] + off)
     safe(rep, "4.7", c47)
 
-    # 4.8 인스턴스 로깅 — 인터뷰
+    # 4.8 인스턴스 로깅 — CloudWatch 로그 전송 권한(에이전트) + 사용자 정의 로그 그룹 근거
     def c48():
-        ec2_total = 0
+        insts = []
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
-            for res in ec2.describe_instances(
-                    Filters=[{"Name": "instance-state-name", "Values": ["running", "stopped"]}])["Reservations"]:
-                ec2_total += len(res["Instances"])
-        if ec2_total == 0:
+            for resv in _pages(ec2, "describe_instances", "Reservations",
+                               Filters=[{"Name": "instance-state-name", "Values": ["running", "stopped"]}]):
+                insts += [(r, i) for i in resv["Instances"]]
+        if not insts:
             rep.na("4.8", "EC2 인스턴스 없음")
+            return
+        prof = {}
+
+        def can_ship(arn):
+            name = arn.split("/")[-1]
+            if name not in prof:
+                ok = False
+                for ro in iam.get_instance_profile(InstanceProfileName=name)["InstanceProfile"]["Roles"]:
+                    rn = ro["RoleName"]
+                    att = _pages(iam, "list_attached_role_policies", "AttachedPolicies", RoleName=rn)
+                    if {p["PolicyName"] for p in att} & {"CloudWatchAgentServerPolicy", "CloudWatchAgentAdminPolicy",
+                                                         "CloudWatchLogsFullAccess", "AdministratorAccess"}:
+                        ok = True
+                        break
+                    docs = [view.managed_doc(p["PolicyArn"]) for p in att
+                            if not p["PolicyArn"].startswith(_AWS_POLICY_PREFIX)]
+                    docs += [iam.get_role_policy(RoleName=rn, PolicyName=pn)["PolicyDocument"]
+                             for pn in _pages(iam, "list_role_policies", "PolicyNames", RoleName=rn)]
+                    if any(_doc_allows(d, "logs:PutLogEvents") for d in docs):
+                        ok = True
+                        break
+                prof[name] = ok
+            return prof[name]
+        agent, none = [], []
+        for r, i in insts:
+            arn = (i.get("IamInstanceProfile") or {}).get("Arn")
+            (agent if arn and can_ship(arn) else none).append(f"{i['InstanceId']}({r})")
+        custom = []
+        for r in regions:
+            custom += [lg["logGroupName"] for lg in
+                       _pages(sess.client("logs", region_name=r), "describe_log_groups", "logGroups")
+                       if not lg["logGroupName"].startswith("/aws/")]
+        ev = [f"EC2 {len(insts)}대 중 CloudWatch 로그 전송 권한 보유 {len(agent)}대 / 미보유 {len(none)}대",
+              f"사용자 정의(/aws/ 외) 로그 그룹 {len(custom)}개" + (": " + ", ".join(custom[:15]) if custom else "")]
+        if none:
+            ev.append("로그 전송 권한 없는 인스턴스: " + ", ".join(none[:30]))
+        if not agent and not custom:
+            rep.vuln("4.8", ev + ["→ 인스턴스 로그를 CloudWatch 로그 스트림으로 보관하는 흔적 없음"], none)
         else:
-            rep.man("4.8", f"EC2 {ec2_total}대 — CloudWatch Agent 로 OS/앱 로그를 로그 그룹에 수집 중인지 확인 필요")
+            rep.man("4.8", ev + ["CloudWatch Agent 설치 및 수집 대상 로그(OS/애플리케이션) 적정성 확인 필요"], none)
     safe(rep, "4.8", c48)
 
     # 4.9 RDS 로깅
@@ -787,7 +1245,7 @@ def _operation_mgmt(rep, sess):
         for r in regions:
             try:
                 rds = sess.client("rds", region_name=r)
-                for db in rds.describe_db_instances()["DBInstances"]:
+                for db in _pages(rds, "describe_db_instances", "DBInstances"):
                     total += 1
                     if not db.get("EnabledCloudwatchLogsExports"):
                         no_log.append(f"{db['DBInstanceIdentifier']}({r})")
@@ -802,27 +1260,69 @@ def _operation_mgmt(rep, sess):
             rep.good("4.9", f"RDS {total}개 모두 CloudWatch 로그 내보내기 설정")
     safe(rep, "4.9", c49)
 
-    # 4.10 S3 버킷 로깅
+    # 4.10 S3 버킷 로깅 — 가이드: '로그를 보관하고 있는 버킷'의 서버 액세스 로깅
     def c410():
         s3 = sess.client("s3")
-        buckets = s3.list_buckets()["Buckets"]
-        if not buckets:
+        names = [b["Name"] for b in s3.list_buckets()["Buckets"]]
+        if not names:
             rep.na("4.10", "S3 버킷 없음")
             return
-        no_log = []
-        for b in buckets:
+        logging_on, why, notes = {}, {}, []
+        for n in names:
             try:
-                lg = s3.get_bucket_logging(Bucket=b["Name"])
-                if not lg.get("LoggingEnabled"):
-                    no_log.append(b["Name"])
-            except Exception as _e:
-                if _is_denied(_e):
+                le = s3.get_bucket_logging(Bucket=n).get("LoggingEnabled")
+                logging_on[n] = bool(le)
+                if le and le.get("TargetBucket"):
+                    why.setdefault(le["TargetBucket"], set()).add("다른 버킷 액세스 로그 대상")
+            except Exception as e:
+                if _is_denied(e):
                     raise
-        if no_log:
-            rep.vuln("4.10", [f"서버 액세스 로깅 미설정 버킷 {len(no_log)}/{len(buckets)}: "
-                              + ", ".join(no_log[:30])], no_log)
+                logging_on[n] = None
+
+        def mark(bucket, reason):
+            why.setdefault(bucket, set()).add(reason)
+        try:
+            for t in _trails(ctx):
+                if t.get("S3BucketName"):
+                    mark(t["S3BucketName"], "CloudTrail 로그")
+        except Exception:
+            notes.append("CloudTrail 조회 불가 — 로그 버킷 식별 일부 누락 가능")
+        for r in regions:
+            try:
+                for f in _pages(sess.client("ec2", region_name=r), "describe_flow_logs", "FlowLogs"):
+                    if f.get("LogDestinationType") == "s3" and f.get("LogDestination"):
+                        mark(f["LogDestination"].split(":::", 1)[-1].split("/")[0], "VPC 플로우 로그")
+            except Exception:
+                notes.append(f"플로우 로그 조회 불가({r})")
+            try:
+                cli, lbs = _elbv2(ctx, r)
+                for lb in lbs:
+                    at = _lb_attrs(ctx, cli, lb["LoadBalancerArn"])
+                    if at.get("access_logs.s3.enabled") == "true" and at.get("access_logs.s3.bucket"):
+                        mark(at["access_logs.s3.bucket"], "ELB 액세스 로그")
+            except Exception:
+                notes.append(f"ELB 조회 불가({r})")
+        for n in names:
+            if "log" in n.lower() or "trail" in n.lower():
+                mark(n, "이름에 log/trail 포함")
+        why = {b: v for b, v in why.items() if b in logging_on}      # 이 계정 버킷만
+        if not why:
+            no = [n for n, v in logging_on.items() if v is False]
+            rep.man("4.10", ["로그 보관 버킷을 식별하지 못함 — 로그 저장 위치 확인 필요 "
+                             "(가이드: 로그를 보관하는 버킷의 서버 액세스 로깅)"]
+                    + ([f"참고: 서버 액세스 로깅 미설정 버킷 {len(no)}/{len(names)}: " + ", ".join(no[:30])]
+                       if no else []) + notes)
+            return
+        missing = [f"{b}({'/'.join(sorted(why[b]))})" for b in sorted(why) if logging_on.get(b) is False]
+        unknown = [b for b in sorted(why) if logging_on.get(b) is None]
+        if missing:
+            rep.vuln("4.10", ["서버 액세스 로깅이 없는 로그 보관 버킷:"] + missing + notes,
+                     [m.split("(")[0] for m in missing])
+        elif unknown:
+            rep.man("4.10", ["로그 보관 버킷의 로깅 설정 확인 불가: " + ", ".join(unknown)] + notes)
         else:
-            rep.good("4.10", f"S3 버킷 {len(buckets)}개 모두 서버 액세스 로깅 설정")
+            rep.good("4.10", [f"로그 보관 버킷 {len(why)}개 모두 서버 액세스 로깅 설정: "
+                              + ", ".join(sorted(why))] + notes)
     safe(rep, "4.10", c410)
 
     # 4.11 VPC 플로우 로그
@@ -830,11 +1330,9 @@ def _operation_mgmt(rep, sess):
         missing = []
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
-            vpcs = [v["VpcId"] for v in ec2.describe_vpcs()["Vpcs"]]
-            fl_vpcs = {f["ResourceId"] for f in ec2.describe_flow_logs()["FlowLogs"]}
-            for v in vpcs:
-                if v not in fl_vpcs:
-                    missing.append(f"{v}({r})")
+            vpcs = [v["VpcId"] for v in _pages(ec2, "describe_vpcs", "Vpcs")]
+            fl_vpcs = {f["ResourceId"] for f in _pages(ec2, "describe_flow_logs", "FlowLogs")}
+            missing += [f"{v}({r})" for v in vpcs if v not in fl_vpcs]
         if missing:
             rep.vuln("4.11", "플로우 로그 미설정 VPC: " + ", ".join(missing), missing)
         else:
@@ -843,74 +1341,87 @@ def _operation_mgmt(rep, sess):
 
     # 4.12 로그 보관기간 (>=1년)
     def c412():
-        short = []
+        short, total = [], 0
         for r in regions:
             try:
                 logs = sess.client("logs", region_name=r)
-                for pg in logs.get_paginator("describe_log_groups").paginate():
-                    for lg in pg["logGroups"]:
-                        ret = lg.get("retentionInDays")
-                        if ret is not None and ret < 365:
-                            short.append(f"{lg['logGroupName']}({r}) {ret}일")
+                for lg in _pages(logs, "describe_log_groups", "logGroups"):
+                    total += 1
+                    ret = lg.get("retentionInDays")
+                    if ret is not None and ret < 365:
+                        short.append(f"{lg['logGroupName']}({r}) {ret}일")
             except Exception as _e:
                 if _is_denied(_e):
                     raise
-        if short:
-            rep.vuln("4.12", ["보관기간 1년 미만 로그 그룹:"] + short[:20] +
-                     (["..."] if len(short) > 20 else []), short)
+        if total == 0:
+            rep.man("4.12", "CloudWatch 로그 그룹 없음 — 서비스 로그 보관 위치(S3 등)와 보관기간(1년 이상) 확인 필요")
+        elif short:
+            rep.vuln("4.12", ["보관기간 1년 미만 로그 그룹:"] + _cap(short, 20), short)
         else:
-            rep.good("4.12", "로그 그룹 보관기간이 1년 이상이거나 무기한")
+            rep.good("4.12", f"로그 그룹 {total}개 모두 보관기간 1년 이상 또는 무기한")
     safe(rep, "4.12", c412)
 
-    # 4.13 백업 사용 여부
+    # 4.13 백업 사용 여부 — 백업 설정 근거(Backup/RDS/DLM). 권한 없는 소스는 '없음'으로 단정하지 않음
     def c413():
-        ev = []
-        has = False
+        ev, has, unknown = [], False, []
         for r in regions:
             try:
-                bk = sess.client("backup", region_name=r)
-                plans = bk.list_backup_plans()["BackupPlansList"]
+                plans = _pages(sess.client("backup", region_name=r), "list_backup_plans", "BackupPlansList")
                 if plans:
                     has = True
                     ev.append(f"AWS Backup 계획 {len(plans)}개({r})")
-            except Exception as _e:
-                if _is_denied(_e):
-                    raise
+            except Exception as e:
+                if _is_denied(e):
+                    unknown.append(f"AWS Backup({r})")
             try:
-                rds = sess.client("rds", region_name=r)
-                auto = [d["DBInstanceIdentifier"] for d in rds.describe_db_instances()["DBInstances"]
+                auto = [d["DBInstanceIdentifier"] for d in
+                        _pages(sess.client("rds", region_name=r), "describe_db_instances", "DBInstances")
                         if d.get("BackupRetentionPeriod", 0) > 0]
                 if auto:
                     has = True
                     ev.append(f"RDS 자동 백업 {len(auto)}개({r})")
-            except Exception as _e:
-                if _is_denied(_e):
-                    raise
+            except Exception as e:
+                if _is_denied(e):
+                    unknown.append(f"RDS({r})")
+            try:
+                pol = sess.client("dlm", region_name=r).get_lifecycle_policies().get("Policies", [])
+                if pol:
+                    has = True
+                    ev.append(f"EBS 스냅샷 수명주기(DLM) 정책 {len(pol)}개({r})")
+            except Exception as e:
+                if _is_denied(e):
+                    unknown.append(f"DLM({r})")
         if has:
-            rep.man("4.13", ev + ["백업 정책 문서/주기 적정성은 인터뷰 확인"])
+            rep.man("4.13", ev + ["백업 정책 문서(대상·주기·보존기한·소산 등) 적정성은 인터뷰 확인"])
+        elif unknown:
+            rep.man("4.13", "백업 설정을 확인할 권한이 없는 소스: " + ", ".join(unknown))
         else:
-            rep.vuln("4.13", "AWS Backup 계획/RDS 자동 백업 등 백업 설정이 확인되지 않음")
+            rep.vuln("4.13", "AWS Backup 계획/RDS 자동 백업/DLM 등 백업 설정이 확인되지 않음")
     safe(rep, "4.13", c413)
 
     # 4.14 / 4.15 EKS
-    _eks_manual(rep, sess, ["4.14", "4.15"])
+    _eks_manual(rep, ctx, ["4.14", "4.15"])
 
 
 # --------------------------------------------------------------------------
-def _eks_manual(rep, sess, codes):
+def _eks_manual(rep, ctx, codes):
     """EKS 항목: 클러스터 없으면 N/A, 있으면 kubectl 필요 → 수동확인.
 
     4.14(제어플레인 로깅) / 4.15(암호 암호화) 는 describe_cluster 로 자동 판정한다.
+    EKS 조회 권한이 없으면 전체 스캔을 멈추지 않고 해당 항목만 수동확인으로 둔다.
     """
+    sess = ctx["sess"]
+    denied_msg = "EKS 조회 권한 부족(eks:ListClusters/DescribeCluster) → 수동 확인 필요"
     clusters = []
-    for r in _regions(sess):
+    for r in ctx["regions"]:
         try:
-            eks = sess.client("eks", region_name=r)
-            for name in eks.list_clusters()["clusters"]:
-                clusters.append((r, name))
+            clusters += [(r, n) for n in _pages(sess.client("eks", region_name=r), "list_clusters", "clusters")]
         except Exception as _e:
             if _is_denied(_e):
-                raise
+                for c in codes:
+                    if not rep.done(c):
+                        rep.man(c, denied_msg)
+                return
 
     if not clusters:
         for c in codes:
@@ -919,38 +1430,42 @@ def _eks_manual(rep, sess, codes):
         return
 
     names = [f"{n}({r})" for r, n in clusters]
+    desc = ctx["cache"].setdefault("eks", {})
+
+    def describe(r, n):
+        if (r, n) not in desc:
+            desc[(r, n)] = sess.client("eks", region_name=r).describe_cluster(name=n)["cluster"]
+        return desc[(r, n)]
     for c in codes:
         if rep.done(c):
             continue
-        if c == "4.14":
-            bad = []
-            for r, n in clusters:
-                try:
-                    cl = sess.client("eks", region_name=r).describe_cluster(name=n)["cluster"]
+        try:
+            if c == "4.14":
+                bad = []
+                need = {"api", "audit", "authenticator", "controllerManager", "scheduler"}
+                for r, n in clusters:
                     types = set()
-                    for lg in cl.get("logging", {}).get("clusterLogging", []):
+                    for lg in describe(r, n).get("logging", {}).get("clusterLogging", []):
                         if lg.get("enabled"):
                             types |= set(lg.get("types", []))
-                    need = {"api", "audit", "authenticator", "controllerManager", "scheduler"}
                     if not need.issubset(types):
                         bad.append(f"{n}({r}) 활성 로그={sorted(types) or '없음'}")
-                except Exception as _e:
-                    if _is_denied(_e):
-                        raise
-            rep.vuln("4.14", ["제어 플레인 로그 유형이 일부만 활성:"] + bad, bad) if bad \
-                else rep.good("4.14", "EKS 제어 플레인 로그 5종 모두 활성")
-        elif c == "4.15":
-            bad = []
-            for r, n in clusters:
-                try:
-                    cl = sess.client("eks", region_name=r).describe_cluster(name=n)["cluster"]
-                    if not cl.get("encryptionConfig"):
-                        bad.append(f"{n}({r})")
-                except Exception as _e:
-                    if _is_denied(_e):
-                        raise
-            rep.vuln("4.15", "암호 암호화(Secrets Encryption) 미설정: " + ", ".join(bad), bad) if bad \
-                else rep.good("4.15", "EKS 클러스터 암호 암호화 활성")
-        else:
-            rep.man(c, [f"EKS 클러스터: {', '.join(names)}",
-                        "이 항목은 kubectl(클러스터 접근) 로 aws-auth/ServiceAccount/RBAC/PSS 확인 필요"], names)
+                if bad:
+                    rep.vuln("4.14", ["제어 플레인 로그 유형(5종) 중 일부만 활성:"] + bad, bad)
+                else:
+                    rep.good("4.14", "EKS 제어 플레인 로그 5종 모두 활성")
+            elif c == "4.15":
+                bad = [f"{n}({r})" for r, n in clusters if not describe(r, n).get("encryptionConfig")]
+                if bad:
+                    rep.vuln("4.15", "암호 암호화(Secret encryption) 미설정: " + ", ".join(bad), bad)
+                else:
+                    rep.good("4.15", "EKS 클러스터 암호 암호화 활성")
+            else:
+                rep.man(c, [f"EKS 클러스터: {', '.join(names)}",
+                            "이 항목은 kubectl(클러스터 접근) 로 aws-auth/ServiceAccount/RBAC/PSS 확인 필요"],
+                        names)
+        except Exception as _e:
+            if _is_denied(_e):
+                rep.man(c, denied_msg)
+            else:
+                rep.man(c, f"EKS 조회 중 오류 ({type(_e).__name__}): {_e}")
