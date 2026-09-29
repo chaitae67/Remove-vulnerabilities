@@ -329,6 +329,144 @@ def _cap(lines, n=40):
     return lines[:n] + ([f"... 외 {len(lines) - n}건"] if len(lines) > n else [])
 
 
+def _running(i):
+    return (i.get("State") or {}).get("Name", "running") == "running"
+
+
+def _route_target(route):
+    return (route.get("GatewayId") or route.get("NatGatewayId") or route.get("TransitGatewayId")
+            or route.get("VpcPeeringConnectionId") or route.get("InstanceId")
+            or route.get("NetworkInterfaceId") or route.get("EgressOnlyInternetGatewayId")
+            or route.get("VpcEndpointId") or route.get("LocalGatewayId") or "?")
+
+
+def _vpc_net(ctx, r):
+    """리전별 VPC 네트워크 구성(라우팅 테이블·서브넷·인스턴스·RDS 배치) — 3.4/3.5/3.6 공용 캐시.
+
+    rt_of: 서브넷 -> 적용 라우팅 테이블(명시 연결이 없으면 VPC 기본 테이블)
+    rds_in: 서브넷 -> RDS 식별자(서브넷 그룹 기준). RDS 조회 권한이 없으면 None.
+    """
+    c = ctx["cache"].setdefault("vpcnet", {})
+    if r not in c:
+        sess = ctx["sess"]
+        ec2 = sess.client("ec2", region_name=r)
+        rts = _pages(ec2, "describe_route_tables", "RouteTables")
+        subnets = {s["SubnetId"]: s for s in _pages(ec2, "describe_subnets", "Subnets")}
+        insts = [i for resv in _pages(ec2, "describe_instances", "Reservations",
+                                      Filters=[{"Name": "instance-state-name",
+                                                "Values": ["running", "stopped"]}])
+                 for i in resv["Instances"]]
+        rds_in = {}
+        try:
+            for db in _pages(sess.client("rds", region_name=r), "describe_db_instances", "DBInstances"):
+                for s in (db.get("DBSubnetGroup") or {}).get("Subnets", []):
+                    rds_in.setdefault(s["SubnetIdentifier"], []).append(db["DBInstanceIdentifier"])
+        except Exception as e:
+            if not _is_denied(e):
+                raise
+            rds_in = None
+        main_rt, explicit = {}, {}
+        for rt in rts:
+            for a in rt.get("Associations", []):
+                if a.get("Main"):
+                    main_rt[rt.get("VpcId")] = rt["RouteTableId"]
+                elif a.get("SubnetId"):
+                    explicit[a["SubnetId"]] = rt["RouteTableId"]
+        rt_of = {sid: explicit.get(sid) or main_rt.get(s.get("VpcId")) for sid, s in subnets.items()}
+        c[r] = {"rts": rts, "subnets": subnets, "insts": insts, "rds_in": rds_in,
+                "main_rt": main_rt, "rt_of": rt_of}
+    return c[r]
+
+
+_S3_PAB_KEYS = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
+
+
+def _bucket_exposure(s3, name):
+    """(상태, 사유) — blocked: 퍼블릭 액세스 차단 / public: 모든 사람·외부 계정에 공개 / private."""
+    try:
+        pab = s3.get_public_access_block(Bucket=name)["PublicAccessBlockConfiguration"]
+        if all(pab.get(k) for k in _S3_PAB_KEYS):
+            return "blocked", "버킷 퍼블릭 액세스 차단"
+    except Exception as e:
+        if _is_denied(e) or "NoSuchPublicAccessBlockConfiguration" not in str(e):
+            raise
+    try:
+        if s3.get_bucket_policy_status(Bucket=name)["PolicyStatus"].get("IsPublic"):
+            return "public", "버킷 정책 public"
+    except Exception as e:
+        if _is_denied(e) or "NoSuchBucketPolicy" not in str(e):
+            raise
+    acl = s3.get_bucket_acl(Bucket=name)
+    owner = acl.get("Owner", {}).get("ID")
+    for g in acl.get("Grants", []):
+        gr = g.get("Grantee", {})
+        uri = gr.get("URI", "")
+        if "AllUsers" in uri or "AuthenticatedUsers" in uri:
+            return "public", f"ACL {uri.split('/')[-1]}: {g.get('Permission')}"
+        if gr.get("Type") == "CanonicalUser" and owner and gr.get("ID") != owner:
+            return "public", f"ACL 외부 계정 {gr.get('ID', '')[:12]}…: {g.get('Permission')}"
+    return "private", ""
+
+
+def _s3_exposure(ctx):
+    """버킷별 노출 상태 {이름: (상태, 사유)}, 계정 PAB 메모, 계정 PAB 전체 차단 여부 — 3.7·1.6 공용 캐시.
+    외부 계정 ACL 공유도 '다수 접근 가능'으로 보아 public 으로 분류한다. 판정 못 한 버킷은 unknown."""
+    c = ctx["cache"]
+    if "s3exp" not in c:
+        sess = ctx["sess"]
+        s3 = sess.client("s3")
+        names = [b["Name"] for b in s3.list_buckets()["Buckets"]]
+        note, acct_all = [], False
+        try:
+            s3c = sess.client("s3control", region_name=sess.region_name or "us-east-1")
+            acfg = s3c.get_public_access_block(AccountId=ctx["acct"])["PublicAccessBlockConfiguration"]
+            acct_all = all(acfg.get(k) for k in _S3_PAB_KEYS)
+            if not acct_all:
+                note.append("계정 수준 퍼블릭 액세스 차단: 일부만 설정")
+        except Exception as e:
+            if _is_denied(e):
+                note.append("계정 수준 퍼블릭 액세스 차단 조회 권한 없음(s3:GetAccountPublicAccessBlock)")
+            elif "NoSuchPublicAccessBlockConfiguration" in str(e):
+                note.append("계정 수준 퍼블릭 액세스 차단: 미설정")
+            else:
+                note.append(f"계정 수준 퍼블릭 액세스 차단 조회 실패({type(e).__name__})")
+        res = {}
+        for name in names:
+            if acct_all:
+                res[name] = ("blocked", "계정 수준 퍼블릭 액세스 차단")
+                continue
+            try:
+                res[name] = _bucket_exposure(s3, name)
+            except Exception as e:
+                if _is_denied(e):
+                    raise
+                res[name] = ("unknown", type(e).__name__)
+        c["s3exp"] = (res, note, acct_all)
+    return c["s3exp"]
+
+
+_KEY_EXT = (".pem", ".ppk", ".key")
+_KEY_NAMES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
+
+
+def _key_files(s3, bucket, cap=20000):
+    """버킷에서 키 파일로 보이는 객체 키 목록과 검사 상한 도달 여부. 객체 내용은 읽지 않는다.
+    인증서로 보이는 이름(cert/chain/public, ca*)은 제외한다."""
+    hits, n = [], 0
+    pages = (s3.get_paginator("list_objects_v2").paginate(Bucket=bucket)
+             if s3.can_paginate("list_objects_v2") else [s3.list_objects_v2(Bucket=bucket)])
+    for page in pages:
+        for o in page.get("Contents", []):
+            n += 1
+            base = o["Key"].rsplit("/", 1)[-1].lower()
+            if (base.endswith(_KEY_EXT) or base in _KEY_NAMES) and not (
+                    any(t in base for t in ("cert", "chain", "public")) or base.startswith("ca")):
+                hits.append(o["Key"])
+            if n >= cap:
+                return hits, True
+    return hits, False
+
+
 # ----------------------------------------------------------------------------
 def run(creds):
     sess = _session(creds)
@@ -492,9 +630,40 @@ def _account_mgmt(rep, ctx):
             rep.good("1.5", f"EC2 {total}대 모두 Key Pair(PEM) 기반 접속")
     safe(rep, "1.5", c15)
 
-    # 1.6 Key Pair 보관 위치 — 인터뷰
-    rep.man("1.6", "PEM 키 파일 보관 위치(프라이빗 S3 권장 / 퍼블릭 S3·EC2 루트(/) 디렉터리 금지)는 "
-                   "담당자 인터뷰로 확인")
+    # 1.6 Key Pair 보관 관리 — PC·공유폴더·EC2 내부 보관 위치는 API 로 알 수 없어 인터뷰.
+    #   단, 다수 접근이 가능한 버킷(퍼블릭/외부 계정 공유)에서 키 파일이 발견되면 취약으로 판정한다.
+    def c16():
+        res, _note, _acct_all = _s3_exposure(ctx)
+        s3 = sess.client("s3")
+        exposed, kept, unknown, partial = [], [], [], []
+        for name, (st, why) in res.items():
+            try:
+                hits, cut = _key_files(s3, name)
+            except Exception as e:
+                unknown.append(f"{name}({'권한 없음' if _is_denied(e) else type(e).__name__})")
+                continue
+            if cut:
+                partial.append(name)
+            if not hits:
+                continue
+            line = f"{name}: {', '.join(hits[:5])}" + (f" 외 {len(hits) - 5}개" if len(hits) > 5 else "")
+            if st == "public":
+                exposed.append(f"{line} [{why}]")
+            else:
+                kept.append(line + (" [공개 여부 확인 불가]" if st == "unknown" else ""))
+        ev = [f"S3 버킷 {len(res)}개에서 키 파일(*.pem·*.ppk·*.key·id_rsa 등, 인증서 이름 제외) 검색"]
+        if kept:
+            ev += ["비공개 버킷에 보관된 키 파일(가이드 권장: 프라이빗 S3):"] + kept
+        if partial:
+            ev.append("객체가 많아 일부만 검사한 버킷: " + ", ".join(partial))
+        if unknown:
+            ev.append("객체 목록 조회 불가(s3:ListBucket): " + ", ".join(unknown))
+        if exposed:
+            rep.vuln("1.6", ["다수 접근이 가능한 버킷(퍼블릭/외부 계정 공유)에 키 파일 보관:"] + exposed + ev,
+                     [e.split(":")[0] for e in exposed])
+        else:
+            rep.man("1.6", ev + ["PC·공유폴더·EC2 루트(/) 디렉터리 등 S3 외 보관 위치는 담당자 인터뷰로 확인"])
+    safe(rep, "1.6", c16)
 
     # 1.7 Admin Console(root) 서비스 용도 사용
     def c17():
@@ -754,48 +923,26 @@ def _virtual_resource(rep, ctx):
     def c34():
         bad, ok, notes, rds_unknown = [], [], [], False
         for r in regions:
-            ec2 = sess.client("ec2", region_name=r)
-            rts = _pages(ec2, "describe_route_tables", "RouteTables")
-            subnets = {s["SubnetId"]: s for s in _pages(ec2, "describe_subnets", "Subnets")}
-            private_inst = {}                               # 서브넷 -> 공인 IP 없는 실행 중 인스턴스
-            for resv in _pages(ec2, "describe_instances", "Reservations",
-                               Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
-                for i in resv["Instances"]:
-                    running = (i.get("State") or {}).get("Name", "running") == "running"
-                    if running and i.get("SubnetId") and not i.get("PublicIpAddress"):
-                        private_inst.setdefault(i["SubnetId"], []).append(i["InstanceId"])
-            rds_in = {}                                     # 서브넷 -> RDS(서브넷 그룹 기준)
-            try:
-                for db in _pages(sess.client("rds", region_name=r), "describe_db_instances", "DBInstances"):
-                    for s in (db.get("DBSubnetGroup") or {}).get("Subnets", []):
-                        rds_in.setdefault(s["SubnetIdentifier"], []).append(db["DBInstanceIdentifier"])
-            except Exception as e:
-                if not _is_denied(e):
-                    raise
+            net = _vpc_net(ctx, r)
+            if net["rds_in"] is None:
                 rds_unknown = True
                 notes.append(f"RDS 조회 권한 없음({r}) — RDS 서브넷의 인터넷 경로 여부 미확인")
-            main_rt, explicit = {}, {}
-            for rt in rts:
-                for a in rt.get("Associations", []):
-                    if a.get("Main"):
-                        main_rt[rt["VpcId"]] = rt["RouteTableId"]
-                    elif a.get("SubnetId"):
-                        explicit[a["SubnetId"]] = rt["RouteTableId"]
+            rds_in, main_rt = net["rds_in"] or {}, net["main_rt"]
+            private_inst = {}                               # 서브넷 -> 공인 IP 없는 실행 중 인스턴스
+            for i in net["insts"]:
+                if _running(i) and i.get("SubnetId") and not i.get("PublicIpAddress"):
+                    private_inst.setdefault(i["SubnetId"], []).append(i["InstanceId"])
             rt_subnets = {}                                 # 명시 연결이 없는 서브넷은 기본 테이블을 따른다
-            for sid, s in subnets.items():
-                rid = explicit.get(sid) or main_rt.get(s.get("VpcId"))
+            for sid, rid in net["rt_of"].items():
                 if rid:
                     rt_subnets.setdefault(rid, []).append(sid)
-            for rt in rts:
+            for rt in net["rts"]:
                 rid = rt["RouteTableId"]
                 is_main = main_rt.get(rt.get("VpcId")) == rid
                 for route in rt["Routes"]:
                     dst = (route.get("DestinationCidrBlock") or route.get("DestinationIpv6CidrBlock")
                            or route.get("DestinationPrefixListId") or "?")
-                    tgt = (route.get("GatewayId") or route.get("NatGatewayId") or route.get("TransitGatewayId")
-                           or route.get("VpcPeeringConnectionId") or route.get("InstanceId")
-                           or route.get("NetworkInterfaceId") or route.get("EgressOnlyInternetGatewayId")
-                           or route.get("VpcEndpointId") or route.get("LocalGatewayId") or "?")
+                    tgt = _route_target(route)
                     label = f"{rid}({r}{', 기본 테이블' if is_main else ''}) {dst} → {tgt}"
                     if route.get("State") == "blackhole":
                         bad.append(f"{label}: 대상이 삭제된 경로(blackhole)")
@@ -837,96 +984,114 @@ def _virtual_resource(rep, ctx):
             rep.good("3.4", ["ANY(0.0.0.0/0·::/0) 라우팅 규칙 없음"] + notes)
     safe(rep, "3.4", c34)
 
-    # 3.5 인터넷 게이트웨이 연결 — 인터뷰
+    # 3.5 인터넷 게이트웨이 연결 관리 — 불필요하게 연결된 게이트웨이(구성 기준) 자동 판정
+    #   취약: ① 어떤 라우팅 테이블도 사용하지 않는 NAT GW  ② IGW 경로가 없는 서브넷의 퍼블릭 NAT GW
+    #         ③ VPC 에 연결돼 있지만 어떤 라우팅 테이블도 사용하지 않는 IGW
+    #   (사용 중인 NAT 가 업무상 필요한지는 3.6 에서 인터뷰)
     def c35():
-        igws, detached = [], []
+        bad, ok, notes, found = [], [], [], False
         for r in regions:
-            for igw in _pages(sess.client("ec2", region_name=r), "describe_internet_gateways",
-                              "InternetGateways"):
-                att = [a["VpcId"] for a in igw.get("Attachments", [])]
-                igws.append(f"{igw['InternetGatewayId']}({r}) → {', '.join(att) if att else '미연결'}")
+            ec2 = sess.client("ec2", region_name=r)
+            igws = _pages(ec2, "describe_internet_gateways", "InternetGateways")
+            nats = [n for n in _pages(ec2, "describe_nat_gateways", "NatGateways")
+                    if n.get("State") not in ("deleted", "deleting", "failed")]
+            if not igws and not nats:
+                continue
+            found = True
+            net = _vpc_net(ctx, r)
+            rt_by = {rt["RouteTableId"]: rt for rt in net["rts"]}
+            used = {_route_target(ro) for rt in net["rts"] for ro in rt["Routes"]
+                    if ro.get("State") != "blackhole"}
+
+            def igw_routed(sid, rt_by=rt_by, net=net):
+                rt = rt_by.get(net["rt_of"].get(sid))
+                return bool(rt) and any(
+                    _route_target(ro).startswith("igw-") and ro.get("State") != "blackhole"
+                    and (ro.get("DestinationCidrBlock") or ro.get("DestinationIpv6CidrBlock")) in (_ANY4, _ANY6)
+                    for ro in rt["Routes"])
+            for g in igws:
+                gid = g["InternetGatewayId"]
+                att = [a["VpcId"] for a in g.get("Attachments", [])]
                 if not att:
-                    detached.append(igw["InternetGatewayId"])
-        if not igws:
-            rep.na("3.5", "인터넷 게이트웨이 없음")
-            return
-        ev = ["IGW 목록 — 불필요한 연결(NAT 게이트웨이 경로 포함) 여부 검토:"] + igws
-        if detached:
-            ev.append("VPC 미연결 IGW(정리 대상): " + ", ".join(detached))
-        rep.man("3.5", ev, igws)
+                    notes.append(f"{gid}({r}) VPC 미연결 IGW — 정리 대상")
+                elif gid not in used:
+                    bad.append(f"{gid}({r}) → {', '.join(att)}: 어떤 라우팅 테이블도 사용하지 않는 IGW 연결")
+                else:
+                    ok.append(f"{gid}({r}) → {', '.join(att)}")
+            for n in nats:
+                nid, sid = n["NatGatewayId"], n.get("SubnetId")
+                label = f"{nid}({r}, subnet={sid})"
+                if nid not in used:
+                    bad.append(f"{label}: 어떤 라우팅 테이블도 사용하지 않는 NAT GW")
+                elif n.get("ConnectivityType", "public") == "public" and not igw_routed(sid):
+                    bad.append(f"{label}: IGW 경로가 없는 서브넷의 퍼블릭 NAT GW(인터넷 통신 불가)")
+                else:
+                    ok.append(f"{label} 사용 중")
+        if not found:
+            rep.na("3.5", "인터넷/NAT 게이트웨이 없음")
+        elif bad:
+            rep.vuln("3.5", ["불필요하게 연결된 게이트웨이:"] + bad
+                     + (["실제 경로에서 사용 중:"] + ok if ok else []) + notes,
+                     sorted({b.split("(")[0] for b in bad}))
+        else:
+            rep.good("3.5", ["IGW·NAT GW 모두 실제 경로에서 사용 중:"] + ok + notes)
     safe(rep, "3.5", c35)
 
-    # 3.6 NAT 게이트웨이 연결 — 인터뷰
+    # 3.6 NAT 게이트웨이 연결 관리 — '목적 확인'은 업무 판단이라 인터뷰. NAT 별 경유 리소스를 근거로 제시
     def c36():
-        nats = []
+        info, warn, notes, names = [], [], [], []
         for r in regions:
-            for nat in _pages(sess.client("ec2", region_name=r), "describe_nat_gateways", "NatGateways"):
-                if nat.get("State") in ("deleted", "deleting", "failed"):
-                    continue
-                nats.append(f"{nat['NatGatewayId']}({r}) subnet={nat.get('SubnetId')} state={nat.get('State')}")
-        if not nats:
+            nats = [n for n in _pages(sess.client("ec2", region_name=r), "describe_nat_gateways", "NatGateways")
+                    if n.get("State") not in ("deleted", "deleting", "failed")]
+            if not nats:
+                continue
+            net = _vpc_net(ctx, r)
+            if net["rds_in"] is None:
+                notes.append(f"RDS 조회 권한 없음({r}) — NAT 경유 RDS 미확인")
+            rds_in = net["rds_in"] or {}
+            nat_rts = {}                                    # NAT -> 그 NAT 를 경로로 쓰는 라우팅 테이블
+            for rt in net["rts"]:
+                for ro in rt["Routes"]:
+                    if ro.get("NatGatewayId") and ro.get("State") != "blackhole":
+                        nat_rts.setdefault(ro["NatGatewayId"], set()).add(rt["RouteTableId"])
+            for n in nats:
+                nid = n["NatGatewayId"]
+                names.append(nid)
+                subs = sorted(s for s, rid in net["rt_of"].items() if rid in nat_rts.get(nid, set()))
+                insts = []
+                for i in net["insts"]:
+                    if i.get("SubnetId") not in subs:
+                        continue
+                    nm = next((t["Value"] for t in i.get("Tags", []) if t.get("Key") == "Name"), "")
+                    insts.append(f"{i['InstanceId']}({nm})" if nm else i["InstanceId"])
+                    if "db" in nm.lower():
+                        warn.append(f"{nid}: DB 추정 인스턴스 {i['InstanceId']}({nm}) 가 NAT 로 외부 통신 가능(이름 기준)")
+                dbs = sorted({d for s in subs for d in rds_in.get(s, [])})
+                if dbs:
+                    warn.append(f"{nid}: RDS {', '.join(dbs)} 가 NAT 로 외부 통신 가능")
+                info.append(f"{nid}({r}): 경유 서브넷 {len(subs)}개 / 인스턴스 {len(insts)}대"
+                            + (f": {', '.join(insts[:15])}" if insts else "")
+                            + (f" / RDS: {', '.join(dbs)}" if dbs else ""))
+        if not names:
             rep.na("3.6", "NAT 게이트웨이 없음")
-        else:
-            rep.man("3.6", ["NAT GW 목록 — 연결 리소스 목적 확인 (DBMS·개인정보 서비스는 외부 오픈 금지):"]
-                    + nats, nats)
+            return
+        ev = ["NAT GW 경유 리소스 — 외부 통신이 필요한 리소스인지(목적) 담당자 확인:"] + info
+        if warn:
+            ev += ["⚠ 가이드 비고: DBMS·개인정보 서비스 등 외부 오픈 금지 대상인지 확인 필요"] + warn
+        rep.man("3.6", ev + notes, names)
     safe(rep, "3.6", c36)
 
     # 3.7 S3 퍼블릭 액세스 — 계정/버킷 퍼블릭 액세스 차단, 버킷 정책, ACL(모든 사람·외부 계정)
     def c37():
-        s3 = sess.client("s3")
-        buckets = s3.list_buckets()["Buckets"]
-        if not buckets:
+        res, note, acct_all = _s3_exposure(ctx)
+        if not res:
             rep.na("3.7", "S3 버킷 없음")
             return
-        keys = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
-        note = []
-        try:
-            s3c = sess.client("s3control", region_name=sess.region_name or "us-east-1")
-            acfg = s3c.get_public_access_block(AccountId=ctx["acct"])["PublicAccessBlockConfiguration"]
-            if all(acfg.get(k) for k in keys):
-                rep.good("3.7", f"계정 수준 '모든 퍼블릭 액세스 차단' 활성 → S3 버킷 {len(buckets)}개 모두 보호")
-                return
-            note.append("계정 수준 퍼블릭 액세스 차단: 일부만 설정")
-        except Exception as e:
-            if _is_denied(e):
-                note.append("계정 수준 퍼블릭 액세스 차단 조회 권한 없음(s3:GetAccountPublicAccessBlock)")
-            elif "NoSuchPublicAccessBlockConfiguration" in str(e):
-                note.append("계정 수준 퍼블릭 액세스 차단: 미설정")
-            else:
-                note.append(f"계정 수준 퍼블릭 액세스 차단 조회 실패({type(e).__name__})")
-        public, unknown = [], []
-        for b in buckets:
-            name = b["Name"]
-            try:
-                try:
-                    pab = s3.get_public_access_block(Bucket=name)["PublicAccessBlockConfiguration"]
-                    if all(pab.get(k) for k in keys):
-                        continue
-                except Exception as e:
-                    if _is_denied(e) or "NoSuchPublicAccessBlockConfiguration" not in str(e):
-                        raise
-                try:
-                    if s3.get_bucket_policy_status(Bucket=name)["PolicyStatus"].get("IsPublic"):
-                        public.append(f"{name} (버킷 정책 public)")
-                        continue
-                except Exception as e:
-                    if _is_denied(e) or "NoSuchBucketPolicy" not in str(e):
-                        raise
-                acl = s3.get_bucket_acl(Bucket=name)
-                owner = acl.get("Owner", {}).get("ID")
-                for g in acl.get("Grants", []):
-                    gr = g.get("Grantee", {})
-                    uri = gr.get("URI", "")
-                    if "AllUsers" in uri or "AuthenticatedUsers" in uri:
-                        public.append(f"{name} (ACL {uri.split('/')[-1]}: {g.get('Permission')})")
-                        break
-                    if gr.get("Type") == "CanonicalUser" and owner and gr.get("ID") != owner:
-                        public.append(f"{name} (ACL 외부 계정 {gr.get('ID', '')[:12]}…: {g.get('Permission')})")
-                        break
-            except Exception as e:
-                if _is_denied(e):
-                    raise
-                unknown.append(f"{name} ({type(e).__name__})")
+        if acct_all:
+            rep.good("3.7", f"계정 수준 '모든 퍼블릭 액세스 차단' 활성 → S3 버킷 {len(res)}개 모두 보호")
+            return
+        public = [f"{n} ({why})" for n, (st, why) in res.items() if st == "public"]
+        unknown = [f"{n} ({why})" for n, (st, why) in res.items() if st == "unknown"]
         if public:
             rep.vuln("3.7", ["퍼블릭 액세스 차단이 없고 모든 사람/외부 계정에 공개된 버킷:"] + public
                      + note + (["확인 불가: " + ", ".join(unknown)] if unknown else []),
@@ -934,7 +1099,7 @@ def _virtual_resource(rep, ctx):
         elif unknown:
             rep.man("3.7", ["일부 버킷의 공개 설정을 확인하지 못함: " + ", ".join(unknown)] + note)
         else:
-            rep.good("3.7", [f"S3 버킷 {len(buckets)}개 모두 퍼블릭 액세스 차단 또는 소유자 전용 ACL"] + note)
+            rep.good("3.7", [f"S3 버킷 {len(res)}개 모두 퍼블릭 액세스 차단 또는 소유자 전용 ACL"] + note)
     safe(rep, "3.7", c37)
 
     # 3.8 RDS 서브넷 가용영역 — 인터뷰 / NA
