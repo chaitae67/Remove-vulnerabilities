@@ -18,3 +18,6 @@ infra_auto_diag/result*.json
 infra_auto_diag/cloud_*_*.csv
 infra_auto_diag/cloud_*_*.xlsx
 ~$*
+# 공식 결과보고서 원본·가이드(다른 사업 실제 진단 데이터, 양식 생성 입력용) — 로컬에만 둔다
+infra_auto_diag/결과보고서/
+infra_auto_diag/진단가이드/
