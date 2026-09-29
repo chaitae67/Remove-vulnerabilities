@@ -722,7 +722,7 @@ def drawing_bbox(pkg, sheet_name):
                 acc += hts.get(r1, dflt)
                 r1 += 1
         last_c, last_r = max(last_c, c1), max(last_r, r1)
-    return last_c, last_r
+    return last_c, last_r + 2          # 행 오프셋·반올림 때문에 차트 아래 테두리가 잘리지 않게 2행 여유
 
 
 def set_print_area(pkg, sheet_name, ref):
