@@ -329,19 +329,20 @@ def _cap(lines, n=40):
     return lines[:n] + ([f"... 외 {len(lines) - n}건"] if len(lines) > n else [])
 
 
-def _running(i):
-    return (i.get("State") or {}).get("Name", "running") == "running"
-
-
 def _route_target(route):
     return (route.get("GatewayId") or route.get("NatGatewayId") or route.get("TransitGatewayId")
             or route.get("VpcPeeringConnectionId") or route.get("InstanceId")
             or route.get("NetworkInterfaceId") or route.get("EgressOnlyInternetGatewayId")
-            or route.get("VpcEndpointId") or route.get("LocalGatewayId") or "?")
+            or route.get("VpcEndpointId") or route.get("LocalGatewayId")
+            or route.get("CarrierGatewayId") or route.get("CoreNetworkArn") or "?")
+
+
+# 라우팅 대상 중 게이트웨이(IGW·NAT·송신전용 IGW·VGW·TGW·로컬/캐리어 게이트웨이·Cloud WAN 코어 네트워크)
+_GATEWAY_TARGETS = ("igw-", "nat-", "eigw-", "vgw-", "tgw-", "lgw-", "cagw-", "arn:aws:networkmanager:")
 
 
 def _vpc_net(ctx, r):
-    """리전별 VPC 네트워크 구성(라우팅 테이블·서브넷·인스턴스·RDS 배치) — 3.4/3.5/3.6 공용 캐시.
+    """리전별 VPC 네트워크 구성(라우팅 테이블·서브넷·인스턴스·RDS 배치) — 3.5/3.6 공용 캐시.
 
     rt_of: 서브넷 -> 적용 라우팅 테이블(명시 연결이 없으면 VPC 기본 테이블)
     rds_in: 서브넷 -> RDS 식별자(서브넷 그룹 기준). RDS 조회 권한이 없으면 None.
@@ -373,8 +374,7 @@ def _vpc_net(ctx, r):
                 elif a.get("SubnetId"):
                     explicit[a["SubnetId"]] = rt["RouteTableId"]
         rt_of = {sid: explicit.get(sid) or main_rt.get(s.get("VpcId")) for sid, s in subnets.items()}
-        c[r] = {"rts": rts, "subnets": subnets, "insts": insts, "rds_in": rds_in,
-                "main_rt": main_rt, "rt_of": rt_of}
+        c[r] = {"rts": rts, "subnets": subnets, "insts": insts, "rds_in": rds_in, "rt_of": rt_of}
     return c[r]
 
 
@@ -916,125 +916,68 @@ def _virtual_resource(rep, ctx):
             rep.good("3.3", "서브넷에 연결된 네트워크 ACL 에 모든 트래픽 허용 규칙 없음")
     safe(rep, "3.3", c33)
 
-    # 3.4 라우팅 테이블 ANY — 가이드 비고의 예외(게이트웨이/아웃바운드 통신 필요)를 가려서 판정
-    #   취약: ① VPC 기본(main) 라우팅 테이블에 ANY→IGW  ② ANY→IGW 테이블의 서브넷에 RDS·공인 IP 없는
-    #         실행 중 인스턴스  ③ 대상이 삭제된 blackhole 경로, VPC 피어링으로 가는 ANY
-    #   양호: 그 외(퍼블릭 서브넷→IGW, 프라이빗→NAT, 온프렘→VGW/TGW, NAT 인스턴스·방화벽 경유 등)
+    # 3.4 라우팅 테이블 ANY — 가이드: 라우팅 테이블 내 ANY 정책이 설정되어 있으면 취약.
+    #   비고: 게이트웨이 및 아웃바운드 통신이 필요한 경우 ANY 허용은 양호 처리 가능
+    #   → 대상이 게이트웨이인 ANY 경로는 양호, 그 외 대상(피어링·인스턴스·ENI·엔드포인트 등)의 ANY 경로는 취약
     def c34():
-        bad, ok, notes, rds_unknown = [], [], [], False
+        bad, ok = [], []
         for r in regions:
-            net = _vpc_net(ctx, r)
-            if net["rds_in"] is None:
-                rds_unknown = True
-                notes.append(f"RDS 조회 권한 없음({r}) — RDS 서브넷의 인터넷 경로 여부 미확인")
-            rds_in, main_rt = net["rds_in"] or {}, net["main_rt"]
-            private_inst = {}                               # 서브넷 -> 공인 IP 없는 실행 중 인스턴스
-            for i in net["insts"]:
-                if _running(i) and i.get("SubnetId") and not i.get("PublicIpAddress"):
-                    private_inst.setdefault(i["SubnetId"], []).append(i["InstanceId"])
-            rt_subnets = {}                                 # 명시 연결이 없는 서브넷은 기본 테이블을 따른다
-            for sid, rid in net["rt_of"].items():
-                if rid:
-                    rt_subnets.setdefault(rid, []).append(sid)
-            for rt in net["rts"]:
+            for rt in _pages(sess.client("ec2", region_name=r), "describe_route_tables", "RouteTables"):
                 rid = rt["RouteTableId"]
-                is_main = main_rt.get(rt.get("VpcId")) == rid
                 for route in rt["Routes"]:
-                    dst = (route.get("DestinationCidrBlock") or route.get("DestinationIpv6CidrBlock")
-                           or route.get("DestinationPrefixListId") or "?")
-                    tgt = _route_target(route)
-                    label = f"{rid}({r}{', 기본 테이블' if is_main else ''}) {dst} → {tgt}"
-                    if route.get("State") == "blackhole":
-                        bad.append(f"{label}: 대상이 삭제된 경로(blackhole)")
-                        continue
+                    dst = route.get("DestinationCidrBlock") or route.get("DestinationIpv6CidrBlock")
                     if dst not in (_ANY4, _ANY6):
                         continue
-                    if tgt.startswith("pcx-"):
-                        bad.append(f"{label}: VPC 피어링으로 가는 ANY 경로")
-                    elif tgt.startswith("igw-"):
-                        subs = rt_subnets.get(rid, [])
-                        probs = []
-                        if is_main:
-                            probs.append("VPC 기본 라우팅 테이블에 인터넷 경로(명시 연결 안 된 서브넷이 자동으로 퍼블릭)")
-                        dbs = sorted({d for s in subs for d in rds_in.get(s, [])})
-                        if dbs:
-                            probs.append("RDS 서브넷 포함: " + ", ".join(dbs))
-                        priv = [i for s in subs for i in private_inst.get(s, [])]
-                        if priv:
-                            probs.append("공인 IP 없는 인스턴스: " + ", ".join(priv[:10]))
-                        if probs:
-                            bad.append(f"{label}: " + " / ".join(probs))
-                        else:
-                            ok.append(f"{label} (퍼블릭 서브넷 인터넷 경로)")
-                    else:
-                        kind = ("NAT 아웃바운드" if tgt.startswith(("nat-", "eigw-")) else
-                                "온프렘/전송 게이트웨이" if tgt.startswith(("vgw-", "tgw-")) else
-                                "NAT 인스턴스·방화벽 등 경유")
-                        ok.append(f"{label} ({kind})")
-        exc = (["가이드 비고 예외(게이트웨이/아웃바운드 통신)로 양호 처리한 ANY 경로:"] + ok) if ok else []
+                    tgt = _route_target(route)
+                    label = (f"{rid}({r}) {dst} → {tgt}"
+                             + (" [blackhole]" if route.get("State") == "blackhole" else ""))
+                    (ok if tgt.startswith(_GATEWAY_TARGETS) else bad).append(label)
+        exc = (["가이드 비고(게이트웨이·아웃바운드 통신)에 따라 양호 처리한 게이트웨이 대상 ANY 경로:"] + ok
+               if ok else [])
         if bad:
-            rep.vuln("3.4", ["서비스 타깃별로 설정되지 않은 경로:"] + bad + exc + notes,
+            rep.vuln("3.4", ["게이트웨이가 아닌 대상으로 설정된 ANY 경로:"] + bad + exc,
                      sorted({b.split("(")[0] for b in bad}))
-        elif ok and rds_unknown and any("→ igw-" in x for x in ok):
-            # IGW 경로 서브넷에 RDS 가 있는지 확인하지 못했으므로 양호로 확정하지 않는다
-            rep.man("3.4", exc + notes + ["→ RDS 확인 불가로 판정 보류(권한 보완 후 재점검)"])
         elif ok:
-            rep.good("3.4", exc + notes)
+            rep.good("3.4", exc)
         else:
-            rep.good("3.4", ["ANY(0.0.0.0/0·::/0) 라우팅 규칙 없음"] + notes)
+            rep.good("3.4", "ANY(0.0.0.0/0·::/0) 라우팅 규칙 없음")
     safe(rep, "3.4", c34)
 
-    # 3.5 인터넷 게이트웨이 연결 관리 — 불필요하게 연결된 게이트웨이(구성 기준) 자동 판정
-    #   취약: ① 어떤 라우팅 테이블도 사용하지 않는 NAT GW  ② IGW 경로가 없는 서브넷의 퍼블릭 NAT GW
-    #         ③ VPC 에 연결돼 있지만 어떤 라우팅 테이블도 사용하지 않는 IGW
-    #   (사용 중인 NAT 가 업무상 필요한지는 3.6 에서 인터뷰)
+    # 3.5 인터넷 게이트웨이 연결 관리 — '불필요하게 연결된 NAT' 여부는 판단이 필요해 인터뷰.
+    #   NAT 별 배치 서브넷의 IGW 경로 여부와 그 NAT 를 쓰는 라우팅 테이블을 근거로 제시
     def c35():
-        bad, ok, notes, found = [], [], [], False
+        nat_lines, igw_lines, names = [], [], []
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
-            igws = _pages(ec2, "describe_internet_gateways", "InternetGateways")
+            for g in _pages(ec2, "describe_internet_gateways", "InternetGateways"):
+                att = ", ".join(a["VpcId"] for a in g.get("Attachments", [])) or "VPC 미연결"
+                igw_lines.append(f"{g['InternetGatewayId']}({r}) → {att}")
             nats = [n for n in _pages(ec2, "describe_nat_gateways", "NatGateways")
                     if n.get("State") not in ("deleted", "deleting", "failed")]
-            if not igws and not nats:
+            if not nats:
                 continue
-            found = True
             net = _vpc_net(ctx, r)
             rt_by = {rt["RouteTableId"]: rt for rt in net["rts"]}
-            used = {_route_target(ro) for rt in net["rts"] for ro in rt["Routes"]
-                    if ro.get("State") != "blackhole"}
-
-            def igw_routed(sid, rt_by=rt_by, net=net):
+            for n in nats:
+                nid, sid = n["NatGatewayId"], n.get("SubnetId")
+                names.append(nid)
                 rt = rt_by.get(net["rt_of"].get(sid))
-                return bool(rt) and any(
+                igw = bool(rt) and any(
                     _route_target(ro).startswith("igw-") and ro.get("State") != "blackhole"
                     and (ro.get("DestinationCidrBlock") or ro.get("DestinationIpv6CidrBlock")) in (_ANY4, _ANY6)
                     for ro in rt["Routes"])
-            for g in igws:
-                gid = g["InternetGatewayId"]
-                att = [a["VpcId"] for a in g.get("Attachments", [])]
-                if not att:
-                    notes.append(f"{gid}({r}) VPC 미연결 IGW — 정리 대상")
-                elif gid not in used:
-                    bad.append(f"{gid}({r}) → {', '.join(att)}: 어떤 라우팅 테이블도 사용하지 않는 IGW 연결")
-                else:
-                    ok.append(f"{gid}({r}) → {', '.join(att)}")
-            for n in nats:
-                nid, sid = n["NatGatewayId"], n.get("SubnetId")
-                label = f"{nid}({r}, subnet={sid})"
-                if nid not in used:
-                    bad.append(f"{label}: 어떤 라우팅 테이블도 사용하지 않는 NAT GW")
-                elif n.get("ConnectivityType", "public") == "public" and not igw_routed(sid):
-                    bad.append(f"{label}: IGW 경로가 없는 서브넷의 퍼블릭 NAT GW(인터넷 통신 불가)")
-                else:
-                    ok.append(f"{label} 사용 중")
-        if not found:
-            rep.na("3.5", "인터넷/NAT 게이트웨이 없음")
-        elif bad:
-            rep.vuln("3.5", ["불필요하게 연결된 게이트웨이:"] + bad
-                     + (["실제 경로에서 사용 중:"] + ok if ok else []) + notes,
-                     sorted({b.split("(")[0] for b in bad}))
-        else:
-            rep.good("3.5", ["IGW·NAT GW 모두 실제 경로에서 사용 중:"] + ok + notes)
+                using = sorted(t["RouteTableId"] for t in net["rts"]
+                               if any(ro.get("NatGatewayId") == nid and ro.get("State") != "blackhole"
+                                      for ro in t["Routes"]))
+                nat_lines.append(f"{nid}({r}, {n.get('ConnectivityType', 'public')}, subnet={sid}): "
+                                 f"배치 서브넷의 IGW 경로 {'있음' if igw else '없음'} / "
+                                 f"이 NAT 를 쓰는 라우팅 테이블: {', '.join(using) or '없음'}")
+        igw_ev = (["인터넷 게이트웨이:"] + igw_lines) if igw_lines else []
+        if not names:
+            rep.na("3.5", ["NAT 게이트웨이 없음"] + igw_ev)
+            return
+        rep.man("3.5", ["인터넷 게이트웨이에 불필요하게 연결된 NAT 게이트웨이가 있는지 담당자 확인:"]
+                + nat_lines + igw_ev, names)
     safe(rep, "3.5", c35)
 
     # 3.6 NAT 게이트웨이 연결 관리 — '목적 확인'은 업무 판단이라 인터뷰. NAT 별 경유 리소스를 근거로 제시
@@ -1411,7 +1354,7 @@ def _operation_mgmt(rep, ctx):
             rep.vuln("4.7", ["관리 이벤트를 기록하는 활성 CloudTrail 추적이 없음"] + off)
     safe(rep, "4.7", c47)
 
-    # 4.8 인스턴스 로깅 — 실행 중인 인스턴스마다 CloudWatch 로그 스트림이 실제로 있고 최근 7일 내 수집되는지 확인
+    # 4.8 인스턴스 로깅 — 가이드: CloudWatch 로그 스트림으로 보관하고 있는지. 실행 중인 인스턴스마다 스트림 존재 확인
     #   CloudWatch Agent 기본 스트림 이름 = 인스턴스 ID. 호스트명(ip-10-0-1-5…)으로 지정한 경우도 인정.
     def c48():
         running, stopped = [], 0
@@ -1427,9 +1370,8 @@ def _operation_mgmt(rep, ctx):
         if not running:
             rep.na("4.8", f"실행 중인 EC2 인스턴스 없음(중지 {stopped}대)")
             return
-        now_ms = datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000
         skip = ("/aws/lambda/", "/aws/rds/", "/aws/eks/", "/aws/codebuild/", "/aws/apigateway/")
-        streams = {}                                        # 리전 -> [(스트림명, 로그그룹, 마지막 이벤트 ms)]
+        streams = {}                                        # 리전 -> [(스트림명, 로그그룹)]
         for r in sorted({r for r, _ in running}):
             logs = sess.client("logs", region_name=r)
             found = []
@@ -1438,37 +1380,28 @@ def _operation_mgmt(rep, ctx):
                 if gname.startswith(skip):                  # 인스턴스 로그가 들어가지 않는 서비스 로그 그룹
                     continue
                 for s in _pages(logs, "describe_log_streams", "logStreams", logGroupName=gname):
-                    found.append((s["logStreamName"], gname, s.get("lastEventTimestamp") or 0))
+                    found.append((s["logStreamName"], gname))
             streams[r] = found
-        ok, stale, missing = [], [], []
+        ok, missing = [], []
         for r, i in running:
             iid = i["InstanceId"]
             host = (i.get("PrivateDnsName") or "").split(".")[0]
             name = next((t["Value"] for t in i.get("Tags", []) if t.get("Key") == "Name"), "")
             label = f"{iid}({name})" if name else iid
             hits = [s for s in streams.get(r, []) if iid in s[0] or (host and s[0].startswith(host))]
-            if not hits:
-                missing.append(label + ("" if i.get("IamInstanceProfile") else " — IAM 역할 없음(에이전트 전송 불가)"))
-                continue
-            last = max(h[2] for h in hits)
-            where = ", ".join(sorted({h[1] for h in hits}))[:80]
-            if now_ms - last > 7 * 86400 * 1000:
-                when = f"마지막 {int((now_ms - last) / 86400000)}일 전" if last else "이벤트 없음"
-                stale.append(f"{label} [{where}] 최근 7일 수집 없음({when})")
+            if hits:
+                ok.append(f"{label} [{', '.join(sorted({h[1] for h in hits}))[:80]}]")
             else:
-                ok.append(f"{label} [{where}]")
-        ev = [f"실행 중 EC2 {len(running)}대 중 로그 스트림 보관 {len(ok)}대 / 수집 중단 {len(stale)}대 / "
-              f"스트림 없음 {len(missing)}대"]
+                missing.append(label + ("" if i.get("IamInstanceProfile") else " — IAM 역할 없음(에이전트 전송 불가)"))
+        ev = [f"실행 중 EC2 {len(running)}대 중 로그 스트림 보관 {len(ok)}대 / 스트림 없음 {len(missing)}대"]
         if missing:
             ev += ["CloudWatch 로그 스트림이 없는 인스턴스:"] + missing
-        if stale:
-            ev += ["로그 스트림은 있으나 최근 7일 수집이 없는 인스턴스(에이전트 중지 의심):"] + stale
         if ok:
             ev.append("보관 중: " + ", ".join(ok[:20]))
-        if missing or stale:
+        if missing:
             rep.vuln("4.8", ev + ["※ 스트림 이름을 인스턴스 ID/호스트명으로 매칭함 — 임의 이름으로 수집 중이면 "
                                   "근거 확인 후 양호 처리"],
-                     [x.split(" ")[0].split("(")[0] for x in missing + stale])
+                     [x.split(" ")[0].split("(")[0] for x in missing])
         else:
             rep.good("4.8", ev)
     safe(rep, "4.8", c48)
