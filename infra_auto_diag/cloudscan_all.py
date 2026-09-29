@@ -35,9 +35,13 @@ def _bootstrap():
             _cur = None
         if _cur != _data:
             with open(_p, 'wb') as _f: _f.write(_data)
-    if d not in _sys.path:
-        _sys.path.insert(0, d)
+    if d in _sys.path:
+        _sys.path.remove(d)
+    _sys.path.insert(0, d)
 _bootstrap()
+# 내장 패키지를 먼저 import 해 둔다 — 아래 CLI 본문이 스크립트 폴더를 sys.path 맨 앞에 넣으므로,
+# 같은 폴더에 옛 cloud_check/ 가 남아 있으면 그쪽이 로드되는 것을 막는다.
+import cloud_check  # noqa: E402,F401
 
 # ==================== cloud_scan.py 본문 ====================
 #!/usr/bin/env python3
