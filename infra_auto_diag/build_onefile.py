@@ -58,9 +58,13 @@ def main():
         "            _cur = None\n"
         "        if _cur != _data:\n"
         "            with open(_p, 'wb') as _f: _f.write(_data)\n"
-        "    if d not in _sys.path:\n"
-        "        _sys.path.insert(0, d)\n"
-        "_bootstrap()\n\n"
+        "    if d in _sys.path:\n"
+        "        _sys.path.remove(d)\n"
+        "    _sys.path.insert(0, d)\n"
+        "_bootstrap()\n"
+        "# 내장 패키지를 먼저 import 해 둔다 — 아래 CLI 본문이 스크립트 폴더를 sys.path 맨 앞에 넣으므로,\n"
+        "# 같은 폴더에 옛 cloud_check/ 가 남아 있으면 그쪽이 로드되는 것을 막는다.\n"
+        "import cloud_check  # noqa: E402,F401\n\n"
         "# ==================== cloud_scan.py 본문 ====================\n"
     )
     # cli_body 의 shebang/coding 줄은 주석이라 그대로 둬도 무해
