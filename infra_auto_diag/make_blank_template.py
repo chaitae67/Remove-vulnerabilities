@@ -128,7 +128,8 @@ def main():
     ap.add_argument("--cover", default="0. 표지")
     ap.add_argument("--cover-cells", default="L3,L4,L5,L6,B18")
     ap.add_argument("--target", default="1. 진단 대상")
-    ap.add_argument("--target-rows", default="5:8", help="진단대상 데이터 행 범위 (B~F 열 비움)")
+    ap.add_argument("--target-rows", default="5:8",
+                    help="진단대상 데이터 행. 범위 '5:8' 또는 개별 '5,7,15,16' (B~F 열 비움)")
     ap.add_argument("--detail", action="append", default=[],
                     help="상세 시트명. --detail 여러 번. 각 시트의 판정/근거 열을 비우고 스크린샷 제거")
     ap.add_argument("--detail-rows", default="6:31")
@@ -143,9 +144,13 @@ def main():
     for ref in a.cover_cells.split(","):
         z.clear_cell(cov, ref.strip())
     # 진단 대상 (B~F 열)
-    tr0, tr1 = map(int, a.target_rows.split(":"))
+    if ":" in a.target_rows:
+        tr0, tr1 = map(int, a.target_rows.split(":"))
+        target_rows = range(tr0, tr1 + 1)
+    else:
+        target_rows = [int(x) for x in a.target_rows.split(",")]
     tw = z.root(idx[a.target])
-    for r in range(tr0, tr1 + 1):
+    for r in target_rows:
         for col in "BCDEF":
             z.clear_cell(tw, f"{col}{r}")
     # 상세 시트들

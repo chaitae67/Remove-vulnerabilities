@@ -58,7 +58,29 @@ SPECS = {
         "result_cols": ["F"], "evid_cols": ["G"], "sum_cols": ["F"], "servers": 1,
         "b1": "  ※ 진단 대상 리스트 - DBMS {n}대 (Oracle {n}대)",
     },
+    # 웹서버: 소프트웨어(IIS/Nginx/Tomcat)별 상세시트 + 진단대상 섹션이 나뉜 특수 구조
+    "web": {
+        "cover": "0. 표지", "target": "1. 진단 대상",
+        "id_col": "C", "detail_first": 6, "detail_last": 31, "servers": 4,
+        "software": {
+            "iis":    {"detail": "3-1. 진단 결과(IIS)",   "cols": ["F"],      "evid": ["G"],      "rows": [5]},
+            "nginx":  {"detail": "3-2. 진단 결과(Nginx)", "cols": ["F"],      "evid": ["G"],      "rows": [7]},
+            "tomcat": {"detail": "3-3. 진단 결과(Tomcat)", "cols": ["F", "H"], "evid": ["G", "I"], "rows": [15, 16]},
+        },
+    },
 }
+
+
+def _detect_sw(sv):
+    """서버 dict 에서 웹 소프트웨어 판별(iis/nginx/tomcat)."""
+    s = f"{sv.get('osver','')} {sv.get('target','')} {sv.get('host','')}".lower()
+    if "iis" in s:
+        return "iis"
+    if "nginx" in s:
+        return "nginx"
+    if "tomcat" in s or "was" in s or "spring" in s:
+        return "tomcat"
+    return None
 TARGET_FIRST_ROW = 5
 COVER = {"docno": "L3", "author": "L4", "grade": "L5", "ver": "L6", "date": "B18"}
 
@@ -252,6 +274,67 @@ def _fix_template(bk, os_kind, n):
     bk.strip_external_links()
 
 
+def _fill_web(bk, spec, servers, meta):
+    """웹서버: 소프트웨어별 진단대상 섹션 + 3-x 상세시트를 채운다(양식 100% 보존)."""
+    # 0. 표지
+    cov = bk.sheet(spec["cover"])
+    for key, val in (("docno", meta.get("docno", "XXXXX-VA-2026XXX")),
+                     ("author", meta.get("author", "취약점진단팀")),
+                     ("grade", meta.get("grade", "Confidential")),
+                     ("ver", meta.get("version", "ver 1.0"))):
+        bk.put(cov, COVER[key], val)
+    d = meta.get("date") or datetime.date.today()
+    if isinstance(d, str):
+        d = datetime.datetime.strptime(d, "%Y-%m-%d").date()
+    bk.put(cov, COVER["date"], _date_serial(d))
+
+    # 소프트웨어별 그룹
+    groups = {"iis": [], "nginx": [], "tomcat": []}
+    for sv in servers:
+        sw = _detect_sw(sv)
+        if sw:
+            groups[sw].append(sv)
+
+    tw = bk.sheet(spec["target"])
+    first, last = spec["detail_first"], spec["detail_last"]
+    for sw, sconf in spec["software"].items():
+        svs = groups[sw]
+        if not svs:
+            continue
+        # 진단 대상 섹션(해당 소프트웨어 행)
+        for i, row in enumerate(sconf["rows"]):
+            if i >= len(svs):
+                break
+            sv = svs[i]
+            bk.put(tw, f"B{row}", i + 1)
+            bk.put(tw, f"C{row}", (sv.get("host") or "").strip())
+            bk.put(tw, f"D{row}", (sv.get("ip") or "-").strip())
+            bk.put(tw, f"E{row}", (sv.get("osver") or "").strip())
+            bk.put(tw, f"F{row}", (sv.get("role") or "-").strip())
+        # 상세 시트
+        dw = bk.sheet(sconf["detail"])
+        row_of = {}
+        for r in range(first, last + 1):
+            v = bk.get(dw, f"{spec['id_col']}{r}")
+            if v:
+                row_of[v.strip().upper()] = r
+        for i, sv in enumerate(svs[: len(sconf["cols"])]):
+            rc, ec = sconf["cols"][i], sconf["evid"][i]
+            by_code = {(x.get("code", "") or "").strip().upper(): x for x in sv.get("results", [])}
+            for code, r in row_of.items():
+                x = by_code.get(code)
+                if x is None:
+                    bk.put(dw, f"{rc}{r}", "N/A")
+                    bk.put(dw, f"{ec}{r}", "점검 결과 없음")
+                    continue
+                bk.put(dw, f"{rc}{r}", norm_result(x.get("final") or x.get("status", "")))
+                ev = " / ".join(x.get("evidence", []))
+                note = (x.get("note") or "").strip()
+                if note:
+                    ev = f"{ev}  [검증자: {note}]" if ev else f"[검증자: {note}]"
+                bk.put(dw, f"{ec}{r}", ev)
+
+
 # ---------------- 진입점 ----------------
 def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_template=False):
     """서버 여러 대 결과를 계열 양식(다중서버)에 채워 저장(양식 100% 보존).
@@ -267,11 +350,17 @@ def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_templa
         servers = [servers]
     elif servers and isinstance(servers[0], dict) and "results" not in servers[0] and "code" in servers[0]:
         servers = [{"results": servers}]
-    servers = [s for s in servers if s.get("results")][: spec["servers"]]
+    servers = [s for s in servers if s.get("results")][: spec.get("servers", 99)]
     if not servers:
         raise ValueError("진단 결과(servers)가 비어 있습니다.")
 
     bk = Book(template_path)
+
+    # 웹서버는 소프트웨어별 특수 구조 → 전용 필러
+    if spec.get("software"):
+        _fill_web(bk, spec, servers, meta)
+        bk.save(out_path)
+        return out_path
 
     # 0. 표지 (날짜는 일련번호로 → 기존 표시형식 유지)
     cov = bk.sheet(spec["cover"])

@@ -29,7 +29,8 @@ for _s in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
 
 import server_report  # noqa: E402
 
-TEMPLATE_SUFFIX = {"linux": "_Linux.xlsx", "windows": "_Windows.xlsx", "dbms": "_DBMS.xlsx"}
+TEMPLATE_SUFFIX = {"linux": "_Linux.xlsx", "windows": "_Windows.xlsx",
+                   "dbms": "_DBMS.xlsx", "web": "_Webserver.xlsx"}
 
 
 def _find_template(os_kind, explicit):
@@ -42,9 +43,9 @@ def _find_template(os_kind, explicit):
     return None
 
 
-# 서버(리눅스/윈도우/DBMS)는 공식 양식 파일에 채우고, 웹서버(임시)·클라우드는 코드 생성.
-SERVER_KINDS = {"linux", "windows", "dbms", "db", "oracle"}   # 양식 파일 채우기(server_report)
-INFRA_KINDS = {"web", "webserver", "nginx", "iis", "tomcat"}  # 코드 생성(infra_report) — 웹서버(추후 양식화)
+# 서버(리눅스/윈도우/DBMS/웹서버)는 공식 양식 파일에 채우고, 클라우드는 코드 생성.
+SERVER_KINDS = {"linux", "windows", "dbms", "db", "oracle",
+                "web", "webserver", "nginx", "iis", "tomcat"}   # 공식 양식 채우기(server_report)
 CLOUD_KINDS = {"aws", "azure", "gcp", "naver"}
 
 
@@ -78,6 +79,7 @@ def main():
             "host": (args.host if (len(args.result) == 1 and args.host) else None) or d.get("host", "") or f"server{i+1}",
             "ip": args.ip[i] if i < len(args.ip) else "-",
             "osver": d.get("os", ""),
+            "target": d.get("target", ""),   # 웹 소프트웨어 판별용(웹서버(nginx) 등)
             "role": args.role[i] if i < len(args.role) else "",
             "results": d["results"],
         })
@@ -91,8 +93,9 @@ def main():
         "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
 
     if args.kind in SERVER_KINDS:
-        # 리눅스/윈도우/DBMS — 공식 양식 파일에 값만 채움(색·서식·차트·조건부서식 100% 보존)
-        server_kind = {"db": "dbms", "oracle": "dbms"}.get(args.kind, args.kind)
+        # 리눅스/윈도우/DBMS/웹서버 — 공식 양식 파일에 값만 채움(색·서식·차트·조건부서식 100% 보존)
+        server_kind = {"db": "dbms", "oracle": "dbms",
+                       "webserver": "web", "nginx": "web", "iis": "web", "tomcat": "web"}.get(args.kind, args.kind)
         tpl = _find_template(server_kind, args.template)
         if not tpl:
             sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[server_kind]}). "
