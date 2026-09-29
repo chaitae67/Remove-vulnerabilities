@@ -58,6 +58,15 @@ SPECS = {
         "result_cols": ["F"], "evid_cols": ["G"], "sum_cols": ["F"], "servers": 1,
         "b1": "  ※ 진단 대상 리스트 - DBMS {n}대 (Oracle {n}대)",
     },
+    # 클라우드: 단일 대상(계정/구독). CSP별 양식 파일이 다르지만 채우는 구조는 동일.
+    "cloud": {
+        "cover": "0. 표지", "target": "1. 진단 대상", "detail": "3-1. 진단 결과",
+        "summary": "2-2. 요약 진단결과",
+        "label": "Cloud", "id_col": "C", "detail_first": 6, "detail_last": 60,
+        "result_cols": ["F"], "evid_cols": ["G"], "sum_cols": ["F"], "servers": 1,
+        "b1": "  ※ 진단 대상 리스트 - 클라우드 {n}대",
+        "cloud": True,   # 판정값을 서버 3분류로 축약하지 않음(인터뷰 필요 유지)
+    },
     # 웹서버: 소프트웨어(IIS/Nginx/Tomcat)별 상세시트 + 진단대상 섹션이 나뉜 특수 구조
     "web": {
         "cover": "0. 표지", "target": "1. 진단 대상",
@@ -89,6 +98,20 @@ def norm_result(v):
     k = (v or "").strip()
     k = k.upper() if k.isascii() else k
     return RESULT_ALIAS.get(k, RESULT_ALIAS.get((v or "").strip(), "N/A"))
+
+
+def norm_cloud(v):
+    """클라우드: 양호/취약/N/A/인터뷰 필요 4분류(수동확인→인터뷰 필요)."""
+    s = (v or "").strip()
+    if s in ("수동확인", "인터뷰 필요", "MAN"):
+        return "인터뷰 필요"
+    if s in ("N/A", "NA", ""):
+        return "N/A"
+    if s in ("취약", "VULN"):
+        return "취약"
+    if s in ("양호", "GOOD"):
+        return "양호"
+    return s or "N/A"
 
 
 def _col_idx(letters):
@@ -394,6 +417,7 @@ def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_templa
         v = bk.get(dw, f"{spec['id_col']}{r}")
         if v:
             row_of[v.strip().upper()] = r
+    nf = norm_cloud if spec.get("cloud") else norm_result
     for idx, sv in enumerate(servers):
         rc, ec = spec["result_cols"][idx], spec["evid_cols"][idx]
         by_code = {(x.get("code", "") or "").strip().upper(): x for x in sv.get("results", [])}
@@ -403,7 +427,7 @@ def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_templa
                 bk.put(dw, f"{rc}{r}", "N/A")
                 bk.put(dw, f"{ec}{r}", "점검 결과 없음")
                 continue
-            bk.put(dw, f"{rc}{r}", norm_result(x.get("final") or x.get("status", "")))
+            bk.put(dw, f"{rc}{r}", nf(x.get("final") or x.get("status", "")))
             ev = " / ".join(x.get("evidence", []))
             note = (x.get("note") or "").strip()
             if note:

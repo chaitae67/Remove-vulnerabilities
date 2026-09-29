@@ -30,7 +30,8 @@ for _s in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
 import server_report  # noqa: E402
 
 TEMPLATE_SUFFIX = {"linux": "_Linux.xlsx", "windows": "_Windows.xlsx",
-                   "dbms": "_DBMS.xlsx", "web": "_Webserver.xlsx"}
+                   "dbms": "_DBMS.xlsx", "web": "_Webserver.xlsx",
+                   "aws": "_AWS.xlsx", "azure": "_Azure.xlsx", "gcp": "_GCP.xlsx", "naver": "_Naver.xlsx"}
 
 
 def _find_template(os_kind, explicit):
@@ -43,10 +44,10 @@ def _find_template(os_kind, explicit):
     return None
 
 
-# 서버(리눅스/윈도우/DBMS/웹서버)는 공식 양식 파일에 채우고, 클라우드는 코드 생성.
-SERVER_KINDS = {"linux", "windows", "dbms", "db", "oracle",
-                "web", "webserver", "nginx", "iis", "tomcat"}   # 공식 양식 채우기(server_report)
+# 모든 대상이 양식 파일 채우기(server_report). 클라우드도 CSP별 양식 사용.
 CLOUD_KINDS = {"aws", "azure", "gcp", "naver"}
+SERVER_KINDS = {"linux", "windows", "dbms", "db", "oracle",
+                "web", "webserver", "nginx", "iis", "tomcat"} | CLOUD_KINDS
 
 
 def main():
@@ -92,26 +93,22 @@ def main():
         os.getcwd(),
         "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
 
-    if args.kind in SERVER_KINDS:
-        # 리눅스/윈도우/DBMS/웹서버 — 공식 양식 파일에 값만 채움(색·서식·차트·조건부서식 100% 보존)
-        server_kind = {"db": "dbms", "oracle": "dbms",
-                       "webserver": "web", "nginx": "web", "iis": "web", "tomcat": "web"}.get(args.kind, args.kind)
-        tpl = _find_template(server_kind, args.template)
-        if not tpl:
-            sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[server_kind]}). "
-                     f"--template 으로 경로를 지정하세요.")
-        try:
-            server_report.fill_report(server_kind, loaded, tpl, out, fix_template=args.fix_template)
-        except Exception as e:  # noqa: BLE001
-            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
+    # 모두 공식 양식 파일에 값만 채움(색·서식·차트·조건부서식 100% 보존)
+    # 채우기 스펙(fill_kind)과 양식 파일(template) 결정
+    if args.kind in CLOUD_KINDS:
+        fill_kind, tpl_key = "cloud", args.kind           # cloud 스펙 + CSP별 양식(_AWS.xlsx 등)
     else:
-        # 웹서버(추후 양식화)·클라우드 — 코드 생성(infra_report)
-        import infra_report  # noqa: E402
-        target = {"webserver": "web", "nginx": "web", "iis": "web", "tomcat": "web"}.get(args.kind, args.kind)
-        try:
-            infra_report.build_report(target, host or target.upper(), osver, results, out)
-        except Exception as e:  # noqa: BLE001
-            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
+        fill_kind = {"db": "dbms", "oracle": "dbms",
+                     "webserver": "web", "nginx": "web", "iis": "web", "tomcat": "web"}.get(args.kind, args.kind)
+        tpl_key = fill_kind
+    tpl = _find_template(tpl_key, args.template)
+    if not tpl:
+        sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[tpl_key]}). "
+                 f"--template 으로 경로를 지정하세요.")
+    try:
+        server_report.fill_report(fill_kind, loaded, tpl, out, fix_template=args.fix_template)
+    except Exception as e:  # noqa: BLE001
+        sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
 
     print(f"[+] 보고서 저장: {out}")
     if args.kind in ("linux", "windows", "dbms", "db", "oracle"):
