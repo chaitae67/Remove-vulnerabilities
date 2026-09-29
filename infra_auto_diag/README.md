@@ -46,14 +46,24 @@ CSV/HTML 외에 **표지/진단대상/요약그래프(레이더)/요약결과/�
 결과를 뽑아 워크스테이션(파이썬)에서 `make_report.py` 로 변환한다. 웹서버/DBMS 는 **양식 파일 없이** 생성된다.
 
 ```bash
-# 1) 대상에서 JSON 출력
-sudo bash web_linux_check.sh --target tomcat --app-jar /opt/app.jar --app-url http://localhost:8080 --json was1.json
+# 1) 각 대상에서 JSON 출력 (서버마다 1개)
+sudo bash kisa_unix_check.sh --json bastion.json      # 각 리눅스 서버에서
+python cloudscan_all.py aws --json aws.json
 bash db_oracle_check.sh --conn "sys/pw@//localhost:1521/XEPDB1 as sysdba" --json db.json
+
 # 2) JSON → 보고서 xlsx
-python make_report.py web  --result was1.json --host was1 --ip 10.0.10.226
-python make_report.py dbms --result db.json  --host db   --ip 10.0.20.139
-python make_report.py linux --result linux.json --ip 10.0.10.61   # 서버는 양식(_Linux.xlsx) 필요
+#   리눅스/윈도우는 여러 서버 JSON 을 나열하면 공식 양식처럼 "한 파일에 서버별 열"로 합쳐진다.
+python make_report.py linux \
+  --result bastion.json web-adm1.json was-adm1.json db.json \
+  --ip   3.38.228.213 15.165.55.44 10.0.10.61 10.0.20.139 \
+  --role "서버 관리용 호스트" "관리자용 웹 서버" "관리자용 WAS 서버" "DB"
+python make_report.py windows --result web1.json was1.json --ip 13.124.134.131 10.0.10.226
+python make_report.py web  --result was1.json --host was1        # 웹서버(양식 불필요)
+python make_report.py dbms --result db.json  --host db           # DB(양식 불필요)
+python make_report.py aws  --result aws.json                     # 클라우드(양식 불필요)
 ```
+> 리눅스는 서버 4대, 윈도우는 2대까지 한 보고서에 열로 합쳐진다(공식 결과보고서와 동일한 다중서버 양식).
+> 2-2 요약·영역별 점수·3D 막대/원형/레이더 차트는 3-1 상세를 채우면 **수식으로 자동 계산**된다(엑셀에서 열 때).
 
 ---
 

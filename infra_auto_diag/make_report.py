@@ -53,25 +53,36 @@ def main():
                                      "dbms", "db", "oracle", "aws", "azure", "gcp", "naver"],
                     help="대상: linux/windows(서버, 양식 필요) · web·nginx·iis·tomcat(웹서버) · "
                          "dbms/oracle(DB) · aws/azure/gcp/naver(클라우드)")
-    ap.add_argument("--result", "-r", required=True, help="점검 스크립트가 낸 JSON 파일")
+    ap.add_argument("--result", "-r", required=True, nargs="+",
+                    help="점검 JSON 파일(들). 리눅스/윈도우는 여러 서버를 나열하면 한 보고서에 열로 합침")
     ap.add_argument("--template", "-t", help="서버 보고서 양식 xlsx (linux/windows 만; 기본 자동 탐색)")
-    ap.add_argument("--host", help="진단 대상 호스트명(기본: JSON host)")
-    ap.add_argument("--ip", help="진단 대상 IP(기본: -)")
+    ap.add_argument("--host", help="진단 대상 호스트명(기본: JSON host) — 단일 대상에만 적용")
+    ap.add_argument("--ip", nargs="*", default=[], help="진단 대상 IP(들). --result 순서와 매칭")
+    ap.add_argument("--role", nargs="*", default=[], help="용도(들). --result 순서와 매칭(선택)")
     ap.add_argument("--output", "-o", help="출력 xlsx (기본: report_<대상>_<host>.xlsx)")
     args = ap.parse_args()
 
-    try:
-        with open(args.result, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:  # noqa: BLE001
-        sys.exit(f"[!] JSON 을 읽을 수 없습니다: {args.result} ({type(e).__name__}: {e})")
+    loaded = []
+    for i, path in enumerate(args.result):
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"[!] JSON 을 읽을 수 없습니다: {path} ({type(e).__name__}: {e})")
+        if not d.get("results"):
+            sys.exit(f"[!] {path} 에 results 가 없습니다. 점검 스크립트를 --json 으로 먼저 실행하세요.")
+        loaded.append({
+            "host": (args.host if (len(args.result) == 1 and args.host) else None) or d.get("host", "") or f"server{i+1}",
+            "ip": args.ip[i] if i < len(args.ip) else "-",
+            "osver": d.get("os", ""),
+            "role": args.role[i] if i < len(args.role) else "",
+            "results": d["results"],
+        })
 
-    results = data.get("results", [])
-    if not results:
-        sys.exit("[!] JSON 에 results 가 없습니다. 점검 스크립트를 --json 으로 먼저 실행하세요.")
-    host = args.host or data.get("host", "") or "server"
-    osver = data.get("os", "")
-    ip = args.ip or "-"
+    results = loaded[0]["results"]
+    host = loaded[0]["host"] or "server"
+    osver = loaded[0]["osver"]
+    ip = loaded[0]["ip"]
     out = args.output or os.path.join(
         os.getcwd(),
         "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
@@ -98,13 +109,18 @@ def main():
             sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[args.kind]}). "
                      f"--template 으로 경로를 지정하세요.")
         try:
-            server_report.fill_report(args.kind, results, host, ip, osver, tpl, out)
+            server_report.fill_report(args.kind, loaded, tpl, out)   # 다중 서버 → 열로 합침
         except Exception as e:  # noqa: BLE001
             sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
 
-    n_vuln = sum(1 for r in results if (r.get("final") or r.get("status")) == "취약")
     print(f"[+] 보고서 저장: {out}")
-    print(f"    대상: {host} ({osver})  |  항목 {len(results)}개, 취약 {n_vuln}개")
+    if args.kind in ("linux", "windows"):
+        for s in loaded:
+            nv = sum(1 for r in s["results"] if (r.get("final") or r.get("status")) == "취약")
+            print(f"    - {s['host']} ({s['osver']})  항목 {len(s['results'])}개, 취약 {nv}개")
+    else:
+        n_vuln = sum(1 for r in results if (r.get("final") or r.get("status")) == "취약")
+        print(f"    대상: {host} ({osver})  |  항목 {len(results)}개, 취약 {n_vuln}개")
     print("[*] 완료")
 
 
