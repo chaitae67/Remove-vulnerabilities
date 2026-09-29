@@ -126,7 +126,7 @@ def _base_name(os_label, out_path):
     return os.path.join(os.getcwd(), f"cloud_{(os_label or 'result').upper()}_{stamp}")
 
 
-def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True):
+def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True, target=None):
     """CSV(항상, 설치 불필요) + 다중시트 보고서 XLSX(openpyxl 있으면) 저장, 경로 목록 반환."""
     base = _base_name(os_label, out_path)
     saved = []
@@ -145,7 +145,7 @@ def save_results(provider, os_label, host, results, out_path=None, want_xlsx=Tru
     # 2) 보고서 XLSX — 공식 CSP 양식(5시트+3차트) 채우기 우선, 안 되면 코드 생성 폴백
     if want_xlsx:
         xlsx = base + ".xlsx"
-        if not _fill_cloud_template(provider, host, os_label, results, xlsx):
+        if not _fill_cloud_template(provider, host, os_label, results, xlsx, target):
             try:
                 import cloud_check.report as _rep
                 saved.append(_rep.build_report(provider, host, results, xlsx))
@@ -158,8 +158,9 @@ def save_results(provider, os_label, host, results, out_path=None, want_xlsx=Tru
     return saved
 
 
-def _fill_cloud_template(provider, host, os_label, results, out_path):
-    """공식 CSP 양식(보고서_양식_<CSP>.xlsx)을 찾아 server_report 로 채운다. 성공 시 True."""
+def _fill_cloud_template(provider, host, os_label, results, out_path, target=None):
+    """공식 CSP 양식(보고서_양식_<CSP>.xlsx)을 찾아 server_report 로 채운다. 성공 시 True.
+    target = {account, region, kind} — 진단대상 칸(계정 ID / 리전 / 구분)."""
     suffix = {"aws": "_AWS.xlsx", "azure": "_Azure.xlsx",
               "gcp": "_GCP.xlsx", "naver": "_Naver.xlsx"}.get(provider)
     if not suffix:
@@ -169,6 +170,8 @@ def _fill_cloud_template(provider, host, os_label, results, out_path):
         import lxml.etree  # noqa: F401  (server_report 의존성)
         import server_report
     except Exception:
+        print("    (lxml 미설치 → 공식 양식 대신 간이 보고서로 저장. 공식 양식: pip install lxml, "
+              "또는 --json 으로 뽑아 PC 에서 make_report)")
         return False
     def _has_cover(path):
         # 새 5시트 양식만 사용(옛 1시트 양식 배제): '0. 표지' 시트가 있어야 함
@@ -183,10 +186,13 @@ def _fill_cloud_template(provider, host, os_label, results, out_path):
 
     tpl = None
     seen = set()
-    dirs = [os.path.dirname(os.path.abspath(__file__))] + [p for p in sys.path if p]
+    # 단일 파일(cloudscan_all.py)은 내장 양식을 sys.path 맨 앞 임시폴더에 푼다 → 그곳 먼저
+    dirs = [p for p in sys.path if p] + [os.path.dirname(os.path.abspath(__file__))]
+    dirs.sort(key=lambda d: "cloud_check_embed_" not in d)   # 내장 양식(최신) 우선, 옆에 남은 옛 양식보다 먼저
     for d in dirs:
         try:
-            hits = [f for f in glob.glob(os.path.join(d, "*.xlsx")) if f.endswith(suffix)]
+            hits = [f for f in glob.glob(os.path.join(d, "*.xlsx"))
+                    if f.endswith(suffix) and not os.path.basename(f).startswith("~$")]
         except Exception:
             hits = []
         for f in hits:
@@ -203,6 +209,7 @@ def _fill_cloud_template(provider, host, os_label, results, out_path):
         return False
     sv = {"host": host or provider.upper(), "ip": "-", "osver": os_label or provider.upper(),
           "role": "클라우드 계정", "results": results}
+    sv.update({k: v for k, v in (target or {}).items() if v})
     try:
         server_report.fill_report("cloud", [sv], tpl, out_path)
         return True
@@ -283,6 +290,7 @@ def main():
     ap.add_argument("--tenant-id"); ap.add_argument("--client-id")
     ap.add_argument("--client-secret"); ap.add_argument("--subscription-id")
     ap.add_argument("--sa-key"); ap.add_argument("--project")
+    ap.add_argument("--account", help="보고서 진단대상의 계정 ID/이름(기본: 스캔에서 확인한 값, NCP 는 직접 지정 권장)")
     args = ap.parse_args()
 
     provider = args.provider.lower()
@@ -308,6 +316,9 @@ def main():
     results = report.get("results", [])
     host = report.get("host", "")
     os_label = report.get("os", provider.upper())
+    target = {k: report.get(k) for k in ("account", "region", "kind") if report.get(k)}
+    if args.account:
+        target["account"] = args.account
 
     # 콘솔 요약
     counts = {}
@@ -323,12 +334,13 @@ def main():
     if args.json_out:
         import json as _json
         with open(args.json_out, "w", encoding="utf-8") as _f:
-            _json.dump({"provider": provider, "host": host, "os": os_label, "results": results},
+            _json.dump({"provider": provider, "host": host, "os": os_label, **target, "results": results},
                        _f, ensure_ascii=False)
         print(f"[+] JSON 저장: {args.json_out}  (PC 에서: python make_report.py {provider} --result {args.json_out})")
 
     # 저장: CSV(항상) + 보고서 XLSX(openpyxl 있으면)
-    paths = save_results(provider, os_label, host, results, args.output, want_xlsx=not args.no_excel)
+    paths = save_results(provider, os_label, host, results, args.output, want_xlsx=not args.no_excel,
+                         target=target)
     print()
     for pth in paths:
         print(f"[+] 저장: {pth}")

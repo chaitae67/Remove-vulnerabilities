@@ -43,7 +43,9 @@ powershell -ExecutionPolicy Bypass -File web_windows_check.ps1 -Target tomcat -A
 ### 정형 보고서(양식 xlsx)로 만들기
 
 CSV/HTML 외에 **표지/진단대상/요약그래프(레이더)/요약결과/상세** 5시트 보고서가 필요하면, 대상에서 `--json` 으로
-결과를 뽑아 워크스테이션(파이썬)에서 `make_report.py` 로 변환한다. 웹서버/DBMS 는 **양식 파일 없이** 생성된다.
+결과를 뽑아 워크스테이션(파이썬 + `pip install lxml`)에서 `make_report.py` 로 변환한다.
+모든 종류가 같은 폴더의 **공식 양식 파일**(`보고서_양식_Linux/Windows/DBMS/Webserver/AWS/Azure/GCP/Naver.xlsx`)에
+값만 채우는 방식이라 표지 로고·차트·서식이 공식 결과보고서와 같다.
 
 ```bash
 # 1) 각 대상에서 JSON 출력 (서버마다 1개)
@@ -58,12 +60,19 @@ python make_report.py linux \
   --ip   3.38.228.213 15.165.55.44 10.0.10.61 10.0.20.139 \
   --role "서버 관리용 호스트" "관리자용 웹 서버" "관리자용 WAS 서버" "DB"
 python make_report.py windows --result web1.json was1.json --ip 13.124.134.131 10.0.10.226
-python make_report.py web  --result was1.json --host was1        # 웹서버(양식 불필요)
-python make_report.py dbms --result db.json  --host db           # DB(양식 불필요)
-python make_report.py aws  --result aws.json                     # 클라우드(양식 불필요)
+python make_report.py web  --result web1.json web-adm1.json was1.json was-adm1.json   # IIS/Nginx/Tomcat 자동 구분
+python make_report.py nginx --result web-adm1.json                                     # 소프트웨어 직접 지정
+python make_report.py dbms --result db.json  --host db
+python make_report.py aws  --result aws.json                     # 클라우드(cloud_scan --json 결과)
+
+# 표지 문서정보(선택)
+python make_report.py linux --result a.json --project 제로데이클리닉 --docno XXXXX-VA-2026001 --date 2026-09-29
 ```
-> 리눅스는 서버 4대, 윈도우는 2대까지 한 보고서에 열로 합쳐진다(공식 결과보고서와 동일한 다중서버 양식).
+> 리눅스는 서버 4대, 윈도우는 2대, Tomcat 은 2대까지 한 보고서에 열로 합쳐진다(공식 다중서버 양식).
+> 더 많으면 `report_..._1.xlsx`, `_2.xlsx` 로 나눠 저장한다. 대상이 칸보다 적으면 빈 칸은 숨겨지고 평균에서 빠진다.
+> 진단하지 않은 웹 소프트웨어(예: Nginx 만 진단)의 2-x/3-x 시트는 숨겨진다.
 > 2-2 요약·영역별 점수·3D 막대/원형/레이더 차트는 3-1 상세를 채우면 **수식으로 자동 계산**된다(엑셀에서 열 때).
+> 윈도우 스크립트가 만든 JSON(BOM 포함)도 그대로 읽는다.
 
 ---
 
@@ -97,14 +106,15 @@ python cloud_scan.py naver --access-key .. --secret-key .. --region KR   # 또�
 - 네이버(NCP)는 쉘 기본자격이 없어 키가 필요 → 인자·환경변수, 없으면 실행 중 물어본다.
 - **AWS 는 기본적으로 지정 리전만** 스캔(빠름). 전 리전은 `--all-regions`.
 - 끝나면 콘솔에 항목별 판정 요약을 찍고, **CSV** 로 저장한다(현재 폴더, ASCII 파일명).
-  `openpyxl` 이 있으면 **다중시트 보고서 xlsx**(표지/진단대상/요약그래프(레이더)/요약결과/상세)도
-  함께 생성한다 — 항목은 provider 가이드(AWS/Azure/GCP=SK Shieldus, Naver=네이버) 자동 반영, 양식 파일 불필요.
+  `lxml` 이 있으면 **공식 양식 보고서 xlsx**(`보고서_양식_<CSP>.xlsx`: 표지/진단대상/요약그래프/요약결과/상세)도
+  함께 생성한다 — 진단대상 칸에는 계정 ID·리전·구분이 들어간다(NCP 는 `--account <계정ID>` 로 지정).
+  lxml 이 없으면 간이 보고서(openpyxl)로 저장된다.
   (`-o` 저장 경로, `--no-excel` xlsx 생략, `--all-regions` 전 리전)
 
 ### 단일 파일로 실행 (`cloudscan_all.py`) — 파일 하나만 올리면 끝
 
 `cloud_check/` 패키지를 통째로 내장한 **단일 파일**. 폴더·zip 없이 이거 하나만 올려서 실행하면
-스스로 풀어서 돌아간다(결과는 CSV — 양식 xlsx 도 불필요).
+스스로 풀어서 돌아간다(공식 양식·보고서 생성 코드도 내장 → lxml 있으면 공식 양식 xlsx, 없으면 CSV/간이 xlsx).
 
 ```bash
 python cloudscan_all.py aws         # 클라우드 쉘에서 키 없이 그대로
@@ -118,7 +128,7 @@ python cloudscan_all.py naver --access-key .. --secret-key ..
 ```bash
 pip install -r requirements.txt      # 점검할 CSP 것만 설치해도 됨
 ```
-- CSV 저장은 설치 불필요(표준 라이브러리). xlsx 저장에만 `openpyxl` 필요.
+- CSV 저장은 설치 불필요(표준 라이브러리). 공식 양식 xlsx 는 `lxml`, 간이 xlsx 는 `openpyxl` 필요.
 - AWS CloudShell 등에는 boto3/SDK 가 대개 미리 깔려 있어 그대로 실행된다.
 
 ### 필요 권한 (읽기 전용)
@@ -157,7 +167,7 @@ powershell -ExecutionPolicy Bypass -File kisa_win_check.ps1   # W-01 ~ W-64
 #### 보고서 양식(다중시트 xlsx) 만들기 — `make_report.py`
 
 CSV 외에 **표지/진단대상/요약그래프/요약결과/상세** 5시트 보고서(양식 그대로, 차트 포함)를 만든다.
-점검을 `--json` 으로 뽑아서 양식에 채운다(양식 `보고서_양식_Linux.xlsx` / `_Windows.xlsx` 필요).
+점검을 `--json` 으로 뽑아서 양식에 채운다(양식 `보고서_양식_Linux.xlsx` / `_Windows.xlsx` 필요, `pip install lxml`).
 
 ```bash
 # 1) 대상 서버에서 JSON 출력
@@ -168,19 +178,21 @@ powershell -File kisa_win_check.ps1 -Json result.json
 python make_report.py linux   --result result.json --ip 3.38.228.213
 python make_report.py windows --result result.json --ip 10.0.0.5
 ```
-- 표지 작성일은 자동, 진단대상(호스트/IP/OS)·상세(판정 F열, 근거 G열)·요약·그래프가 채워진다.
-- 판정 색: 취약=빨강, 인터뷰 필요=파랑(조건부서식). 서버 1대당 1개 보고서.
+- 표지 작성일은 자동, 진단대상(호스트/IP/OS)·상세(판정·근거)·요약·그래프가 채워진다(행 높이는 근거 길이에 맞춤).
+- 판정 색: 취약=굵은 빨강, N/A=회색 기울임, 인터뷰 필요=주황 채움(조건부서식).
 
 ---
 
 ## 판정값
 
-| 점검 | 보고서 기재 | 의미 |
-|---|---|---|
-| 양호 | 양호 | 기준 충족 |
-| 취약 | 취약 | 기준 미충족 |
-| N/A | 양호 | 점검 대상 리소스 없음 |
-| 수동확인 | 인터뷰 필요 | 정책·업무 컨텍스트 필요 |
+| 점검 | 보고서 기재 | 의미 | 점수 |
+|---|---|---|---|
+| 양호 | 양호 | 기준 충족 | 분자·분모 |
+| 취약 | 취약 | 기준 미충족 | 분모 |
+| N/A | N/A | 점검 대상 리소스/서비스 없음 | 제외 |
+| 수동확인 | 인터뷰 필요 | 정책·업무 컨텍스트 필요(담당자 확인) | 제외 |
+
+보안 적용율 = 양호 / (양호 + 취약) — 리눅스·윈도우·DBMS·웹서버·클라우드 모든 보고서 공통.
 
 ## 파일 구성
 
@@ -198,10 +210,13 @@ kisa_win_check.ps1   Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
 web_linux_check.sh   웹서버(Nginx/리눅스 Tomcat) 점검 (WEB-01~26, 자동감지, CSV/JSON/HTML)
 web_windows_check.ps1 웹서버(IIS/윈도우 Tomcat) 점검 (WEB-01~26, 자동감지, UTF-8 BOM 필수)
 db_oracle_check.sh   DBMS(Oracle) 점검 (D-01~26, sqlplus, CSV/JSON/HTML)
-make_report.py       진단 JSON → 보고서 xlsx (linux/windows=양식, web/dbms=양식 없이 생성)
-infra_report.py      웹서버/DBMS 보고서(5시트+레이더) 생성 코어
-server_report.py     리눅스/윈도우 보고서 양식 채우기 코어
-보고서_양식_*.xlsx    서버 결과 엑셀 양식 (Linux/Windows)
+make_report.py       진단 JSON → 공식 양식 보고서 xlsx (linux/windows/dbms/web/aws/azure/gcp/naver)
+server_report.py     보고서 양식 채우기 코어(모든 종류 공통, lxml)
+infra_report.py      간이 보고서 생성(lxml 없을 때 클라우드 폴백)
+보고서_양식_*.xlsx    공식 결과보고서 양식 (Linux/Windows/DBMS/Webserver/AWS/Azure/GCP/Naver)
+build_server_templates.py  공식 결과보고서(결과보고서/주통기) → Linux/Windows/DBMS/Webserver 양식 생성(결함 수리 포함)
+build_cloud_templates.py   DBMS 양식 → AWS/Azure/GCP/NCP 양식 생성(항목·영역 수에 맞춰 표 재구성)
+tpl_xml.py           양식 xlsx 를 XML 수준에서 고치는 도구(openpyxl 저장 안 함 → 로고·도형·3D 차트 보존)
 requirements.txt     클라우드 CLI 의존성 (CSP별 SDK + openpyxl)
 ```
 
@@ -210,4 +225,7 @@ requirements.txt     클라우드 CLI 의존성 (CSP별 SDK + openpyxl)
 - `cloud_scan.py` / `cloud_check/` 는 tkinter·SSH 에 의존하지 않는 **독립 실행** 코드다.
 - AWS 는 `_regions()` 가 기본적으로 세션 리전만 반환(빠름). 전 리전은 `CLOUD_SCAN_ALL_REGIONS=1`.
 - 네이버(NCP)는 Open API 를 HMAC-SHA256 서명으로 호출(표준 라이브러리 urllib). 정책/인터뷰성 항목은 수동확인.
-- 결과 저장은 CSV(표준 라이브러리, utf-8-sig)를 기본으로 하고, 양식+openpyxl 이 있으면 xlsx 를 추가한다.
+- 결과 저장은 CSV(표준 라이브러리, utf-8-sig)를 기본으로 하고, 양식+lxml 이 있으면 공식 양식 xlsx 를 추가한다.
+- 양식 재생성 순서: `python build_server_templates.py` → `python build_cloud_templates.py`(DBMS 양식을 원본으로 씀)
+  → `python build_onefile.py`(cloudscan_all.py 에 새 양식 내장). 양식은 openpyxl 로 열어 저장하지 말 것
+  (표지 로고·그래프 제목 도형·3D 원형 설정이 사라진다).

@@ -12,7 +12,7 @@ import datetime
 
 MANUAL_LABEL = "인터뷰 필요"
 REPORT_STATUS = {
-    "양호": "양호", "취약": "취약", "N/A": "양호",
+    "양호": "양호", "취약": "취약", "N/A": "N/A",      # N/A 는 N/A 그대로(점수 제외) — 양호로 바꾸면 적용율이 부풀려짐
     "수동확인": MANUAL_LABEL, MANUAL_LABEL: MANUAL_LABEL,
 }
 TARGET_LABEL = {

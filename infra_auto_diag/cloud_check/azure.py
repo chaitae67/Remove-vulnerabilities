@@ -62,6 +62,7 @@ def run(creds):
 
     rep.fill_missing(MAN, "이번 버전 자동 점검 미지원 → Azure Portal 에서 수동 확인")
     return {"host": f"Azure 구독 {sub_name} ({sub})", "os": "Azure",
+            "account": sub, "region": "-", "kind": f"Azure 구독({sub_name})" if sub_name else "Azure 구독",
             "family": "cloud", "results": rep.results()}
 
 

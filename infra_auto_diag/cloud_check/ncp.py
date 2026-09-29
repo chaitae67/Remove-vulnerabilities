@@ -96,8 +96,10 @@ def run(creds):
 
     # 나머지(정책/계정/감사/인터뷰성)는 자동 판정 대상이 아니므로 인터뷰 필요로 채운다
     rep.fill_missing(MAN, "정책/운영/인터뷰 확인 항목 → NCP 콘솔·담당자 확인 필요")
-    return {"host": f"NCP ({creds['access_key'][:4]}…, {creds['region']})",
-            "os": "Naver", "family": "cloud", "results": rep.results()}
+    # 액세스 키 일부를 보고서에 남기지 않는다(계정 ID 는 cloud_scan --account 로 지정)
+    return {"host": f"NCP 계정 (리전: {creds['region']})", "os": "Naver",
+            "account": creds.get("account") or "-", "region": creds["region"], "kind": "NCP 계정",
+            "family": "cloud", "results": rep.results()}
 
 
 # ------------------------------------------------------------------ 3. 서버 / 7. 연속성

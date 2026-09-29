@@ -498,6 +498,7 @@ def run(creds):
     scope = ", ".join(regions) if len(regions) <= 3 else f"전 리전 {len(regions)}개"
     return {
         "host": f"AWS 계정 {acct} (리전: {scope})",
+        "account": acct, "region": scope, "kind": "AWS 계정",
         "os": "AWS",
         "family": "cloud",
         "results": rep.results(),

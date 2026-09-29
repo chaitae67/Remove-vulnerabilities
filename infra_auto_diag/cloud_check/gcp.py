@@ -106,6 +106,7 @@ def run(creds):
 
     rep.fill_missing(MAN, "이번 버전 자동 점검 미지원 → GCP 콘솔에서 수동 확인")
     return {"host": f"GCP 프로젝트 {pname} ({project})", "os": "GCP",
+            "account": project, "region": "-", "kind": "GCP 프로젝트",
             "family": "cloud", "results": rep.results()}
 
 

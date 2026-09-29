@@ -3,6 +3,8 @@
 #
 # 엑셀(.xlsx) 저장용 — 선택. 없으면 결과를 CSV 로 저장한다.
 openpyxl>=3.1
+# 공식 보고서 양식(보고서_양식_*.xlsx) 채우기 — server_report / make_report 에 필요
+lxml>=4.9
 
 # --- CSP SDK (해당 CSP 점검할 때만 필요) ---
 #   AWS
