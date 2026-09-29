@@ -147,17 +147,6 @@ def _doc_wildcards(doc):
     return out
 
 
-def _doc_allows(doc, action):
-    svc = action.split(":", 1)[0].lower()
-    for st in _statements(doc):
-        if st.get("Effect") != "Allow":
-            continue
-        acts = [a.lower() for a in _as_list(st.get("Action"))]
-        if "*" in acts or f"{svc}:*" in acts or action.lower() in acts:
-            return True
-    return False
-
-
 def _trusted_services(role):
     """역할 신뢰 정책의 서비스 주체 접두어(ec2, lambda ...). Principal 이 "*" 문자열이어도 안전."""
     doc = role.get("AssumeRolePolicyDocument") or {}
@@ -758,24 +747,94 @@ def _virtual_resource(rep, ctx):
             rep.good("3.3", "서브넷에 연결된 네트워크 ACL 에 모든 트래픽 허용 규칙 없음")
     safe(rep, "3.3", c33)
 
-    # 3.4 라우팅 테이블 ANY(0.0.0.0/0, ::/0)
+    # 3.4 라우팅 테이블 ANY — 가이드 비고의 예외(게이트웨이/아웃바운드 통신 필요)를 가려서 판정
+    #   취약: ① VPC 기본(main) 라우팅 테이블에 ANY→IGW  ② ANY→IGW 테이블의 서브넷에 RDS·공인 IP 없는
+    #         실행 중 인스턴스  ③ 대상이 삭제된 blackhole 경로, VPC 피어링으로 가는 ANY
+    #   양호: 그 외(퍼블릭 서브넷→IGW, 프라이빗→NAT, 온프렘→VGW/TGW, NAT 인스턴스·방화벽 경유 등)
     def c34():
-        rts = []
+        bad, ok, notes, rds_unknown = [], [], [], False
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
-            for rt in _pages(ec2, "describe_route_tables", "RouteTables"):
+            rts = _pages(ec2, "describe_route_tables", "RouteTables")
+            subnets = {s["SubnetId"]: s for s in _pages(ec2, "describe_subnets", "Subnets")}
+            private_inst = {}                               # 서브넷 -> 공인 IP 없는 실행 중 인스턴스
+            for resv in _pages(ec2, "describe_instances", "Reservations",
+                               Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+                for i in resv["Instances"]:
+                    running = (i.get("State") or {}).get("Name", "running") == "running"
+                    if running and i.get("SubnetId") and not i.get("PublicIpAddress"):
+                        private_inst.setdefault(i["SubnetId"], []).append(i["InstanceId"])
+            rds_in = {}                                     # 서브넷 -> RDS(서브넷 그룹 기준)
+            try:
+                for db in _pages(sess.client("rds", region_name=r), "describe_db_instances", "DBInstances"):
+                    for s in (db.get("DBSubnetGroup") or {}).get("Subnets", []):
+                        rds_in.setdefault(s["SubnetIdentifier"], []).append(db["DBInstanceIdentifier"])
+            except Exception as e:
+                if not _is_denied(e):
+                    raise
+                rds_unknown = True
+                notes.append(f"RDS 조회 권한 없음({r}) — RDS 서브넷의 인터넷 경로 여부 미확인")
+            main_rt, explicit = {}, {}
+            for rt in rts:
+                for a in rt.get("Associations", []):
+                    if a.get("Main"):
+                        main_rt[rt["VpcId"]] = rt["RouteTableId"]
+                    elif a.get("SubnetId"):
+                        explicit[a["SubnetId"]] = rt["RouteTableId"]
+            rt_subnets = {}                                 # 명시 연결이 없는 서브넷은 기본 테이블을 따른다
+            for sid, s in subnets.items():
+                rid = explicit.get(sid) or main_rt.get(s.get("VpcId"))
+                if rid:
+                    rt_subnets.setdefault(rid, []).append(sid)
+            for rt in rts:
+                rid = rt["RouteTableId"]
+                is_main = main_rt.get(rt.get("VpcId")) == rid
                 for route in rt["Routes"]:
-                    dst = route.get("DestinationCidrBlock") or route.get("DestinationIpv6CidrBlock")
-                    if dst in (_ANY4, _ANY6):
-                        tgt = route.get("GatewayId") or route.get("NatGatewayId") or \
-                            route.get("TransitGatewayId") or route.get("NetworkInterfaceId") or \
-                            route.get("EgressOnlyInternetGatewayId") or "?"
-                        rts.append(f"{rt['RouteTableId']}({r}) {dst} → {tgt}")
-        if rts:
-            rep.man("3.4", ["ANY 라우팅 존재 — 서비스 타깃별 설정 여부 검토 "
-                            "(가이드 비고: 게이트웨이/아웃바운드 통신이 필요한 경우 양호 처리 가능):"] + rts, rts)
+                    dst = (route.get("DestinationCidrBlock") or route.get("DestinationIpv6CidrBlock")
+                           or route.get("DestinationPrefixListId") or "?")
+                    tgt = (route.get("GatewayId") or route.get("NatGatewayId") or route.get("TransitGatewayId")
+                           or route.get("VpcPeeringConnectionId") or route.get("InstanceId")
+                           or route.get("NetworkInterfaceId") or route.get("EgressOnlyInternetGatewayId")
+                           or route.get("VpcEndpointId") or route.get("LocalGatewayId") or "?")
+                    label = f"{rid}({r}{', 기본 테이블' if is_main else ''}) {dst} → {tgt}"
+                    if route.get("State") == "blackhole":
+                        bad.append(f"{label}: 대상이 삭제된 경로(blackhole)")
+                        continue
+                    if dst not in (_ANY4, _ANY6):
+                        continue
+                    if tgt.startswith("pcx-"):
+                        bad.append(f"{label}: VPC 피어링으로 가는 ANY 경로")
+                    elif tgt.startswith("igw-"):
+                        subs = rt_subnets.get(rid, [])
+                        probs = []
+                        if is_main:
+                            probs.append("VPC 기본 라우팅 테이블에 인터넷 경로(명시 연결 안 된 서브넷이 자동으로 퍼블릭)")
+                        dbs = sorted({d for s in subs for d in rds_in.get(s, [])})
+                        if dbs:
+                            probs.append("RDS 서브넷 포함: " + ", ".join(dbs))
+                        priv = [i for s in subs for i in private_inst.get(s, [])]
+                        if priv:
+                            probs.append("공인 IP 없는 인스턴스: " + ", ".join(priv[:10]))
+                        if probs:
+                            bad.append(f"{label}: " + " / ".join(probs))
+                        else:
+                            ok.append(f"{label} (퍼블릭 서브넷 인터넷 경로)")
+                    else:
+                        kind = ("NAT 아웃바운드" if tgt.startswith(("nat-", "eigw-")) else
+                                "온프렘/전송 게이트웨이" if tgt.startswith(("vgw-", "tgw-")) else
+                                "NAT 인스턴스·방화벽 등 경유")
+                        ok.append(f"{label} ({kind})")
+        exc = (["가이드 비고 예외(게이트웨이/아웃바운드 통신)로 양호 처리한 ANY 경로:"] + ok) if ok else []
+        if bad:
+            rep.vuln("3.4", ["서비스 타깃별로 설정되지 않은 경로:"] + bad + exc + notes,
+                     sorted({b.split("(")[0] for b in bad}))
+        elif ok and rds_unknown and any("→ igw-" in x for x in ok):
+            # IGW 경로 서브넷에 RDS 가 있는지 확인하지 못했으므로 양호로 확정하지 않는다
+            rep.man("3.4", exc + notes + ["→ RDS 확인 불가로 판정 보류(권한 보완 후 재점검)"])
+        elif ok:
+            rep.good("3.4", exc + notes)
         else:
-            rep.good("3.4", "ANY(0.0.0.0/0·::/0) 라우팅 규칙 없음")
+            rep.good("3.4", ["ANY(0.0.0.0/0·::/0) 라우팅 규칙 없음"] + notes)
     safe(rep, "3.4", c34)
 
     # 3.5 인터넷 게이트웨이 연결 — 인터뷰
@@ -993,7 +1052,7 @@ def _virtual_resource(rep, ctx):
 
 # ========================= 4. 운영 관리 ============================
 def _operation_mgmt(rep, ctx):
-    sess, iam, view, regions = ctx["sess"], ctx["iam"], ctx["view"], ctx["regions"]
+    sess, regions = ctx["sess"], ctx["regions"]
 
     # 4.1 EBS 볼륨 암호화
     def c41():
@@ -1187,56 +1246,66 @@ def _operation_mgmt(rep, ctx):
             rep.vuln("4.7", ["관리 이벤트를 기록하는 활성 CloudTrail 추적이 없음"] + off)
     safe(rep, "4.7", c47)
 
-    # 4.8 인스턴스 로깅 — CloudWatch 로그 전송 권한(에이전트) + 사용자 정의 로그 그룹 근거
+    # 4.8 인스턴스 로깅 — 실행 중인 인스턴스마다 CloudWatch 로그 스트림이 실제로 있고 최근 7일 내 수집되는지 확인
+    #   CloudWatch Agent 기본 스트림 이름 = 인스턴스 ID. 호스트명(ip-10-0-1-5…)으로 지정한 경우도 인정.
     def c48():
-        insts = []
+        running, stopped = [], 0
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
             for resv in _pages(ec2, "describe_instances", "Reservations",
                                Filters=[{"Name": "instance-state-name", "Values": ["running", "stopped"]}]):
-                insts += [(r, i) for i in resv["Instances"]]
-        if not insts:
-            rep.na("4.8", "EC2 인스턴스 없음")
+                for i in resv["Instances"]:
+                    if (i.get("State") or {}).get("Name", "running") == "running":
+                        running.append((r, i))
+                    else:
+                        stopped += 1
+        if not running:
+            rep.na("4.8", f"실행 중인 EC2 인스턴스 없음(중지 {stopped}대)")
             return
-        prof = {}
-
-        def can_ship(arn):
-            name = arn.split("/")[-1]
-            if name not in prof:
-                ok = False
-                for ro in iam.get_instance_profile(InstanceProfileName=name)["InstanceProfile"]["Roles"]:
-                    rn = ro["RoleName"]
-                    att = _pages(iam, "list_attached_role_policies", "AttachedPolicies", RoleName=rn)
-                    if {p["PolicyName"] for p in att} & {"CloudWatchAgentServerPolicy", "CloudWatchAgentAdminPolicy",
-                                                         "CloudWatchLogsFullAccess", "AdministratorAccess"}:
-                        ok = True
-                        break
-                    docs = [view.managed_doc(p["PolicyArn"]) for p in att
-                            if not p["PolicyArn"].startswith(_AWS_POLICY_PREFIX)]
-                    docs += [iam.get_role_policy(RoleName=rn, PolicyName=pn)["PolicyDocument"]
-                             for pn in _pages(iam, "list_role_policies", "PolicyNames", RoleName=rn)]
-                    if any(_doc_allows(d, "logs:PutLogEvents") for d in docs):
-                        ok = True
-                        break
-                prof[name] = ok
-            return prof[name]
-        agent, none = [], []
-        for r, i in insts:
-            arn = (i.get("IamInstanceProfile") or {}).get("Arn")
-            (agent if arn and can_ship(arn) else none).append(f"{i['InstanceId']}({r})")
-        custom = []
-        for r in regions:
-            custom += [lg["logGroupName"] for lg in
-                       _pages(sess.client("logs", region_name=r), "describe_log_groups", "logGroups")
-                       if not lg["logGroupName"].startswith("/aws/")]
-        ev = [f"EC2 {len(insts)}대 중 CloudWatch 로그 전송 권한 보유 {len(agent)}대 / 미보유 {len(none)}대",
-              f"사용자 정의(/aws/ 외) 로그 그룹 {len(custom)}개" + (": " + ", ".join(custom[:15]) if custom else "")]
-        if none:
-            ev.append("로그 전송 권한 없는 인스턴스: " + ", ".join(none[:30]))
-        if not agent and not custom:
-            rep.vuln("4.8", ev + ["→ 인스턴스 로그를 CloudWatch 로그 스트림으로 보관하는 흔적 없음"], none)
+        now_ms = datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000
+        skip = ("/aws/lambda/", "/aws/rds/", "/aws/eks/", "/aws/codebuild/", "/aws/apigateway/")
+        streams = {}                                        # 리전 -> [(스트림명, 로그그룹, 마지막 이벤트 ms)]
+        for r in sorted({r for r, _ in running}):
+            logs = sess.client("logs", region_name=r)
+            found = []
+            for g in _pages(logs, "describe_log_groups", "logGroups"):
+                gname = g["logGroupName"]
+                if gname.startswith(skip):                  # 인스턴스 로그가 들어가지 않는 서비스 로그 그룹
+                    continue
+                for s in _pages(logs, "describe_log_streams", "logStreams", logGroupName=gname):
+                    found.append((s["logStreamName"], gname, s.get("lastEventTimestamp") or 0))
+            streams[r] = found
+        ok, stale, missing = [], [], []
+        for r, i in running:
+            iid = i["InstanceId"]
+            host = (i.get("PrivateDnsName") or "").split(".")[0]
+            name = next((t["Value"] for t in i.get("Tags", []) if t.get("Key") == "Name"), "")
+            label = f"{iid}({name})" if name else iid
+            hits = [s for s in streams.get(r, []) if iid in s[0] or (host and s[0].startswith(host))]
+            if not hits:
+                missing.append(label + ("" if i.get("IamInstanceProfile") else " — IAM 역할 없음(에이전트 전송 불가)"))
+                continue
+            last = max(h[2] for h in hits)
+            where = ", ".join(sorted({h[1] for h in hits}))[:80]
+            if now_ms - last > 7 * 86400 * 1000:
+                when = f"마지막 {int((now_ms - last) / 86400000)}일 전" if last else "이벤트 없음"
+                stale.append(f"{label} [{where}] 최근 7일 수집 없음({when})")
+            else:
+                ok.append(f"{label} [{where}]")
+        ev = [f"실행 중 EC2 {len(running)}대 중 로그 스트림 보관 {len(ok)}대 / 수집 중단 {len(stale)}대 / "
+              f"스트림 없음 {len(missing)}대"]
+        if missing:
+            ev += ["CloudWatch 로그 스트림이 없는 인스턴스:"] + missing
+        if stale:
+            ev += ["로그 스트림은 있으나 최근 7일 수집이 없는 인스턴스(에이전트 중지 의심):"] + stale
+        if ok:
+            ev.append("보관 중: " + ", ".join(ok[:20]))
+        if missing or stale:
+            rep.vuln("4.8", ev + ["※ 스트림 이름을 인스턴스 ID/호스트명으로 매칭함 — 임의 이름으로 수집 중이면 "
+                                  "근거 확인 후 양호 처리"],
+                     [x.split(" ")[0].split("(")[0] for x in missing + stale])
         else:
-            rep.man("4.8", ev + ["CloudWatch Agent 설치 및 수집 대상 로그(OS/애플리케이션) 적정성 확인 필요"], none)
+            rep.good("4.8", ev)
     safe(rep, "4.8", c48)
 
     # 4.9 RDS 로깅
@@ -1361,42 +1430,63 @@ def _operation_mgmt(rep, ctx):
             rep.good("4.12", f"로그 그룹 {total}개 모두 보관기간 1년 이상 또는 무기한")
     safe(rep, "4.12", c412)
 
-    # 4.13 백업 사용 여부 — 백업 설정 근거(Backup/RDS/DLM). 권한 없는 소스는 '없음'으로 단정하지 않음
+    # 4.13 백업 사용 여부 — AWS 의 '백업 정책'(AWS Backup 계획: 규칙+대상 선택 / 활성 DLM 스냅샷 정책)이 있으면 양호
+    #   권한이 없어 확인 못 한 소스는 '없음'으로 단정하지 않는다(수동확인).
     def c413():
-        ev, has, unknown = [], False, []
+        ev, notes, unknown, has = [], [], [], False
         for r in regions:
+            bk = sess.client("backup", region_name=r)
             try:
-                plans = _pages(sess.client("backup", region_name=r), "list_backup_plans", "BackupPlansList")
-                if plans:
-                    has = True
-                    ev.append(f"AWS Backup 계획 {len(plans)}개({r})")
+                for p in _pages(bk, "list_backup_plans", "BackupPlansList"):
+                    pid, pname = p["BackupPlanId"], p.get("BackupPlanName") or p["BackupPlanId"]
+                    rules = bk.get_backup_plan(BackupPlanId=pid)["BackupPlan"].get("Rules", [])
+                    sels = _pages(bk, "list_backup_selections", "BackupSelectionsList", BackupPlanId=pid)
+                    desc = []
+                    for ru in rules:
+                        keep = (ru.get("Lifecycle") or {}).get("DeleteAfterDays")
+                        desc.append(f"{ru.get('RuleName')}({ru.get('ScheduleExpression', '수동')}, "
+                                    f"{'보존 ' + str(keep) + '일' if keep else '보존 무기한'})")
+                    if rules and sels:
+                        has = True
+                        ev.append(f"AWS Backup 계획 {pname}({r}): 규칙 {', '.join(desc)} / 백업 대상 선택 {len(sels)}개")
+                    else:
+                        notes.append(f"AWS Backup 계획 {pname}({r}): 규칙 {len(rules)}개·대상 선택 {len(sels)}개 "
+                                     "→ 실제 백업 대상 없음")
+                prot = _pages(bk, "list_protected_resources", "Results")
+                if prot:
+                    types = sorted({x.get("ResourceType", "?") for x in prot})
+                    ev.append(f"백업 보호 중인 리소스 {len(prot)}개({r}): {', '.join(types)}")
             except Exception as e:
-                if _is_denied(e):
-                    unknown.append(f"AWS Backup({r})")
-            try:
-                auto = [d["DBInstanceIdentifier"] for d in
-                        _pages(sess.client("rds", region_name=r), "describe_db_instances", "DBInstances")
-                        if d.get("BackupRetentionPeriod", 0) > 0]
-                if auto:
-                    has = True
-                    ev.append(f"RDS 자동 백업 {len(auto)}개({r})")
-            except Exception as e:
-                if _is_denied(e):
-                    unknown.append(f"RDS({r})")
+                if not _is_denied(e):
+                    raise
+                unknown.append(f"AWS Backup({r})")
             try:
                 pol = sess.client("dlm", region_name=r).get_lifecycle_policies().get("Policies", [])
-                if pol:
+                on = [p for p in pol if p.get("State") == "ENABLED"]
+                if on:
                     has = True
-                    ev.append(f"EBS 스냅샷 수명주기(DLM) 정책 {len(pol)}개({r})")
+                    ev.append(f"EBS 스냅샷 수명주기(DLM) 정책 {len(on)}개 활성({r})")
+                elif pol:
+                    notes.append(f"DLM 정책 {len(pol)}개 모두 비활성({r})")
             except Exception as e:
-                if _is_denied(e):
-                    unknown.append(f"DLM({r})")
+                if not _is_denied(e):
+                    raise
+                unknown.append(f"DLM({r})")
+            try:
+                dbs = _pages(sess.client("rds", region_name=r), "describe_db_instances", "DBInstances")
+                if dbs:
+                    auto = sum(1 for d in dbs if d.get("BackupRetentionPeriod", 0) > 0)
+                    notes.append(f"참고: RDS 자동 백업 {auto}/{len(dbs)}개({r}) — 백업 정책으로는 보지 않음")
+            except Exception as e:
+                if not _is_denied(e):
+                    raise
+        tail = ["※ 백업 절차·담당자·보존기한·소산 등 정책 문서는 가이드 참고사항(필요 시 인터뷰로 보완)"]
         if has:
-            rep.man("4.13", ev + ["백업 정책 문서(대상·주기·보존기한·소산 등) 적정성은 인터뷰 확인"])
+            rep.good("4.13", ev + notes + tail)
         elif unknown:
-            rep.man("4.13", "백업 설정을 확인할 권한이 없는 소스: " + ", ".join(unknown))
+            rep.man("4.13", ["백업 정책을 확인할 권한이 없는 소스: " + ", ".join(unknown)] + ev + notes)
         else:
-            rep.vuln("4.13", "AWS Backup 계획/RDS 자동 백업/DLM 등 백업 설정이 확인되지 않음")
+            rep.vuln("4.13", ["AWS Backup 계획(규칙+대상)·DLM 스냅샷 정책 등 백업 정책이 없음"] + ev + notes + tail)
     safe(rep, "4.13", c413)
 
     # 4.14 / 4.15 EKS
