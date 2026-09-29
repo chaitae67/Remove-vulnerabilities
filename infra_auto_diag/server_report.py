@@ -585,7 +585,8 @@ def _fill_web(bk, spec, servers, meta):
         sys.stderr.write("[!] 웹 소프트웨어(IIS/Nginx/Tomcat)를 판별 못해 제외: "
                          + ", ".join(str(s.get("host") or "?") for s in unknown) + "\n")
     if not any(groups.values()):
-        raise ValueError("웹 소프트웨어를 판별할 수 없습니다(--kind iis/nginx/tomcat 로 지정하세요).")
+        raise ValueError("웹 소프트웨어를 판별할 수 없습니다 — 보고서 종류를 iis/nginx/tomcat 로 지정하세요 "
+                         "(예: make_report.py nginx --result web.json).")
 
     tw = bk.sheet(TARGET_SHEET)
     first, last = spec["detail_first"], spec["detail_last"]
