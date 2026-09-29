@@ -37,13 +37,17 @@ RESULT_ALIAS = {
 SPECS = {
     "linux": {
         "cover": "0. 표지", "target": "1. 진단 대상", "detail": "3-1. 진단 결과(Linux)",
+        "summary": "2-2. 요약 진단결과(Linux)",
         "label": "Linux", "id_col": "C", "detail_first": 6, "detail_last": 72,
-        "result_cols": ["F", "H", "J", "L"], "evid_cols": ["G", "I", "K", "M"], "servers": 4,
+        "result_cols": ["F", "H", "J", "L"], "evid_cols": ["G", "I", "K", "M"],
+        "sum_cols": ["F", "G", "H", "I"], "servers": 4,
     },
     "windows": {
         "cover": "0. 표지", "target": "1. 진단 대상", "detail": "3-1. 진단 결과(window)",
+        "summary": "2-2. 요약 진단결과(Window)",
         "label": "Windows", "id_col": "C", "detail_first": 6, "detail_last": 69,
-        "result_cols": ["F", "H"], "evid_cols": ["G", "I"], "servers": 2,
+        "result_cols": ["F", "H"], "evid_cols": ["G", "I"],
+        "sum_cols": ["F", "G"], "servers": 2,
     },
 }
 TARGET_FIRST_ROW = 5
@@ -74,6 +78,7 @@ class Book:
     def __init__(self, path):
         self.zin = zipfile.ZipFile(path)
         self.parts = {}
+        self.drop = set()
         wb = self._root("xl/workbook.xml")
         rels = etree.fromstring(self.zin.read("xl/_rels/workbook.xml.rels"))
         rid2target = {r.get("Id"): r.get("Target") for r in rels}
@@ -150,6 +155,42 @@ class Book:
             t.text = str(value)
             t.set(f"{{{XMLNS}}}space", "preserve")
 
+    def put_formula(self, sheet, ref, formula):
+        """셀을 수식 셀로 만든다(캐시값 없음 → 열 때 재계산). --fix-template 전용."""
+        c = self._cell(sheet, ref)
+        for ch in list(c):
+            c.remove(ch)
+        if "t" in c.attrib:
+            del c.attrib["t"]
+        etree.SubElement(c, q("f")).text = formula.lstrip("=")
+
+    def strip_external_links(self):
+        """외부 파일 링크(열 때 '업데이트' 창)를 제거한다. 부품·관계·콘텐츠타입 정리."""
+        # 1) workbook.xml <externalReferences> 제거
+        er = self.wb_root.find(q("externalReferences"))
+        if er is not None:
+            self.wb_root.remove(er)
+        # 2) workbook rels 에서 externalLink 관계 제거
+        try:
+            rels = self._root("xl/_rels/workbook.xml.rels")
+            for rel in list(rels):
+                if "externalLink" in (rel.get("Type") or ""):
+                    rels.remove(rel)
+        except KeyError:
+            pass
+        # 3) [Content_Types].xml 에서 externalLink override 제거
+        try:
+            ct = self._root("[Content_Types].xml")
+            for ov in list(ct):
+                if "/xl/externalLinks/" in (ov.get("PartName") or ""):
+                    ct.remove(ov)
+        except KeyError:
+            pass
+        # 4) 실제 externalLinks/* 파트는 저장에서 제외
+        for name in self.zin.namelist():
+            if name.startswith("xl/externalLinks/"):
+                self.drop.add(name)
+
     def save(self, out):
         cp = self.wb_root.find(q("calcPr"))
         if cp is None:
@@ -157,6 +198,8 @@ class Book:
         cp.set("fullCalcOnLoad", "1")
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
             for item in self.zin.infolist():
+                if item.filename in self.drop:
+                    continue    # 외부 링크 등 제거 대상
                 if item.filename in self.parts:
                     data = etree.tostring(self.parts[item.filename], xml_declaration=True,
                                           encoding="UTF-8", standalone=True)
@@ -169,12 +212,44 @@ def _date_serial(d):
     return (datetime.datetime(d.year, d.month, d.day) - datetime.datetime(1899, 12, 30)).days
 
 
+def _fix_template(bk, os_kind, n):
+    """양식 자체 결함 보정(선택): 2-2 하드코딩 셀 → 수식 복원, 2-1 외부 링크 제거.
+    원본 양식은 그대로 두고 --fix-template 을 줄 때만 호출한다."""
+    spec = SPECS[os_kind]
+    det, summ = spec["detail"], spec["summary"]
+    if os_kind == "linux":
+        last = spec["detail_last"]           # 72 (U-67)
+        sw = bk.sheet(summ)
+        for c in spec["sum_cols"]:           # F,G,H,I 의 마지막행 하드코딩 → HLOOKUP
+            bk.put_formula(sw, f"{c}{last}",
+                           f"HLOOKUP({c}$3,'{det}'!$F$3:$M$72,ROW(A{last-2}),FALSE)")
+        gw = bk.sheet("2-1. 요약결과(그래프)")   # 외부 링크 걸린 수식들을 로컬로 복원
+        sm = f"'{summ}'!$F$74:$I$74"
+        tg = f"'{spec['target']}'!$B$5:$B${4 + n}"
+        for ref, fx in (("C5", f"AVERAGE({sm})"), ("C6", f"AVERAGE({sm})"),
+                        ("D5", "D6"), ("D6", f"COUNTA({tg})"), ("D17", f"COUNTA({tg})"),
+                        ("D18", f'COUNTIF({sm},">=0.85")'), ("D19", "D17-(D18+D20)"),
+                        ("D20", f'COUNTIF({sm},"<0.7")')):
+            bk.put_formula(gw, ref, fx)
+        for i, r in enumerate(range(72, 77)):
+            src = [6, 19, 39, 69, 70][i]
+            bk.put_formula(gw, f"B{r}", f"'{summ}'!B{src}")
+            bk.put_formula(gw, f"C{r}", f"'{summ}'!K{src}")
+            bk.put_formula(gw, f"D{r}", "$C$6")
+        for r in range(36, 51):
+            if r - 35 <= n:
+                bk.put_formula(gw, f"W{r}", f"HLOOKUP($V{r},'{summ}'!$F$3:$I$53,2,0)")
+                bk.put_formula(gw, f"X{r}", f"HLOOKUP($V{r},'{summ}'!$F$3:$I$74,72,0)")
+    bk.strip_external_links()
+
+
 # ---------------- 진입점 ----------------
-def fill_report(os_kind, servers, template_path, out_path, meta=None):
+def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_template=False):
     """서버 여러 대 결과를 계열 양식(다중서버)에 채워 저장(양식 100% 보존).
 
     os_kind : 'linux' | 'windows'
     servers : [{host, ip, osver, role, results:[{code,status,evidence,(final,note)}]}...]
+    fix_template : True 면 양식 결함(2-2 F72 하드코딩·2-1 외부링크) 보정.
     """
     spec = SPECS[os_kind]
     meta = meta or {}
@@ -235,6 +310,9 @@ def fill_report(os_kind, servers, template_path, out_path, meta=None):
             if note:
                 ev = f"{ev}  [검증자: {note}]" if ev else f"[검증자: {note}]"
             bk.put(dw, f"{ec}{r}", ev)
+
+    if fix_template:
+        _fix_template(bk, os_kind, len(servers))
 
     bk.save(out_path)
     return out_path

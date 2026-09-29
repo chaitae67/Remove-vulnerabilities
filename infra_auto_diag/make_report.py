@@ -60,6 +60,8 @@ def main():
     ap.add_argument("--ip", nargs="*", default=[], help="진단 대상 IP(들). --result 순서와 매칭")
     ap.add_argument("--role", nargs="*", default=[], help="용도(들). --result 순서와 매칭(선택)")
     ap.add_argument("--output", "-o", help="출력 xlsx (기본: report_<대상>_<host>.xlsx)")
+    ap.add_argument("--fix-template", action="store_true",
+                    help="(linux/windows) 양식 결함 보정: 2-2 하드코딩 셀→수식, 2-1 외부링크 제거")
     args = ap.parse_args()
 
     loaded = []
@@ -102,7 +104,8 @@ def main():
             sys.exit(f"[!] 보고서 양식을 찾을 수 없습니다 ({TEMPLATE_SUFFIX[args.kind]}). "
                      f"--template 으로 경로를 지정하세요.")
         try:
-            server_report.fill_report(args.kind, loaded, tpl, out)   # 다중 서버 → 열로 합침
+            server_report.fill_report(args.kind, loaded, tpl, out,   # 다중 서버 → 열로 합침
+                                      fix_template=args.fix_template)
         except Exception as e:  # noqa: BLE001
             sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
 
