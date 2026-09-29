@@ -42,15 +42,17 @@ def _find_template(os_kind, explicit):
     return None
 
 
-# 서버(리눅스/윈도우)는 양식 파일에 채우고, 인프라(웹서버/DBMS)는 양식 없이 생성한다.
+# 서버(리눅스/윈도우)는 양식 파일에 채우고, 인프라(웹서버/DBMS)와 클라우드는 양식 없이 생성한다.
 INFRA_KINDS = {"web", "webserver", "nginx", "iis", "tomcat", "dbms", "db", "oracle"}
+CLOUD_KINDS = {"aws", "azure", "gcp", "naver"}
 
 
 def main():
     ap = argparse.ArgumentParser(description="진단 JSON → 보고서 엑셀(xlsx) 생성")
     ap.add_argument("kind", choices=["linux", "windows", "web", "webserver", "nginx", "iis", "tomcat",
-                                     "dbms", "db", "oracle"],
-                    help="대상: linux/windows(서버, 양식 필요) · web/webserver·nginx·iis·tomcat(웹서버) · dbms/oracle(DB)")
+                                     "dbms", "db", "oracle", "aws", "azure", "gcp", "naver"],
+                    help="대상: linux/windows(서버, 양식 필요) · web·nginx·iis·tomcat(웹서버) · "
+                         "dbms/oracle(DB) · aws/azure/gcp/naver(클라우드)")
     ap.add_argument("--result", "-r", required=True, help="점검 스크립트가 낸 JSON 파일")
     ap.add_argument("--template", "-t", help="서버 보고서 양식 xlsx (linux/windows 만; 기본 자동 탐색)")
     ap.add_argument("--host", help="진단 대상 호스트명(기본: JSON host)")
@@ -74,7 +76,15 @@ def main():
         os.getcwd(),
         "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40] or "server"))
 
-    if args.kind in INFRA_KINDS:
+    if args.kind in CLOUD_KINDS:
+        # 클라우드 — 서버/웹과 동일한 5시트(표지/진단대상/요약그래프/요약결과/상세) xlsx 생성
+        from cloud_check import report as cloud_report  # noqa: E402
+        provider = args.kind if args.kind != "naver" else "naver"
+        try:
+            cloud_report.build_report(provider, host or provider.upper(), results, out)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"[!] 보고서 생성 실패({type(e).__name__}): {e}")
+    elif args.kind in INFRA_KINDS:
         # 웹서버/DBMS — 양식 파일 없이 openpyxl 로 5시트 보고서 생성(레이더 차트 포함)
         import infra_report  # noqa: E402
         target = {"web": "web", "webserver": "web", "db": "dbms", "oracle": "dbms"}.get(args.kind, args.kind)

@@ -216,6 +216,7 @@ def main():
     ap = argparse.ArgumentParser(description="클라우드 취약점 진단(GUI 없이 실행 → 엑셀 저장)")
     ap.add_argument("provider", choices=["aws", "azure", "gcp", "naver"], help="점검 대상 CSP")
     ap.add_argument("-o", "--output", help="저장 경로(확장자 제외 기본명). 기본: 현재 폴더에 cloud_<CSP>_<시각>")
+    ap.add_argument("--json", dest="json_out", help="결과를 JSON 으로 저장(openpyxl 없는 곳에서 뽑아, PC 에서 make_report 로 xlsx 생성용)")
     ap.add_argument("--no-excel", action="store_true", help="xlsx 저장 생략(CSV 는 항상 저장)")
     ap.add_argument("--all-regions", action="store_true", help="AWS 전 리전 스캔(기본은 지정 리전만 → 빠름)")
     # 공통/개별 자격증명
@@ -260,6 +261,14 @@ def main():
         mark = {"취약": "✗", "양호": "✓", "N/A": "-", MANUAL_LABEL: "?"}.get(st, " ")
         print(f"  {mark} [{r.get('code',''):<6}] {st:<8} {r.get('title','')}")
     print("  " + " | ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+
+    # JSON 저장(요청 시) — openpyxl 없는 클라우드 쉘에서 뽑아 PC 에서 make_report 로 xlsx 생성
+    if args.json_out:
+        import json as _json
+        with open(args.json_out, "w", encoding="utf-8") as _f:
+            _json.dump({"provider": provider, "host": host, "os": os_label, "results": results},
+                       _f, ensure_ascii=False)
+        print(f"[+] JSON 저장: {args.json_out}  (PC 에서: python make_report.py {provider} --result {args.json_out})")
 
     # 저장: CSV(항상) + 보고서 XLSX(openpyxl 있으면)
     paths = save_results(provider, os_label, host, results, args.output, want_xlsx=not args.no_excel)
