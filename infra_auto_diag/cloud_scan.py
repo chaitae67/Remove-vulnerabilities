@@ -170,15 +170,34 @@ def _fill_cloud_template(provider, host, os_label, results, out_path):
         import server_report
     except Exception:
         return False
+    def _has_cover(path):
+        # 새 5시트 양식만 사용(옛 1시트 양식 배제): '0. 표지' 시트가 있어야 함
+        try:
+            import zipfile
+            import re as _re
+            with zipfile.ZipFile(path) as z:
+                wb = z.read("xl/workbook.xml").decode("utf-8", "ignore")
+            return "0. 표지" in "".join(_re.findall(r'name="([^"]+)"', wb))
+        except Exception:
+            return False
+
     tpl = None
+    seen = set()
     dirs = [os.path.dirname(os.path.abspath(__file__))] + [p for p in sys.path if p]
     for d in dirs:
         try:
             hits = [f for f in glob.glob(os.path.join(d, "*.xlsx")) if f.endswith(suffix)]
         except Exception:
             hits = []
-        if hits:
-            tpl = hits[0]
+        for f in hits:
+            rp = os.path.realpath(f)
+            if rp in seen:
+                continue
+            seen.add(rp)
+            if _has_cover(f):
+                tpl = f
+                break
+        if tpl:
             break
     if not tpl:
         return False

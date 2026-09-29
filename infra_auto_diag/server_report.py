@@ -157,7 +157,7 @@ class Book:
 
     def sheet(self, name):
         if name not in self.sheet_path:
-            sys.exit(f"시트 '{name}' 를 찾을 수 없습니다. 시트명을 확인하세요. (있는 시트: {list(self.sheet_path)})")
+            raise ValueError(f"시트 '{name}' 없음(있는 시트: {list(self.sheet_path)})")
         return self._root(self.sheet_path[name])
 
     def _cell(self, sheet, ref, create=True):
