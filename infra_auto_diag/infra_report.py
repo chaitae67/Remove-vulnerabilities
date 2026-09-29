@@ -193,17 +193,25 @@ def build_report(target, host, osver, results, out_path):
     ws = wb.active
     ws.title = "0. 표지"
     ws.sheet_view.showGridLines = False
+    for col, w in zip("BCDEFGHIJKL", (13, 13, 13, 13, 13, 13, 13, 13, 4, 11, 22)):
+        ws.column_dimensions[col].width = w
+    # 오른쪽 위 문서정보 박스(K3:L6) — 회색 라벨 + 흰색 값
+    gray_lbl = PatternFill("solid", fgColor="FFBFBFBF")
     for i, (k, v) in enumerate([("문서번호", "XXXXX-VA-2026XXX"), ("작성자", "취약점진단팀"),
                                 ("보안등급", "Confidential"), ("Ver", "ver 1.0")]):
         r = 3 + i
-        a = ws.cell(r, 11, k); a.fill = area_fill; a.font = bold; a.alignment = center; a.border = border
+        a = ws.cell(r, 11, k); a.fill = gray_lbl; a.font = bold; a.alignment = center; a.border = border
         b = ws.cell(r, 12, v); b.alignment = center; b.border = border
-    ws.cell(11, 2, f'"{host}" 취약점 진단').font = Font(bold=True, size=18)
-    ws.cell(13, 2, f"{label} 진단 상세결과").font = Font(bold=True, size=22, color="FF000000")
-    ws.cell(18, 2, today).font = Font(bold=True, size=12)
-    ws.cell(21, 2, GUIDE.get(target, "")).font = Font(size=10, color="FF808080")
-    ws.column_dimensions["K"].width = 12
-    ws.column_dimensions["L"].width = 22
+    # 가운데 제목/부제/날짜 (병합 + 가운데 정렬)
+    def _center(cell_range, text, font):
+        ws.merge_cells(cell_range)
+        c = ws[cell_range.split(":")[0]]
+        c.value = text; c.font = font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    _center("B11:I11", f'"{host}" 취약점 진단', Font(bold=True, size=16))
+    _center("B13:I13", f"{label} 진단 상세결과", Font(bold=True, size=24, color="FF000000"))
+    _center("B18:I18", today, Font(bold=True, size=14))
+    _center("B21:I21", GUIDE.get(target, ""), Font(size=10, color="FF808080"))
 
     # ================= 1. 진단 대상 =================
     ws = wb.create_sheet("1. 진단 대상")
