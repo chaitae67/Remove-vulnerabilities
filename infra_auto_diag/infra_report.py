@@ -145,9 +145,10 @@ def build_report(target, host, osver, results, out_path):
 
     thin = Side(style="thin", color="FFBFBFBF")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    hdr_fill = PatternFill("solid", fgColor="FF44546A")
-    area_fill = PatternFill("solid", fgColor="FFF2F2F2")
-    hdr_font = Font(bold=True, color="FFFFFFFF")
+    # 공식 결과보고서 색상(회색 헤더 + 검정 굵은 글씨, 영역 베이지)
+    hdr_fill = PatternFill("solid", fgColor="FFD9D9D9")
+    area_fill = PatternFill("solid", fgColor="FFEEECE1")
+    hdr_font = Font(bold=True, color="FF000000")
     bold = Font(bold=True)
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     left = Alignment(horizontal="left", vertical="center", wrap_text=True)
@@ -198,7 +199,7 @@ def build_report(target, host, osver, results, out_path):
         a = ws.cell(r, 11, k); a.fill = area_fill; a.font = bold; a.alignment = center; a.border = border
         b = ws.cell(r, 12, v); b.alignment = center; b.border = border
     ws.cell(11, 2, f'"{host}" 취약점 진단').font = Font(bold=True, size=18)
-    ws.cell(13, 2, f"{label} 진단 상세결과").font = Font(bold=True, size=22, color="FF1F4E79")
+    ws.cell(13, 2, f"{label} 진단 상세결과").font = Font(bold=True, size=22, color="FF000000")
     ws.cell(18, 2, today).font = Font(bold=True, size=12)
     ws.cell(21, 2, GUIDE.get(target, "")).font = Font(size=10, color="FF808080")
     ws.column_dimensions["K"].width = 12
