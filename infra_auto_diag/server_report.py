@@ -16,6 +16,9 @@ from collections import defaultdict
 
 from lxml import etree
 
+# 항목코드 패턴: 1.1 / AC-01 / D-01 / WEB-01 / U-01  (트레일링 '취약항목 개수' 등 제외)
+_CODE_RE = re.compile(r"^[A-Za-z]{0,5}-?\d+(\.\d+)?$")
+
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 RNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 XMLNS = "http://www.w3.org/XML/1998/namespace"
@@ -339,7 +342,7 @@ def _fill_web(bk, spec, servers, meta):
         row_of = {}
         for r in range(first, last + 1):
             v = bk.get(dw, f"{spec['id_col']}{r}")
-            if v:
+            if v and _CODE_RE.match(v.strip()):
                 row_of[v.strip().upper()] = r
         for i, sv in enumerate(svs[: len(sconf["cols"])]):
             rc, ec = sconf["cols"][i], sconf["evid"][i]
@@ -415,7 +418,7 @@ def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_templa
     row_of = {}
     for r in range(first, last + 1):
         v = bk.get(dw, f"{spec['id_col']}{r}")
-        if v:
+        if v and _CODE_RE.match(v.strip()):
             row_of[v.strip().upper()] = r
     nf = norm_cloud if spec.get("cloud") else norm_result
     for idx, sv in enumerate(servers):

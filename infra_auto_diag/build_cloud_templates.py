@@ -1,42 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""클라우드 결과보고서 양식(빈 xlsx) 생성기 — CSP별로 한 번 만들어 커밋한다.
+"""클라우드 결과보고서 양식 생성 — 사람이 만든 DBMS 양식을 '복붙 편집'해서 만든다.
 
-서버(DBMS) 결과보고서와 동일한 5시트 구성. 항목코드·세부항목·진단기준·영역을
-cloud_check/*_items 에서 박아 넣고 판정/근거(F/G)만 비운다.
- - 2-2 요약 판정은 3-1 참조 수식, 영역별 양호율은 COUNTIF 수식(자동 계산)
- - 2-1 그래프: 3D막대·3D원형·레이더 3차트
- - 판정 색은 조건부서식(취약=빨강, N/A=회색, 인터뷰=파랑)
-이후 server_report.py(cloud 스펙)가 표지/진단대상/3-1 F·G 만 채운다.
+새로 그리지 않는다. 보고서_양식_DBMS.xlsx(단일 대상, 폰트/차트/조건부서식 완성)를 열어
+ - 시트명 (Oracle) → 제거, 모든 수식의 (Oracle) 참조도 함께 정리
+ - 3-1/2-2 항목을 CSP 항목(코드/세부/진단기준/중요도/영역)으로 교체, 항목 수만큼 행 확장
+ - 점검결과/보안적용율 행, 영역 병합, 조건부서식, 그래프 참조를 새 행수/영역수에 맞게 갱신
+만 한다. openpyxl 왕복이 DBMS 의 맑은고딕/차트(3D막대·원형·레이더)/서식을 보존.
 
-  python build_cloud_templates.py [aws|azure|gcp|naver ...]
+  python build_cloud_templates.py [aws azure gcp naver]
 """
 import sys
+from copy import copy
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.chart import BarChart3D, PieChart3D, RadarChart, Reference
-from openpyxl.chart.label import DataLabelList
+from openpyxl.utils import get_column_letter as GL
+from openpyxl.styles import Font
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 
-PROVIDERS = {
-    "aws":   ("aws_items",   "AWS",   "SK Shieldus 2024 클라우드 보안가이드 (AWS)",   "보고서_양식_AWS.xlsx"),
-    "azure": ("azure_items", "Azure", "SK Shieldus 2024 클라우드 보안가이드 (Azure)", "보고서_양식_Azure.xlsx"),
-    "gcp":   ("gcp_items",   "GCP",   "SK Shieldus 2024 클라우드 보안가이드 (GCP)",   "보고서_양식_GCP.xlsx"),
-    "naver": ("ncp_items",   "Naver", "네이버 클라우드 플랫폼 보안 가이드",           "보고서_양식_Naver.xlsx"),
-}
-
-GRAY_HDR = PatternFill("solid", fgColor="FFD9D9D9")
-GRAY_LBL = PatternFill("solid", fgColor="FFBFBFBF")
-ORANGE = PatternFill("solid", fgColor="FFFCD5B5")
-THIN = Side(style="thin", color="FFB2B2B2")
-BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-BOLD = Font(bold=True)
-CEN = Alignment(horizontal="center", vertical="center", wrap_text=True)
-LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
-DET = "3-1. 진단 결과"
+SRC = "보고서_양식_DBMS.xlsx"
+DET = "3-1. 진단 결과"        # (Oracle 제거 후 이름)
 SUM = "2-2. 요약 진단결과"
 GRAPH = "2-1. 요약결과(그래프)"
 FIRST = 6
+PROVIDERS = {
+    "aws": ("aws_items", "AWS", "보고서_양식_AWS.xlsx"),
+    "azure": ("azure_items", "Azure", "보고서_양식_Azure.xlsx"),
+    "gcp": ("gcp_items", "GCP", "보고서_양식_GCP.xlsx"),
+    "naver": ("ncp_items", "Naver", "보고서_양식_Naver.xlsx"),
+}
 
 
 def _ck(c):
@@ -48,149 +39,171 @@ def _ck(c):
     return (1, m.group(1), int(m.group(2))) if m else (2, str(c), 0)
 
 
-def _h(ws, r, c, t):
-    x = ws.cell(r, c, t); x.fill = GRAY_HDR; x.font = BOLD; x.alignment = CEN; x.border = BORDER
-    return x
+def _copy_row_style(ws, src_r, dst_r, cols):
+    ws.row_dimensions[dst_r].height = ws.row_dimensions[src_r].height
+    for c in cols:
+        s = ws.cell(src_r, c); d = ws.cell(dst_r, c)
+        d.font = copy(s.font); d.fill = copy(s.fill); d.border = copy(s.border)
+        d.alignment = copy(s.alignment); d.number_format = s.number_format
+
+
+def _unmerge_all(ws):
+    for m in list(ws.merged_cells.ranges):
+        ws.unmerge_cells(str(m))
 
 
 def build(provider):
-    mod, label, guide, outname = PROVIDERS[provider]
+    mod, label, out = PROVIDERS[provider]
     items = __import__("cloud_check." + mod, fromlist=["ITEMS"]).ITEMS
-    codes = sorted(items.keys(), key=_ck)
+    codes = sorted(items, key=_ck)
     n = len(codes)
     last = FIRST + n - 1
-    # 영역별 연속 행 범위
-    areas, area_rows = [], {}
+    # 영역별 연속행
+    areas, arng = [], {}
     r = FIRST
     for c in codes:
         a = items[c].get("area", "기타")
-        if a not in area_rows:
-            areas.append(a); area_rows[a] = [r, r]
-        area_rows[a][1] = r
+        if a not in arng:
+            areas.append(a); arng[a] = [r, r]
+        arng[a][1] = r
         r += 1
-    row_of = {c: FIRST + i for i, c in enumerate(codes)}
+    D = len(areas)
 
-    wb = openpyxl.Workbook()
-    cov = wb.active; cov.title = "0. 표지"
-    tgt = wb.create_sheet("1. 진단 대상")
-    wg = wb.create_sheet(GRAPH)
-    sm = wb.create_sheet(SUM)
-    dt = wb.create_sheet(DET)
+    wb = openpyxl.load_workbook(SRC)
 
-    # ---- 0. 표지 ----
-    cov.sheet_view.showGridLines = False
-    for col, w in zip("BCDEFGHIJKL", (13, 13, 13, 13, 13, 13, 13, 13, 4, 11, 22)):
-        cov.column_dimensions[col].width = w
-    for i, (k, v) in enumerate([("문서번호", "XXXXX-VA-2026XXX"), ("작성자", "취약점진단팀"),
-                                ("보안등급", "Confidential"), ("Ver", "ver 1.0")]):
-        a = cov.cell(3 + i, 11, k); a.fill = GRAY_LBL; a.font = BOLD; a.alignment = CEN; a.border = BORDER
-        b = cov.cell(3 + i, 12, v); b.alignment = CEN; b.border = BORDER
-    for rng, text, font in (("B11:I11", '"진단대상" 취약점 진단', Font(bold=True, size=16)),
-                            ("B13:I13", f"클라우드({label}) 진단 상세결과", Font(bold=True, size=24)),
-                            ("B18:I18", "", Font(bold=True, size=14)),
-                            ("B21:I21", guide, Font(size=10, color="FF808080"))):
-        cov.merge_cells(rng)
-        cc = cov[rng.split(":")[0]]; cc.value = text; cc.font = font
-        cc.alignment = Alignment(horizontal="center", vertical="center")
+    # 1) 시트명 (Oracle) 제거 + 모든 수식의 (Oracle) 참조 정리
+    for ws in wb.worksheets:
+        if "(Oracle)" in ws.title:
+            ws.title = ws.title.replace("(Oracle)", "")
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith("=") and "(Oracle)" in cell.value:
+                    cell.value = cell.value.replace("(Oracle)", "")
 
-    # ---- 1. 진단 대상 ----
-    tgt.cell(1, 2, f"  ※ 진단 대상 리스트 - 클라우드({label}) 1대").font = Font(bold=True, size=13)
-    _h(tgt, 2, 2, "순번"); _h(tgt, 2, 3, "진단 대상"); tgt.merge_cells("C2:F2"); _h(tgt, 2, 7, "비고")
-    for c, t in ((3, "계정/구독"), (4, "ID"), (5, "리전/버전"), (6, "용도")):
-        _h(tgt, 3, c, t)
-    b4 = tgt.cell(4, 2, label); b4.fill = ORANGE; b4.font = BOLD; b4.alignment = CEN; b4.border = BORDER
-    for c in range(2, 7):
-        cc = tgt.cell(5, c); cc.border = BORDER; cc.alignment = CEN
-    for col, w in zip("BCDEFG", (8, 22, 22, 20, 24, 6)):
-        tgt.column_dimensions[col].width = w
+    det = wb[DET]; sm = wb[SUM]; g = wb[GRAPH]
+    OLD_LAST = 31          # DBMS 항목 마지막행
+    OLD_T1, OLD_T2 = 32, 33  # 점검결과, 보안적용율
 
-    # ---- 3-1. 진단 결과(상세) ----
-    dt.cell(2, 2, f"클라우드({label}) 취약점 진단 상세결과({n}항목)").font = Font(bold=True, size=14)
-    for c, t in ((2, "진단항목"), (3, "항목코드"), (4, "세부 진단항목"), (5, "진단기준"), (6, "판정"), (7, "상세 내용 / 근거")):
-        _h(dt, 3, c, t)
-    for c in codes:
-        m = items[c]; rr = row_of[c]
-        dt.cell(rr, 3, c); dt.cell(rr, 4, m.get("title", "")); dt.cell(rr, 5, m.get("crit", ""))
-        for col in range(2, 8):
-            cc = dt.cell(rr, col); cc.border = BORDER; cc.alignment = CEN if col in (3, 6) else LEFT
-    for a in areas:
-        s, e = area_rows[a]
-        dt.cell(s, 2, a)
-        if e > s:
-            dt.merge_cells(start_row=s, start_column=2, end_row=e, end_column=2)
-    for col, w in zip("BCDEFG", (16, 11, 26, 46, 8, 60)):
-        dt.column_dimensions[col].width = w
-    fc = f"F{FIRST}:F{last}"
-    dt.conditional_formatting.add(fc, CellIsRule(operator="equal", formula=['"취약"'], font=Font(color="FFFF0000", bold=True)))
-    dt.conditional_formatting.add(fc, CellIsRule(operator="equal", formula=['"N/A"'], font=Font(color="FF808080")))
-    dt.conditional_formatting.add(fc, FormulaRule(formula=[f'ISNUMBER(SEARCH("인터뷰",F{FIRST}))'], font=Font(color="FF0070C0", bold=True)))
-    dt.freeze_panes = "A4"
+    # 2) 3-1 상세 재구성
+    _rebuild_sheet(det, codes, items, arng, areas, n, last, kind="detail")
+    # 3) 2-2 요약 재구성
+    _rebuild_sheet(sm, codes, items, arng, areas, n, last, kind="summary")
 
-    # ---- 2-2. 요약 진단결과 ----
-    sm.cell(2, 2, f"클라우드({label}) 취약점 진단 요약결과({n}항목)").font = Font(bold=True, size=14)
-    for c, t in ((2, "진단항목"), (3, "항목코드"), (4, "세부 진단항목"), (5, "중요도"), (6, "진단결과")):
-        _h(sm, 3, c, t)
-    _h(sm, 3, 8, "진단 영역"); _h(sm, 3, 9, "양호율")
-    for c in codes:
-        m = items[c]; rr = row_of[c]
-        sm.cell(rr, 3, c); sm.cell(rr, 4, m.get("title", "")); sm.cell(rr, 5, m.get("imp", ""))
-        sm.cell(rr, 6, f"='{DET}'!F{rr}")
-        for col in range(2, 7):
-            cc = sm.cell(rr, col); cc.border = BORDER; cc.alignment = CEN if col in (3, 5, 6) else LEFT
-    for a in areas:
-        s, e = area_rows[a]
-        sm.cell(s, 2, a)
-        if e > s:
-            sm.merge_cells(start_row=s, start_column=2, end_row=e, end_column=2)
+    # 4) 표지/진단대상 라벨
+    cov = wb["0. 표지"]
+    for row in cov.iter_rows():
+        for cell in row:
+            if isinstance(cell.value, str) and "진단 상세결과" in cell.value:
+                cell.value = f"클라우드({label}) 진단 상세결과"
+    tg = wb["1. 진단 대상"]
+    for row in tg.iter_rows():
+        for cell in row:
+            if cell.value == "Oracle":
+                cell.value = label
+            elif isinstance(cell.value, str) and "진단 대상 리스트" in cell.value:
+                cell.value = f"  ※ 진단 대상 리스트 - 클라우드({label}) 1대"
+
+    # 5) 그래프 참조 갱신(보안적용율 행 이동, 도메인 헬퍼/레이더)
+    t2 = last + 2   # 보안적용율 새 행
+    def _fix(cell_ref, formula):
+        g[cell_ref] = formula
+    _fix("C5", f"=AVERAGE('{SUM}'!F{t2}:F{t2})")
+    _fix("D18", f'=COUNTIF(\'{SUM}\'!F{t2}:F{t2},">=0.85")')
+    _fix("D20", f'=COUNTIF(\'{SUM}\'!F{t2}:F{t2},"<0.7")')
+    # 도메인 헬퍼(B67.., C67..) — 도메인 시작행의 B/H 참조. 도메인 수만큼.
     for i, a in enumerate(areas):
-        s, e = area_rows[a]; rr = FIRST + i
-        sm.cell(rr, 8, a).border = BORDER; sm.cell(rr, 8).alignment = LEFT
-        rng = f"F{s}:F{e}"
-        cell = sm.cell(rr, 9, f'=IFERROR(COUNTIF({rng},"양호")/(COUNTA({rng})-COUNTIF({rng},"N/A")-COUNTIF({rng},"인터뷰 필요")),1)')
-        cell.number_format = "0.0%"; cell.border = BORDER; cell.alignment = CEN
-    for col, w in zip("BCDEFHI", (16, 11, 30, 8, 12, 20, 10)):
-        sm.column_dimensions[col].width = w
-    fc = f"F{FIRST}:F{last}"
-    sm.conditional_formatting.add(fc, CellIsRule(operator="equal", formula=['"취약"'], font=Font(color="FFFF0000", bold=True)))
-    sm.conditional_formatting.add(fc, CellIsRule(operator="equal", formula=['"N/A"'], font=Font(color="FF808080")))
-    sm.conditional_formatting.add(fc, FormulaRule(formula=[f'ISNUMBER(SEARCH("인터뷰",F{FIRST}))'], font=Font(color="FF0070C0", bold=True)))
+        s = arng[a][0]
+        g.cell(67 + i, 2, f"='{SUM}'!B{s}")
+        g.cell(67 + i, 3, f"='{SUM}'!H{s}")
+    for i in range(D, 6):   # 남는 헬퍼행 비움(기존 4개 초과분/미만분)
+        g.cell(67 + i, 2, None); g.cell(67 + i, 3, None)
+    # 레이더 차트 카테고리/값 범위를 도메인 수에 맞게
+    for ch in g._charts:
+        if type(ch).__name__ == "RadarChart":
+            for ser in ch.series:
+                if ser.val and ser.val.numRef:
+                    ser.val.numRef.f = f"'{GRAPH}'!$C$67:$C${66 + D}"
+                if ser.cat and ser.cat.strRef:
+                    ser.cat.strRef.f = f"'{GRAPH}'!$B$67:$B${66 + D}"
 
-    # ---- 2-1. 요약결과(그래프) ----
-    wg.sheet_view.showGridLines = False
-    wg.cell(1, 1, f"클라우드({label}) 진단 요약").font = Font(bold=True, size=13)
-    _h(wg, 3, 1, "진단 영역"); _h(wg, 3, 2, "양호율")
-    for i, a in enumerate(areas):
-        wg.cell(4 + i, 1, a).border = BORDER
-        cc = wg.cell(4 + i, 2, f"='{SUM}'!I{FIRST + i}"); cc.number_format = "0.0%"; cc.border = BORDER; cc.alignment = CEN
-    a_last = 4 + len(areas) - 1
-    _h(wg, 3, 4, "구분"); _h(wg, 3, 5, "건수")
-    for i, lab in enumerate(["양호", "취약", "인터뷰 필요", "N/A"]):
-        wg.cell(4 + i, 4, lab).border = BORDER
-        wg.cell(4 + i, 5, f'=COUNTIF(\'{SUM}\'!$F${FIRST}:$F${last},"{lab}")').border = BORDER
-    wg.column_dimensions["A"].width = 20; wg.column_dimensions["D"].width = 12
+    wb.save(out)
+    print(f"양식 저장: {out}  ({n}항목, 영역 {D}, DBMS 양식 기반)")
 
-    bar = BarChart3D(); bar.title = "영역별 양호율"; bar.type = "col"; bar.legend = None; bar.height = 8; bar.width = 13
-    bar.add_data(Reference(wg, min_col=2, min_row=3, max_row=a_last), titles_from_data=True)
-    bar.set_categories(Reference(wg, min_col=1, min_row=4, max_row=a_last))
-    bar.dataLabels = DataLabelList(); bar.dataLabels.showVal = True
-    wg.add_chart(bar, "A10")
-    pie = PieChart3D(); pie.title = "진단 결과 분포"; pie.height = 8; pie.width = 13
-    pie.add_data(Reference(wg, min_col=5, min_row=3, max_row=7), titles_from_data=True)
-    pie.set_categories(Reference(wg, min_col=4, min_row=4, max_row=7))
-    pie.dataLabels = DataLabelList(); pie.dataLabels.showPercent = True
-    wg.add_chart(pie, "J10")
-    radar = RadarChart(); radar.type = "filled"; radar.title = "영역별 양호율(레이더)"; radar.style = 26
-    radar.height = 8; radar.width = 13; radar.legend = None
-    radar.add_data(Reference(wg, min_col=2, min_row=3, max_row=a_last), titles_from_data=True)
-    radar.set_categories(Reference(wg, min_col=1, min_row=4, max_row=a_last))
-    wg.add_chart(radar, "A28")
 
+def _rebuild_sheet(ws, codes, items, arng, areas, n, last, kind):
+    OLD_LAST, OLD_T1, OLD_T2 = 31, 32, 33
+    cols = list(range(2, 13))   # B~L
+    _unmerge_all(ws)
+    # 옛 값/수식(항목 판정·집계·트레일링) 비우기 → 새로 채움(수식셀 잔존 방지)
+    for r in range(FIRST, OLD_T2 + 1):
+        for c in range(6, 13):   # F~L
+            ws.cell(r, c).value = None
+    # 새 항목 행이 기존(6~31)보다 많으면 스타일 복사로 확장
+    for rr in range(OLD_LAST + 1, last + 1):
+        _copy_row_style(ws, OLD_LAST, rr, cols)
+    # 항목 내용 채우기
+    for i, c in enumerate(codes):
+        r = FIRST + i
+        m = items[c]
+        ws.cell(r, 3, c)
+        ws.cell(r, 4, m.get("title", ""))
+        ws.cell(r, 5, m.get("crit", ""))            # 진단기준
+        ws.cell(r, 6, None)                          # F: 판정(상세는 빈칸/요약은 아래서 수식)
+        if kind == "detail":
+            ws.cell(r, 7, None)                      # G: 근거
+        else:  # summary
+            ws.cell(r, 5, m.get("imp", ""))          # 요약 E열 = 중요도
+            ws.cell(r, 6, (f"=INDEX('{DET}'!$F$6:$G${last},"
+                           f"MATCH($C{r},'{DET}'!$C$6:$C${last},0),"
+                           f"MATCH(F$3,'{DET}'!$F$3:$G$3,0))"))
+            ws.cell(r, 9, f'=IF(COUNTIF($F{r}:$F{r},"N/A")=COUNTA($F{r}:$F{r}),"N/A",$J{r}/(COUNTA($F{r}:$F{r})-$L{r}))')
+            ws.cell(r, 10, f'=COUNTIF($F{r}:$F{r},"양호")')
+            ws.cell(r, 11, f'=COUNTIF($F{r}:$F{r},"취약")')
+            ws.cell(r, 12, f'=COUNTIF($F{r}:$F{r},"N/A")')
+    # 항목이 기존보다 적으면 남은 행(끝~31) 비우기
+    for r in range(last + 1, OLD_LAST + 1):
+        for c in cols:
+            ws.cell(r, c).value = None
+    # 영역 병합(B열) + (요약) H열 영역별점수
+    for a in areas:
+        s, e = arng[a]
+        ws.cell(s, 2, a)
+        if e > s:
+            ws.merge_cells(start_row=s, start_column=2, end_row=e, end_column=2)
+        if kind == "summary":
+            ws.cell(s, 8, f'=IF(COUNTIF(I{s}:I{e},"N/A")=COUNTA(I{s}:I{e}),"N/A",AVERAGE(I{s}:I{e}))')
+            if e > s:
+                ws.merge_cells(start_row=s, start_column=8, end_row=e, end_column=8)
+    # 점검결과/보안적용율 행 이동(스타일 복사 후 수식)
+    t1, t2 = last + 1, last + 2
+    for src, dst in ((OLD_T1, t1), (OLD_T2, t2)):
+        if src != dst:
+            _copy_row_style(ws, src, dst, cols)
+            for c in cols:                            # 원래 위치 값 비움(이동)
+                if FIRST <= src <= last:
+                    continue
+    # 이동 대상 라벨/수식
+    ws.cell(t1, 2, "점검결과"); ws.merge_cells(start_row=t1, start_column=2, end_row=t2, end_column=2)
+    ws.cell(t1, 3, "취약항목 개수"); ws.merge_cells(start_row=t1, start_column=3, end_row=t1, end_column=5)
+    ws.cell(t1, 6, f'=COUNTIF(F$6:F${last},"취약")')
+    ws.cell(t2, 3, "보안 적용율 (양호항목 / 진단항목) %"); ws.merge_cells(start_row=t2, start_column=3, end_row=t2, end_column=5)
+    ws.cell(t2, 6, f'=(COUNTIF(F$6:F${last},"양호"))/(COUNTA(F$6:F${last})-COUNTIF(F$6:F${last},"N/A")-COUNTIF(F$6:F${last},"인터뷰 필요"))')
+    ws.cell(t2, 6).number_format = "0.0%"
+    # 헤더(B2:F2) 제목 갱신
+    for row in ws.iter_rows(min_row=2, max_row=2):
+        for cell in row:
+            if isinstance(cell.value, str) and "취약점 진단" in cell.value:
+                cell.value = f"취약점 진단 {'상세결과' if kind=='detail' else '요약결과'}({n}항목)"
+    # 조건부서식 재설정(취약=빨강/N/A=회색/인터뷰=파랑)
     try:
-        wb.calc_properties.fullCalcOnLoad = True
+        ws.conditional_formatting = ws.conditional_formatting.__class__()
     except Exception:
         pass
-    wb.save(outname)
-    print(f"양식 저장: {outname}  ({n}항목, 영역 {len(areas)})")
+    fc = f"F{FIRST}:F{last}"
+    ws.conditional_formatting.add(fc, CellIsRule(operator="equal", formula=['"취약"'], font=Font(color="FFFF0000", bold=True)))
+    ws.conditional_formatting.add(fc, CellIsRule(operator="equal", formula=['"N/A"'], font=Font(color="FF808080")))
+    ws.conditional_formatting.add(fc, FormulaRule(formula=[f'ISNUMBER(SEARCH("인터뷰",F{FIRST}))'], font=Font(color="FF0070C0", bold=True)))
 
 
 def main():
