@@ -1,241 +1,188 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""서버(Linux/Windows) 진단 결과 → 보고서 양식(xlsx) 채우기.
+"""서버(Linux/Windows) 진단 결과 → 공식 결과보고서 양식(다중서버) 채우기.
 
-보고서_양식_{Linux,Windows}.xlsx 의 시트(0.표지 / 1.진단대상 / 2-1.그래프 /
-2-2.요약 / 3-1.상세)를 채운다. 차트가 깨지지 않게 xlsx 를 zip 단위로 열어
-시트 XML 문자열만 직접 편집하고 charts/drawings/styles 등은 원본 그대로 다시 압축한다.
+보고서_양식_{Linux,Windows}.xlsx 를 openpyxl 로 열어 표지/진단대상/상세(3-1)를 채우고,
+2-2 요약과 2-1 그래프(3D막대·3D원형·레이더)는 템플릿 수식으로 자동 계산되게 한다.
+리눅스는 2-2 HLOOKUP 수식과 그래프 시트 수식·차트를 명시적으로 복원/재구성한다.
 
-이 파일은 GUI/tkinter 에 의존하지 않는다. make_report.py(CLI)가 사용한다.
+make_report.py(CLI)가 servers 리스트를 넘겨 호출한다.
 """
 import datetime
-import io
-import re
-import zipfile
-import xml.dom.minidom as _minidom
 
 MANUAL_LABEL = "인터뷰 필요"
-REPORT_STATUS = {
-    "양호": "양호", "취약": "취약", "N/A": "양호",   # N/A 는 보고서에서 양호 처리(대상 없음)
-    "수동확인": MANUAL_LABEL, MANUAL_LABEL: MANUAL_LABEL,
+# 서버 보고서는 양호/취약/N/A 3분류 → 수동확인/인터뷰는 N/A(대상없음/판단보류)로 표기
+RESULT_MAP = {
+    "양호": "양호", "취약": "취약", "N/A": "N/A", "N/a": "N/A",
+    "수동확인": "N/A", MANUAL_LABEL: "N/A", "": "N/A",
+    "GOOD": "양호", "VULN": "취약", "NA": "N/A", "MAN": "N/A",
 }
 
-# 계열별 양식 스펙 (시트 XML 직접 편집 → 그래프 보존). template 은 호출 시 경로로 주입.
-REPORT_SPECS = {
+SPECS = {
     "linux": {
-        "cover": "xl/worksheets/sheet1.xml", "target": "xl/worksheets/sheet3.xml",
-        "graph": "xl/worksheets/sheet4.xml", "summary": "xl/worksheets/sheet5.xml",
-        "detail": "xl/worksheets/sheet6.xml",
-        "broken_from": '<sheet name="2-1. 요약결과(그래프)_깨짐" sheetId="2" state="visible" r:id="rId2" />',
-        "broken_to":   '<sheet name="2-1. 요약결과(그래프)_깨짐" sheetId="2" state="hidden" r:id="rId2" />',
-        "label": "Linux", "prefix": "U", "count": 67, "first_row": 6, "last_row": 72,
-        "detail_cols_from": 8, "detail_cols_to": 35,
-        "score_range": "'2-2. 요약 진단결과(Linux)'!$F$74:$T$74",
-        "summary_rewrite": "linux",
-        "dxf_red": 4, "dxf_blue": 7,
-        "servers": 4, "summary_slots": 6,
+        "cover": "0. 표지", "target": "1. 진단 대상",
+        "graph": "2-1. 요약결과(그래프)", "summary": "2-2. 요약 진단결과(Linux)",
+        "detail": "3-1. 진단 결과(Linux)",
+        "label": "Linux", "prefix": "U", "id_col": "C",
+        "detail_first": 6, "detail_last": 72,
+        "result_cols": ["F", "H", "J", "L"], "sum_cols": ["F", "G", "H", "I"],
+        "servers": 4, "restore_formulas": True,
     },
     "windows": {
-        "cover": "xl/worksheets/sheet2.xml", "target": "xl/worksheets/sheet3.xml",
-        "graph": "xl/worksheets/sheet4.xml", "summary": "xl/worksheets/sheet5.xml",
-        "detail": "xl/worksheets/sheet6.xml",
-        "broken_from": '<sheet name="2-1. 요약결과(그래프)_깨짐" sheetId="3" r:id="rId1"/>',
-        "broken_to":   '<sheet name="2-1. 요약결과(그래프)_깨짐" sheetId="3" state="hidden" r:id="rId1"/>',
-        "label": "Windows", "prefix": "W", "count": 64, "first_row": 6, "last_row": 69,
-        "detail_cols_from": 8, "detail_cols_to": 13,
-        "score_range": "'2-2. 요약 진단결과(Window)'!$F$71:$G$71",
-        "summary_rewrite": "windows",
-        "dxf_red": 22, "dxf_blue": 21,
-        "servers": 2, "summary_slots": 2,
+        "cover": "0. 표지", "target": "1. 진단 대상",
+        "graph": "2-1. 요약결과(그래프)", "summary": "2-2. 요약 진단결과(Window)",
+        "detail": "3-1. 진단 결과(window)",
+        "label": "Windows", "prefix": "W", "id_col": "C",
+        "detail_first": 6, "detail_last": 69,
+        "result_cols": ["F", "H"], "sum_cols": ["F", "G"],
+        "servers": 2, "restore_formulas": False,   # 윈도우 양식은 IFERROR 수식 완비 → 데이터만
     },
 }
+TARGET_FIRST_ROW = 5
+COVER = {"docno": "L3", "author": "L4", "grade": "L5", "ver": "L6", "date": "B18"}
 
 
-# ---------------- 양식 xlsx 직접 편집 헬퍼 ----------------
-def _xesc(s):
-    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def _norm(v):
+    return RESULT_MAP.get((v or "").strip(), RESULT_MAP.get((v or "").strip().upper(), "N/A"))
 
 
-def _col_letter(n):
-    s = ""
-    while n > 0:
-        n, r = divmod(n - 1, 26)
-        s = chr(65 + r) + s
-    return s
+def _put(ws, addr, value):
+    c = ws[addr]
+    if type(c).__name__ == "MergedCell":
+        raise RuntimeError(f"{ws.title}!{addr} 는 병합 셀입니다.")
+    c.value = value
 
 
-def _cell_match(xml, ref):
-    return re.search(r'<c r="' + re.escape(ref) + r'"([^>]*?)(?:/>|>.*?</c>)', xml, re.S)
+def _fill_cover(wb, spec, meta):
+    ws = wb[spec["cover"]]
+    _put(ws, COVER["docno"], meta.get("docno", "XXXXX-VA-2026XXX"))
+    _put(ws, COVER["author"], meta.get("author", "취약점진단팀"))
+    _put(ws, COVER["grade"], meta.get("grade", "Confidential"))
+    _put(ws, COVER["ver"], meta.get("version", "ver 1.0"))
+    _put(ws, COVER["date"], datetime.date.today())
 
 
-def _cell_style(attrs):
-    m = re.search(r'\bs="\d+"', attrs)
-    return " " + m.group(0) if m else ""
+def _fill_targets(wb, spec, servers):
+    ws = wb[spec["target"]]
+    for i, sv in enumerate(servers):
+        r = TARGET_FIRST_ROW + i
+        _put(ws, f"B{r}", i + 1)
+        _put(ws, f"C{r}", (sv.get("host") or "").strip())
+        _put(ws, f"D{r}", (sv.get("ip") or "-").strip())
+        _put(ws, f"E{r}", (sv.get("osver") or "").strip())
+        _put(ws, f"F{r}", (sv.get("role") or "-").strip())
+    _put(ws, "B1", f"  ※ 진단 대상 리스트 - 서버 {len(servers)}대 ({spec['label']} {len(servers)}대)")
 
 
-def _cell_replace(xml, ref, builder, required=True):
-    m = _cell_match(xml, ref)
-    if not m:
-        if required:
-            raise KeyError("cell %s not found" % ref)
-        return xml
-    return xml[:m.start()] + builder(_cell_style(m.group(1))) + xml[m.end():]
+def _fill_detail(wb, spec, servers):
+    ws = wb[spec["detail"]]
+    first, last = spec["detail_first"], spec["detail_last"]
+    row_of = {}
+    for r in range(first, last + 1):
+        v = ws[f"{spec['id_col']}{r}"].value
+        if v:
+            row_of[str(v).strip().upper()] = r
+    for idx, sv in enumerate(servers):
+        rc = spec["result_cols"][idx]
+        ec = ws[f"{rc}1"].offset(0, 1).column_letter    # 판정 열 오른쪽 = 근거 열
+        by_code = {(r.get("code", "") or "").strip().upper(): r for r in sv.get("results", [])}
+        for code, r in row_of.items():
+            x = by_code.get(code)
+            if x is None:
+                _put(ws, f"{rc}{r}", "N/A"); _put(ws, f"{ec}{r}", "점검 결과 없음")
+                continue
+            _put(ws, f"{rc}{r}", _norm(x.get("final") or x.get("status", "")))
+            ev = " / ".join(x.get("evidence", []))
+            note = (x.get("note") or "").strip()
+            if note:
+                ev = f"{ev}  [검증자: {note}]" if ev else f"[검증자: {note}]"
+            _put(ws, f"{ec}{r}", ev)
 
 
-def _put_str(xml, ref, text, required=True, s=None):
-    def build(old):
-        st = f' s="{s}"' if s is not None else old
-        return (f'<c r="{ref}"{st} t="inlineStr"><is><t xml:space="preserve">'
-                f'{_xesc(text)}</t></is></c>')
-    return _cell_replace(xml, ref, build, required)
+def _restore_summary_formulas(wb, spec):
+    ws = wb[spec["summary"]]
+    first, last = spec["detail_first"], spec["detail_last"]
+    det = spec["detail"]
+    for r in range(first, last + 1):
+        for c in spec["sum_cols"]:
+            ws[f"{c}{r}"].value = (
+                f"=HLOOKUP({c}$3,'{det}'!$F$3:$M$72,ROW(A{r-2}),FALSE)")
 
 
-def _put_num(xml, ref, num, required=True):
-    return _cell_replace(xml, ref, lambda s: f'<c r="{ref}"{s}><v>{num}</v></c>', required)
-
-
-def _put_formula(xml, ref, formula, required=True):
-    esc = _xesc(formula)
-    return _cell_replace(
-        xml, ref, lambda s: f'<c r="{ref}"{s}><f>{esc}</f><v/></c>', required)
-
-
-def _clear_cols(xml, row, col_from, col_to):
-    for c in range(col_from, col_to + 1):
-        ref = f"{_col_letter(c)}{row}"
-        m = _cell_match(xml, ref)
-        if not m:
-            continue
-        frag = m.group(0)
-        if "<f>" in frag or "<v>" in frag or "<is>" in frag:
-            xml = (xml[:m.start()]
-                   + f'<c r="{ref}"{_cell_style(m.group(1))}/>'
-                   + xml[m.end():])
-    return xml
-
-
-def _add_verdict_cf(sheet_xml, sqref, dxf_red, dxf_blue):
-    top = sqref.split(":")[0]
-    block = (
-        f'<conditionalFormatting sqref="{sqref}">'
-        f'<cfRule type="containsText" dxfId="{dxf_red}" priority="1" operator="containsText" '
-        f'text="취약"><formula>NOT(ISERROR(SEARCH("취약",{top})))</formula></cfRule>'
-        f'<cfRule type="containsText" dxfId="{dxf_blue}" priority="2" operator="containsText" '
-        f'text="인터뷰"><formula>NOT(ISERROR(SEARCH("인터뷰",{top})))</formula></cfRule>'
-        f'</conditionalFormatting>')
-    return sheet_xml.replace("<pageMargins", block + "<pageMargins", 1)
-
-
-def _apply_rate(col, last):
-    r = f"{col}$6:{col}${last}"
-    return (f'(COUNTIF({r},"양호"))/(COUNTA({r})'
-            f'-COUNTIF({r},"N/A")-COUNTIF({r},"{MANUAL_LABEL}"))')
+def _fix_graph_linux(wb, spec, n):
+    from openpyxl.chart import BarChart3D, PieChart3D, RadarChart, Reference
+    from openpyxl.chart.label import DataLabelList
+    ws = wb[spec["graph"]]
+    S_TARGET, S_SUM = spec["target"], spec["summary"]
+    last = TARGET_FIRST_ROW + n - 1
+    tgt = f"'{S_TARGET}'!$B${TARGET_FIRST_ROW}:$B${last}"
+    sm = f"'{S_SUM}'!$F$74:$I$74"
+    ws["C5"] = f"=AVERAGE({sm})"; ws["C6"] = f"=AVERAGE({sm})"
+    ws["D5"] = "=D6"; ws["D6"] = f"=COUNTA({tgt})"
+    ws["D17"] = f"=COUNTA({tgt})"
+    ws["D18"] = f'=COUNTIF({sm},">=0.85")'
+    ws["D19"] = "=D17-(D18+D20)"
+    ws["D20"] = f'=COUNTIF({sm},"<0.7")'
+    for i, r in enumerate(range(72, 77)):
+        src = [6, 19, 39, 69, 70][i]
+        ws[f"B{r}"] = f"='{S_SUM}'!B{src}"
+        ws[f"C{r}"] = f"='{S_SUM}'!K{src}"
+        ws[f"D{r}"] = "=$C$6"
+    for r in range(36, 51):
+        if r - 35 <= n:
+            ws[f"W{r}"] = f"=HLOOKUP($V{r},'{S_SUM}'!$F$3:$I$53,2,0)"
+            ws[f"X{r}"] = f"=HLOOKUP($V{r},'{S_SUM}'!$F$3:$I$74,72,0)"
+        else:
+            ws[f"W{r}"] = None; ws[f"X{r}"] = None
+    ws._charts = []
+    bar = BarChart3D(); bar.type = "col"; bar.legend = None
+    bar.add_data(Reference(ws, min_col=3, min_row=4, max_row=6), titles_from_data=True)
+    bar.set_categories(Reference(ws, min_col=2, min_row=5, max_row=6))
+    bar.dataLabels = DataLabelList(); bar.dataLabels.showVal = True
+    bar.width, bar.height = 12.6, 8.1
+    ws.add_chart(bar, "E3")
+    pie = PieChart3D()
+    pie.add_data(Reference(ws, min_col=3, min_row=18, max_row=20), titles_from_data=False)
+    pie.set_categories(Reference(ws, min_col=2, min_row=18, max_row=20))
+    pie.dataLabels = DataLabelList(); pie.dataLabels.showPercent = True
+    pie.width, pie.height = 12.6, 7.1
+    ws.add_chart(pie, "E31")
+    radar = RadarChart(); radar.type = "marker"
+    radar.add_data(Reference(ws, min_col=3, max_col=4, min_row=71, max_row=76), titles_from_data=True)
+    radar.set_categories(Reference(ws, min_col=2, min_row=72, max_row=76))
+    radar.y_axis.scaling.min, radar.y_axis.scaling.max = 0, 1
+    radar.width, radar.height = 13.6, 9.3
+    ws.add_chart(radar, "G71")
 
 
 # ---------------- 진입점 ----------------
-def fill_report(os_kind, servers, template_path, out_path):
-    """서버 여러 대 진단 결과를 계열 양식(다중서버)에 채워 out_path 로 저장한다.
+def fill_report(os_kind, servers, template_path, out_path, meta=None):
+    """서버 여러 대 결과를 계열 양식(다중서버)에 채워 저장.
 
     os_kind : 'linux' | 'windows'
-    servers : [{host, ip, osver, role, results:[{code,status,evidence,...}]}...]  (서버 1대당 1개)
-              — 하위호환: 단일 dict 또는 results 리스트도 허용.
-
-    템플릿은 3-1 상세의 서버별 판정/근거 컬럼만 채우면 2-2 요약·점수·차트가
-    수식(HLOOKUP/VLOOKUP/COUNTIF)으로 자동 계산된다. 따라서 데이터 셀만 채운다.
+    servers : [{host, ip, osver, role, results:[{code,status,evidence,...}]}...]
+              (단일 dict / results 리스트도 허용)
     """
-    spec = REPORT_SPECS[os_kind]
-    first, last = spec["first_row"], spec["last_row"]
-    pre = spec["prefix"]
-    cap = spec["servers"]
+    from openpyxl import load_workbook
+    spec = SPECS[os_kind]
+    meta = meta or {}
 
     if isinstance(servers, dict):
         servers = [servers]
     elif servers and isinstance(servers[0], dict) and "results" not in servers[0] and "code" in servers[0]:
         servers = [{"results": servers}]
-    servers = [s for s in servers if s.get("results")]
-    n = min(len(servers), cap)
+    servers = [s for s in servers if s.get("results")][: spec["servers"]]
+    if not servers:
+        raise ValueError("진단 결과(servers)가 비어 있습니다.")
 
-    with zipfile.ZipFile(template_path) as zin:
-        order = zin.namelist()
-        parts = {nm: zin.read(nm) for nm in order}
-
-    cover = parts[spec["cover"]].decode("utf-8")
-    target = parts[spec["target"]].decode("utf-8")
-    summary = parts[spec["summary"]].decode("utf-8")
-    detail = parts[spec["detail"]].decode("utf-8")
-    book = parts["xl/workbook.xml"].decode("utf-8")
-
-    # 표지: 작성일 자동
-    cover = _put_str(cover, "B18", datetime.date.today().strftime("%Y. %m. %d."), required=False)
-
-    # 1. 진단 대상: N대
-    target = _put_str(target, "B1", f"  ※ 진단 대상 리스트 - 서버 {n}대 ({spec['label']} {n}대)")
-    for i in range(n):
-        sv = servers[i]
-        row = 5 + i
-        target = _put_num(target, f"B{row}", i + 1)
-        target = _put_str(target, f"C{row}", (sv.get("host") or "").strip())
-        target = _put_str(target, f"D{row}", (sv.get("ip") or "-").strip())
-        target = _put_str(target, f"E{row}", (sv.get("osver") or "").strip())
-        target = _put_str(target, f"F{row}", (sv.get("role") or "-").strip(), required=False)
-    for row in range(5 + n, 20):
-        target = _clear_cols(target, row, 2, 6)
-
-    # 3-1 상세: 서버 i → 판정 컬럼(F,H,J,L=6+2i), 근거 컬럼(G,I,K,M=7+2i)
-    for i in range(n):
-        sv = servers[i]
-        cv, ce = 6 + 2 * i, 7 + 2 * i
-        vL, eL = _col_letter(cv), _col_letter(ce)
-        detail = _put_num(detail, f"{vL}3", i + 1, required=False)
-        detail = _put_str(detail, f"{eL}3", (sv.get("host") or "").strip(), required=False)
-        detail = _put_str(detail, f"{eL}4", (sv.get("ip") or "-").strip(), required=False)
-        detail = _put_str(detail, f"{eL}5", (sv.get("role") or "").strip(), required=False)
-        by_code = {r.get("code", ""): r for r in sv.get("results", [])}
-        for k in range(1, spec["count"] + 1):
-            r = by_code.get(f"{pre}-{k:02d}")
-            if not r:
-                continue
-            row = first - 1 + k
-            raw = r.get("final") or r.get("status", "")
-            verdict = REPORT_STATUS.get(raw, raw)
-            detail = _put_str(detail, f"{vL}{row}", verdict, required=False)
-            note = (r.get("note") or "").strip()
-            evidence = " / ".join(r.get("evidence", []))
-            if note:
-                evidence = f"{evidence}  [검증자: {note}]" if evidence else f"[검증자: {note}]"
-            detail = _put_str(detail, f"{eL}{row}", evidence, required=False)
-    for i in range(n, cap):     # 미사용 서버 컬럼 비우기(2-2 HLOOKUP #N/A 방지)
-        cv, ce = 6 + 2 * i, 7 + 2 * i
-        for row in [3, 4, 5] + list(range(first, last + 1)):
-            detail = _clear_cols(detail, row, cv, ce)
-
-    # 2-2 요약: 서버 번호 칸만 사용 대수로 맞추고 나머지 수식은 그대로 자동계산
-    for i in range(spec["summary_slots"]):
-        col = 6 + i
-        if i < n:
-            summary = _put_num(summary, f"{_col_letter(col)}3", i + 1, required=False)
-        else:
-            for row in [3, 4, 5] + list(range(first, last + 1)):
-                summary = _clear_cols(summary, row, col, col)
-
-    book = book.replace(spec["broken_from"], spec["broken_to"])
-    if "<calcPr" not in book:
-        book = book.replace("</workbook>", '<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>')
-    elif "fullCalcOnLoad" not in book:
-        book = re.sub(r"<calcPr ", '<calcPr fullCalcOnLoad="1" ', book, count=1)
-
-    edited = {
-        spec["cover"]: cover, spec["target"]: target,
-        spec["summary"]: summary, spec["detail"]: detail, "xl/workbook.xml": book,
-    }
-    for name, xml in edited.items():
-        _minidom.parseString(xml.encode("utf-8"))   # 형식 검증
-        parts[name] = xml.encode("utf-8")
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
-        for name in order:
-            zout.writestr(name, parts[name])
-    with open(out_path, "wb") as fh:
-        fh.write(buf.getvalue())
+    wb = load_workbook(template_path)
+    wb._external_links = []
+    _fill_cover(wb, spec, meta)
+    _fill_targets(wb, spec, servers)
+    _fill_detail(wb, spec, servers)
+    if spec["restore_formulas"]:
+        _restore_summary_formulas(wb, spec)
+        _fix_graph_linux(wb, spec, len(servers))
+    wb.calculation.fullCalcOnLoad = True
+    wb.save(out_path)
     return out_path
