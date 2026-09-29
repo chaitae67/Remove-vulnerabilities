@@ -142,16 +142,54 @@ def save_results(provider, os_label, host, results, out_path=None, want_xlsx=Tru
                         verdict, " / ".join(r.get("evidence", [])),
                         " / ".join(r.get("resources", []))])
     saved.append(csv_path)
-    # 2) 보고서 XLSX(표지/진단대상/요약그래프/요약결과/상세) — openpyxl 있으면 코드로 생성
+    # 2) 보고서 XLSX — 공식 CSP 양식(5시트+3차트) 채우기 우선, 안 되면 코드 생성 폴백
     if want_xlsx:
-        try:
-            import cloud_check.report as _rep
-            saved.append(_rep.build_report(provider, host, results, base + ".xlsx"))
-        except ImportError:
-            pass  # openpyxl 미설치 → CSV 로 충분
-        except Exception as e:  # noqa: BLE001
-            print(f"    (엑셀 보고서 생성 실패: {type(e).__name__}: {e} → CSV 로 저장됨)")
+        xlsx = base + ".xlsx"
+        if not _fill_cloud_template(provider, host, os_label, results, xlsx):
+            try:
+                import cloud_check.report as _rep
+                saved.append(_rep.build_report(provider, host, results, xlsx))
+            except ImportError:
+                pass  # openpyxl 미설치 → CSV 로 충분
+            except Exception as e:  # noqa: BLE001
+                print(f"    (엑셀 보고서 생성 실패: {type(e).__name__}: {e} → CSV 로 저장됨)")
+        else:
+            saved.append(xlsx)
     return saved
+
+
+def _fill_cloud_template(provider, host, os_label, results, out_path):
+    """공식 CSP 양식(보고서_양식_<CSP>.xlsx)을 찾아 server_report 로 채운다. 성공 시 True."""
+    suffix = {"aws": "_AWS.xlsx", "azure": "_Azure.xlsx",
+              "gcp": "_GCP.xlsx", "naver": "_Naver.xlsx"}.get(provider)
+    if not suffix:
+        return False
+    try:
+        import glob
+        import lxml.etree  # noqa: F401  (server_report 의존성)
+        import server_report
+    except Exception:
+        return False
+    tpl = None
+    dirs = [os.path.dirname(os.path.abspath(__file__))] + [p for p in sys.path if p]
+    for d in dirs:
+        try:
+            hits = [f for f in glob.glob(os.path.join(d, "*.xlsx")) if f.endswith(suffix)]
+        except Exception:
+            hits = []
+        if hits:
+            tpl = hits[0]
+            break
+    if not tpl:
+        return False
+    sv = {"host": host or provider.upper(), "ip": "-", "osver": os_label or provider.upper(),
+          "role": "클라우드 계정", "results": results}
+    try:
+        server_report.fill_report("cloud", [sv], tpl, out_path)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"    (양식 채우기 실패: {type(e).__name__}: {e} → 코드 생성으로 폴백)")
+        return False
 
 
 def _find_template(key):

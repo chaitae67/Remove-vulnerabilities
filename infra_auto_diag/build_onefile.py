@@ -24,8 +24,11 @@ def main():
     for path in sorted(glob.glob(os.path.join(HERE, "cloud_check", "*.py"))):
         with open(path, "rb") as f:
             embed["cloud_check/" + os.path.basename(path)] = base64.b64encode(f.read()).decode("ascii")
-    # 클라우드 직접 실행 시에도 서버 양식(5시트+3차트)으로 보고서 생성하도록 infra_report 도 내장(루트)
-    for top in ("infra_report.py",):
+    # 단일 파일에서도 공식 양식(5시트) 채우기가 되도록 생성기·양식·폴백을 내장(루트)
+    tops = ["infra_report.py", "server_report.py",
+            "보고서_양식_AWS.xlsx", "보고서_양식_Azure.xlsx",
+            "보고서_양식_GCP.xlsx", "보고서_양식_Naver.xlsx"]
+    for top in tops:
         p = os.path.join(HERE, top)
         if os.path.exists(p):
             with open(p, "rb") as f:
