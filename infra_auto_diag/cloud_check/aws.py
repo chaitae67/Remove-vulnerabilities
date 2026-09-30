@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """AWS 클라우드 취약점 진단 (SK Shieldus 2024 클라우드 보안가이드 41항목).
 
-READ-ONLY — describe_* / list_* / get_* 만 호출한다. 리소스를 변경하지 않는다.
-필요 권한: AWS 관리형 정책 `SecurityAudit` (또는 ViewOnlyAccess) 수준.
+READ-ONLY — describe_* / list_* / get_* (+ iam:GenerateCredentialReport) 만 호출한다. 리소스를 변경하지 않는다.
+필요 권한: AWS 관리형 정책 `SecurityAudit` + 4.13용 읽기 권한(backup:ListBackupPlans·GetBackupPlan·
+ListBackupSelections·ListProtectedResources, dlm:GetLifecyclePolicies), 또는 `ReadOnlyAccess`.
 
 자동 판정이 가능한 항목은 boto3 로 직접 확인하고,
 업무 컨텍스트가 필요한 항목(1인 1계정, 불필요한 계정, 키 보관 위치 등)은
@@ -11,6 +12,7 @@ READ-ONLY — describe_* / list_* / get_* 만 호출한다. 리소스를 변경�
 조회 권한이 없어 확인하지 못한 항목은 '양호'가 아니라 '수동확인'으로 둔다.
 """
 import datetime
+import re
 
 from .base import Reporter, safe, GOOD, VULN, NA, MAN
 from .aws_items import ITEMS
@@ -420,9 +422,11 @@ def _s3_exposure(ctx):
         try:
             s3c = sess.client("s3control", region_name=sess.region_name or "us-east-1")
             acfg = s3c.get_public_access_block(AccountId=ctx["acct"])["PublicAccessBlockConfiguration"]
-            acct_all = all(acfg.get(k) for k in _S3_PAB_KEYS)
+            n_on = sum(bool(acfg.get(k)) for k in _S3_PAB_KEYS)
+            acct_all = n_on == len(_S3_PAB_KEYS)
             if not acct_all:
-                note.append("계정 수준 퍼블릭 액세스 차단: 일부만 설정")
+                note.append(f"계정 수준 퍼블릭 액세스 차단: {len(_S3_PAB_KEYS)}개 중 {n_on}개 설정"
+                            + (" (모두 해제 — 버킷별 설정으로 판정)" if n_on == 0 else ""))
         except Exception as e:
             if _is_denied(e):
                 note.append("계정 수준 퍼블릭 액세스 차단 조회 권한 없음(s3:GetAccountPublicAccessBlock)")
@@ -445,13 +449,24 @@ def _s3_exposure(ctx):
     return c["s3exp"]
 
 
+def _stream_of(stream, iid, host):
+    """로그 스트림 이름이 이 인스턴스 것인지 — 인스턴스 ID 는 앞뒤가 16진수가 아닐 때, 호스트명은 접두어 뒤가
+    숫자가 아닐 때만 인정한다(ip-10-0-1-5 가 다른 인스턴스의 ip-10-0-1-50 스트림과 맞지 않도록)."""
+    s = stream.lower()
+    if re.search(rf"(?<![0-9a-f]){re.escape(iid.lower())}(?![0-9a-f])", s):
+        return True
+    return bool(host) and re.match(rf"{re.escape(host.lower())}(?![0-9])", s) is not None
+
+
 _KEY_EXT = (".pem", ".ppk", ".key")
 _KEY_NAMES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
+_CERT_HINTS = ("cert", "chain", "bundle", "public")
+_EFS_AUTO_PLAN = "aws/efs/automatic-backup-plan"
 
 
 def _key_files(s3, bucket, cap=20000):
     """버킷에서 키 파일로 보이는 객체 키 목록과 검사 상한 도달 여부. 객체 내용은 읽지 않는다.
-    인증서로 보이는 이름(cert/chain/public, ca*)은 제외한다."""
+    인증서로 보이는 이름(cert/chain/bundle/public)은 제외한다."""
     hits, n = [], 0
     pages = (s3.get_paginator("list_objects_v2").paginate(Bucket=bucket)
              if s3.can_paginate("list_objects_v2") else [s3.list_objects_v2(Bucket=bucket)])
@@ -459,8 +474,8 @@ def _key_files(s3, bucket, cap=20000):
         for o in page.get("Contents", []):
             n += 1
             base = o["Key"].rsplit("/", 1)[-1].lower()
-            if (base.endswith(_KEY_EXT) or base in _KEY_NAMES) and not (
-                    any(t in base for t in ("cert", "chain", "public")) or base.startswith("ca")):
+            if (base.endswith(_KEY_EXT) or base in _KEY_NAMES) and not any(
+                    t in base for t in _CERT_HINTS):
                 hits.append(o["Key"])
             if n >= cap:
                 return hits, True
@@ -612,7 +627,7 @@ def _account_mgmt(rep, ctx):
 
     # 1.5 Key Pair 접근 관리 — EC2 접속 방식
     def c15():
-        no_key, total = [], 0
+        no_key, windows, total = [], [], 0
         for r in ctx["regions"]:
             ec2 = sess.client("ec2", region_name=r)
             for resv in _pages(ec2, "describe_instances", "Reservations",
@@ -622,13 +637,19 @@ def _account_mgmt(rep, ctx):
                     total += 1
                     if not i.get("KeyName"):
                         no_key.append(f"{i['InstanceId']}({r})")
+                    if i.get("Platform") == "windows" or "windows" in (i.get("PlatformDetails") or "").lower():
+                        windows.append(i["InstanceId"])
+        # Windows 는 RDP 가 암호 인증 구조(Key Pair 는 초기 Administrator 암호 복호화용)라 근거에 구분해 둔다
+        win_note = ([f"참고: Windows {len(windows)}대({', '.join(windows)})는 RDP 암호 인증 구조 — Key Pair 는 "
+                     "초기 Administrator 암호 복호화용이므로 별도 로컬 계정 암호로 접속하는지 인터뷰 확인"]
+                    if windows else [])
         if total == 0:
             rep.na("1.5", "EC2 인스턴스 없음")
         elif no_key:
             rep.man("1.5", [f"EC2 {total}대 중 Key Pair 미지정 {len(no_key)}대: {', '.join(no_key)}",
-                            "SSM/패스워드 등 대체 접속 수단 여부 인터뷰 확인"], no_key)
+                            "SSM/패스워드 등 대체 접속 수단 여부 인터뷰 확인"] + win_note, no_key)
         else:
-            rep.good("1.5", f"EC2 {total}대 모두 Key Pair(PEM) 기반 접속")
+            rep.good("1.5", [f"EC2 {total}대 모두 생성 시 Key Pair(PEM) 등록됨"] + win_note)
     safe(rep, "1.5", c15)
 
     # 1.6 Key Pair 보관 관리 — PC·공유폴더·EC2 내부 보관 위치는 API 로 알 수 없어 인터뷰.
@@ -734,9 +755,15 @@ def _account_mgmt(rep, ctx):
                 vuln.append(f"{u} (콘솔 로그인 가능, MFA 미설정)")
         tail = []
         try:
-            if sess.client("sso-admin").list_instances().get("Instances"):
-                tail.append("IAM Identity Center(SSO) 사용 중 — SSO 로그인 사용자의 MFA 는 Identity Center "
-                            "설정에서 확인(가이드 비고: SSO 인증 사용 시 양호 처리 가능)")
+            inst = sess.client("sso-admin").list_instances().get("Instances", [])
+            if inst:
+                owners = sorted({x.get("OwnerAccountId") for x in inst if x.get("OwnerAccountId")})
+                own = (f" (소유 계정 {', '.join(owners)} — 이 계정이 아닌 조직 관리 계정)"
+                       if owners and ctx["acct"] not in owners else "")
+                tail.append(f"참고: IAM Identity Center(SSO) 인스턴스 조회됨{own}. 가이드 비고의 SSO 예외는 SSO 로 "
+                            "로그인하는 사용자에만 해당 — 위 목록은 IAM 암호로 콘솔 로그인하는 사용자"
+                            if vuln else
+                            f"참고: IAM Identity Center(SSO) 인스턴스 조회됨{own} — SSO 사용자 MFA 는 Identity Center 설정에서 확인")
         except Exception:
             pass
         if vuln:
@@ -889,15 +916,15 @@ def _virtual_resource(rep, ctx):
                             "그 외 Source/Destination 최소화 여부는 규칙 검토 필요"] + eg)
     safe(rep, "3.2", c32)
 
-    # 3.3 네트워크 ACL 전체 허용 — 가이드: 모든 트래픽 허용이면 취약(기본 NACL 포함)
+    # 3.3 네트워크 ACL 전체 허용 — 가이드: NACL 내 모든 트래픽 허용이면 취약.
+    #   가이드 문구에 '서브넷 연결' 조건이 없으므로 서브넷 미연결 NACL(기본 NACL 포함)도 본다.
+    #   (연결 안 된 기본 NACL 도 새 서브넷을 만들면 자동 연결된다)
     def c33():
         allow_all = []
         for r in regions:
             ec2 = sess.client("ec2", region_name=r)
             for acl in _pages(ec2, "describe_network_acls", "NetworkAcls"):
                 subnets = [a.get("SubnetId") for a in acl.get("Associations", [])]
-                if not subnets:
-                    continue                          # 서브넷 미연결 NACL 은 트래픽에 영향 없음
                 for e in acl["Entries"]:
                     if e["RuleAction"] != "allow" or str(e["Protocol"]) != "-1" \
                             or e["RuleNumber"] >= 32767:
@@ -914,7 +941,7 @@ def _virtual_resource(rep, ctx):
                      ["※ 가이드: 보안그룹 포트·소스도 ANY 허용이면 중요도 '상'으로 상향 가능"],
                      sorted({a.split("(")[0] for a in allow_all}))
         else:
-            rep.good("3.3", "서브넷에 연결된 네트워크 ACL 에 모든 트래픽 허용 규칙 없음")
+            rep.good("3.3", "네트워크 ACL(기본 NACL·서브넷 미연결 포함)에 모든 트래픽 허용 규칙 없음")
     safe(rep, "3.3", c33)
 
     # 3.4 라우팅 테이블 ANY — 가이드: 라우팅 테이블 내 ANY 정책이 설정되어 있으면 취약.
@@ -1389,7 +1416,7 @@ def _operation_mgmt(rep, ctx):
             host = (i.get("PrivateDnsName") or "").split(".")[0]
             name = next((t["Value"] for t in i.get("Tags", []) if t.get("Key") == "Name"), "")
             label = f"{iid}({name})" if name else iid
-            hits = [s for s in streams.get(r, []) if iid in s[0] or (host and s[0].startswith(host))]
+            hits = [s for s in streams.get(r, []) if _stream_of(s[0], iid, host)]
             if hits:
                 ok.append(f"{label} [{', '.join(sorted({h[1] for h in hits}))[:80]}]")
             else:
@@ -1535,6 +1562,7 @@ def _operation_mgmt(rep, ctx):
         ev, notes, unknown, has = [], [], [], False
         for r in regions:
             bk = sess.client("backup", region_name=r)
+            efs_n = None                                    # EFS 파일 시스템 수(필요할 때만 조회, 권한 없으면 -1)
             try:
                 for p in _pages(bk, "list_backup_plans", "BackupPlansList"):
                     pid, pname = p["BackupPlanId"], p.get("BackupPlanName") or p["BackupPlanId"]
@@ -1545,6 +1573,23 @@ def _operation_mgmt(rep, ctx):
                         keep = (ru.get("Lifecycle") or {}).get("DeleteAfterDays")
                         desc.append(f"{ru.get('RuleName')}({ru.get('ScheduleExpression', '수동')}, "
                                     f"{'보존 ' + str(keep) + '일' if keep else '보존 무기한'})")
+                    if rules and sels and pname.startswith(_EFS_AUTO_PLAN):
+                        # AWS 가 EFS 자동 백업용으로 만든 계획 — EFS 파일 시스템이 없으면 백업 대상이 없다
+                        if efs_n is None:
+                            try:
+                                efs_n = len(_pages(sess.client("efs", region_name=r),
+                                                   "describe_file_systems", "FileSystems"))
+                            except Exception as e:
+                                if not _is_denied(e):
+                                    raise
+                                efs_n = -1
+                        if efs_n == -1:
+                            unknown.append(f"EFS({r}, {pname} 대상 확인)")
+                            continue
+                        if efs_n == 0:
+                            notes.append(f"AWS Backup 계획 {pname}({r}): AWS 가 EFS 자동 백업용으로 만든 계획이나 "
+                                         "EFS 파일 시스템이 없어 백업 대상 없음 → 백업 정책으로 보지 않음")
+                            continue
                     if rules and sels:
                         has = True
                         ev.append(f"AWS Backup 계획 {pname}({r}): 규칙 {', '.join(desc)} / 백업 대상 선택 {len(sels)}개")
@@ -1554,7 +1599,8 @@ def _operation_mgmt(rep, ctx):
                 prot = _pages(bk, "list_protected_resources", "Results")
                 if prot:
                     types = sorted({x.get("ResourceType", "?") for x in prot})
-                    ev.append(f"백업 보호 중인 리소스 {len(prot)}개({r}): {', '.join(types)}")
+                    ev.append(f"백업 복구 지점이 있는 리소스 {len(prot)}개({r}, 이미 삭제된 리소스 포함 가능): "
+                              f"{', '.join(types)}")
             except Exception as e:
                 if not _is_denied(e):
                     raise

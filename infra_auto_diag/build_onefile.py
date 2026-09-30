@@ -21,9 +21,11 @@ OUT = os.path.join(HERE, "cloudscan_all.py")
 def main():
     # 1) 패키지 .py 를 base64 로 (cloud_check/*.py → 'cloud_check/이름')
     embed = {}
+    #    작업트리 줄바꿈(core.autocrlf)과 무관하게 같은 결과가 나오도록 LF 로 맞춰 내장한다.
     for path in sorted(glob.glob(os.path.join(HERE, "cloud_check", "*.py"))):
         with open(path, "rb") as f:
-            embed["cloud_check/" + os.path.basename(path)] = base64.b64encode(f.read()).decode("ascii")
+            src = f.read().replace(b"\r\n", b"\n")
+        embed["cloud_check/" + os.path.basename(path)] = base64.b64encode(src).decode("ascii")
     # 단일 파일에서도 공식 양식(5시트) 채우기가 되도록 생성기·양식·폴백을 내장(루트)
     tops = ["infra_report.py", "server_report.py",
             "보고서_양식_AWS.xlsx", "보고서_양식_Azure.xlsx",
@@ -32,7 +34,10 @@ def main():
         p = os.path.join(HERE, top)
         if os.path.exists(p):
             with open(p, "rb") as f:
-                embed[top] = base64.b64encode(f.read()).decode("ascii")
+                data = f.read()
+            if top.endswith(".py"):                     # 양식(xlsx)은 바이너리라 그대로
+                data = data.replace(b"\r\n", b"\n")
+            embed[top] = base64.b64encode(data).decode("ascii")
 
     # 2) cloud_scan.py 본문(부트스트랩이 cloud_check 를 먼저 심은 뒤 실행됨)
     with io.open(os.path.join(HERE, "cloud_scan.py"), encoding="utf-8") as f:

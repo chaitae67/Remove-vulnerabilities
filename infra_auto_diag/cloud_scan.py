@@ -121,7 +121,8 @@ def collect_creds(provider, args):
 def _base_name(os_label, out_path):
     """저장 파일 기본 경로(확장자 제외). 한글/특수문자 없는 ASCII 이름 → 쉘 다운로드 호환."""
     if out_path:
-        return out_path[:-5] if out_path.lower().endswith((".xlsx", ".csv")) else out_path
+        root, ext = os.path.splitext(out_path)
+        return root if ext.lower() in (".xlsx", ".csv") else out_path
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     return os.path.join(os.getcwd(), f"cloud_{(os_label or 'result').upper()}_{stamp}")
 

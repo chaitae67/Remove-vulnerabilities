@@ -78,7 +78,7 @@ python make_report.py linux --result a.json --project 제로데이클리닉 --do
 
 ## 클라우드 진단 — `cloud_scan.py`
 
-읽기 전용(`describe_* / list_* / get_*` 만 호출)으로 리소스를 변경하지 않는다.
+읽기 전용(`describe_* / list_* / get_*`, AWS 는 자격 증명 보고서 생성 `iam:GenerateCredentialReport` 포함)으로 리소스를 변경하지 않는다.
 
 ### 클라우드 쉘에서 키 없이 그대로 (권장)
 
@@ -135,10 +135,19 @@ pip install -r requirements.txt      # 점검할 CSP 것만 설치해도 됨
 
 | CSP | 권한 | 자격증명 |
 |---|---|---|
-| AWS | 관리형 정책 **`SecurityAudit`** | Access Key / 역할 / `~/.aws` 프로필 |
+| AWS | 관리형 정책 **`SecurityAudit`** + 4.13용 인라인 정책(아래), 또는 **`ReadOnlyAccess`** | Access Key / 역할 / `~/.aws` 프로필 |
 | Azure | 구독 **`Reader`** + (선택) Graph **`Directory.Read.All`** | Tenant/Client/Secret + Subscription ID |
 | GCP | **`roles/iam.securityReviewer`** + **`roles/viewer`** | 서비스계정 JSON 키 + Project ID |
 | Naver | 서브계정 API 인증키 + Server/VPC 조회 권한 | Access Key / Secret Key |
+
+AWS `SecurityAudit` 에는 AWS Backup·DLM 조회 권한이 없어, 그대로 쓰면 4.13 이 "인터뷰 필요"로 나온다.
+아래 인라인 정책을 함께 붙이면 자동 판정된다.
+
+```json
+{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Resource": "*", "Action": [
+  "backup:ListBackupPlans", "backup:GetBackupPlan", "backup:ListBackupSelections",
+  "backup:ListProtectedResources", "dlm:GetLifecyclePolicies"]}]}
+```
 
 > 자격증명이 유효하지 않으면 진단이 즉시 중단된다(엉뚱한 "양호" 방지).
 > 권한이 일부 모자라면 해당 항목은 "인터뷰 필요(수동확인)" 로 표기된다.
