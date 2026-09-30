@@ -2,3 +2,5 @@
 *.sh text eol=lf
 # 리눅스·윈도우 겸용 통합 점검(bash 로도 실행) → 확장자는 .ps1 이지만 반드시 LF
 kisa_all_check.ps1 text eol=lf
+# 윈도우 전용 래퍼는 Windows PowerShell 5.1 이 한글을 제대로 읽도록 CRLF + UTF-8 BOM 유지
+s3report.ps1 text eol=crlf
