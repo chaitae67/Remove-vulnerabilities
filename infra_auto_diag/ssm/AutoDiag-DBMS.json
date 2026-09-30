@@ -30,6 +30,7 @@
           "timeout 300 docker exec -i {{Container}} bash -s -- --csv /tmp/dbout.csv < db_oracle_check.sh; echo \"[*] oracle rc=$? (124=timeout, else ignore)\"",
           "TS=$(date +%Y%m%d_%H%M); OUT=\"scan/db_oracle_db_${TS}.csv\"",
           "docker cp {{Container}}:/tmp/dbout.csv \"$OUT\" || { echo '[!] no CSV produced inside container (scan failed - check container/Oracle)'; exit 1; }",
+          "HOSTIP=$(hostname -I 2>/dev/null | awk '{print $1}'); if [ -n \"$HOSTIP\" ]; then sed -i \"s|^# ip,.*|# ip,$HOSTIP|\" \"$OUT\" 2>/dev/null || true; echo \"[*] host IP $HOSTIP written to CSV\"; fi",
           "docker exec {{Container}} rm -f /tmp/dbout.csv 2>/dev/null || true",
           "aws s3 cp scan/ {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv' || { echo '[!] S3 upload failed - check IAM s3:PutObject'; exit 1; }",
           "echo '[*] uploaded db_oracle CSV to {{S3Base}}/results/'"
