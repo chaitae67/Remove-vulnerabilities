@@ -264,6 +264,8 @@ build_allinone.py    위 4개 점검 스크립트 → kisa_all_check.ps1 생성�
 make_report.py       진단 결과(JSON/CSV) → 공식 양식 보고서 xlsx (linux/windows/dbms/web/aws/azure/gcp/naver)
 make_reports.py      폴더 안 CSV/JSON 을 종류별로 묶어 일괄 보고서 생성(결과보고서_출력/)
 makereport_all.py    양식·변환코드 내장 단일 파일 — 서버/PC 어디서든 CSV→xlsx (파이썬3+lxml)
+s3report.sh          (리눅스) 점검→CSV S3업로드→전체 취합→보고서 생성→S3 보고서에 병합(누적·버전) 한 방에
+s3report.ps1         (윈도우) s3report.sh 의 PowerShell 판
 server_report.py     보고서 양식 채우기 코어(모든 종류 공통, lxml)
 infra_report.py      간이 보고서 생성(lxml 없을 때 클라우드 폴백)
 보고서_양식_*.xlsx    공식 결과보고서 양식 (Linux/Windows/DBMS/Webserver/AWS/Azure/GCP/Naver)
