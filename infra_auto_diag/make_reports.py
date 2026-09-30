@@ -125,13 +125,20 @@ def _ts_key(path):
         return "0" * 12
 
 
+def _norm_host(h):
+    """호스트명 정규화 — 도메인 접미사(FQDN)·대소문자 차이를 무시해 같은 서버로 묶는다.
+    예) ip-10-0-2-203 == ip-10-0-2-203.ap-northeast-2.compute.internal,
+        EC2AMAZ-A863V5R == EC2AMAZ-A863V5R.WORKGROUP."""
+    return str(h or "-").strip().split(".")[0].lower()
+
+
 def _identity(fill_kind, sv):
-    """같은 대상인지 판별하는 키. 겹치면 최신 스캔으로 교체한다."""
+    """같은 대상인지 판별하는 키. 겹치면 최신 스캔으로 교체한다(호스트명은 정규화 후 비교)."""
     if fill_kind == "cloud":
-        return str(sv.get("account") or sv.get("host") or "-").lower()
+        return _norm_host(sv.get("account") or sv.get("host"))
     if fill_kind == "web":
-        return f"{sv.get('host', '')}|{sv.get('sw', '')}".lower()
-    return str(sv.get("host") or "-").lower()
+        return f"{_norm_host(sv.get('host'))}|{str(sv.get('sw', '')).lower()}"
+    return _norm_host(sv.get("host"))
 
 
 def _sig(servers):
