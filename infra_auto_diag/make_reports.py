@@ -20,7 +20,7 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
   (자동화진단)DBMS_서버_취약점진단_결과보고서_v<N>.xlsx        (DB 마다 1개)
   (자동화진단)클라우드_서버_취약점진단_결과보고서_<CSP>_<계정>_v<N>.xlsx  (계정마다 1개)
   · 같은 호스트(클라우드는 계정)를 다시 스캔하면 최신 스캔으로 교체(누적).
-  · 내용이 바뀌면 _v 번호가 올라가고(옛 버전 파일은 남겨 비교 가능), 같으면 버전 유지(덮어씀).
+  · 내용이 바뀌면 _v 번호가 올라가고 옛 버전 파일은 지운다(한 종류 = 항상 최신 1개). 같으면 버전 유지.
     버전은 출력 폴더의 .report_version.json 에 종류별로 기록된다(지우면 v1 부터 다시).
 
 사용:
@@ -275,6 +275,7 @@ def _one_report(fill_kind, tpl_key, files, out_dir, meta, manifest):
 
     base = REPORT_NAME.get(fill_kind, f"보고서_{fill_kind}")
     outs = []
+    written_by_name = {}
     for tail, mkey, chunk in units:
         sig = _sig(chunk)
         version, changed = _bump(manifest, mkey, sig)
@@ -286,8 +287,22 @@ def _one_report(fill_kind, tpl_key, files, out_dir, meta, manifest):
             print(f"  [!] 생성 실패({fill_kind}/{mkey}): {type(e).__name__}: {e}")
             continue
         outs.append(out)
+        written_by_name.setdefault(name, set()).add(os.path.basename(out))
         print(f"  [+] {os.path.basename(out)}  ({len(chunk)}대/개, "
               f"{'새 내용→버전 갱신' if changed else '내용 동일→버전 유지'})")
+    # 같은 종류(같은 이름)의 옛 버전 파일은 지우고 최신 버전만 남긴다(한 종류 = 한 파일).
+    try:
+        existing = os.listdir(out_dir)
+    except OSError:
+        existing = []
+    for name, keep in written_by_name.items():
+        for old in existing:
+            if old.endswith(".xlsx") and old.startswith(name + "_v") and old not in keep:
+                try:
+                    os.remove(os.path.join(out_dir, old))
+                    print(f"  [-] 옛 버전 삭제: {old}")
+                except OSError:
+                    pass
     return outs
 
 
