@@ -101,6 +101,8 @@ rep() {
 # 공통 헬퍼
 #------------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
+# 느릴 수 있는 조회 명령을 제한 시간(초) 안에서만 실행 (timeout 이 없으면 그냥 실행)
+run_to() { local s=$1; shift; if have timeout; then timeout -k 2 "$s" "$@"; else "$@"; fi; }
 
 # 미적용 보안 업데이트 개수 조회 (계열/패키지관리자 자동 분기)
 #  $1 = dnf/yum updateinfo 에서 찾을 grep 패턴 (예: 'postfix|sendmail', 'bind')
@@ -197,6 +199,7 @@ never_login() {   # 0=한번도 로그인 안함, 1=로그인 이력 있음, 2=�
   return 1
 }
 acct_locked() { case "$(passwd -S "$1" 2>/dev/null | awk '{print $2}')" in L|LK) return 0;; *) return 1;; esac; }
+has_keys() { [ -s "$1/.ssh/authorized_keys" ] || [ -s "$1/.ssh/authorized_keys2" ]; }   # $1=홈 → SSH 키 로그인 가능 여부
 
 # ---- OS / 계열 정보 ----
 . /etc/os-release 2>/dev/null
@@ -281,37 +284,137 @@ else fv=GOOD; fi
 rep U-01 "root 계정 원격 접속 제한" $fv "Telnet: $te" "SSH: $se"
 
 # U-02 비밀번호 관리정책 설정
-# [기준] 양호 - 최대사용기간·최소길이·복잡성 등 비밀번호 관리 정책이 설정된 경우
-#        취약 - 정책이 설정되지 않은 경우
+# [기준] 양호 - 비밀번호 관리 정책이 설정된 경우 / 취약 - 설정되지 않은 경우
+#   정책 = 가이드 조치 기준: 영문·숫자·특수문자 포함 8자리 이상(비밀번호 관리 방법: 3종류 이상 8자리
+#          또는 2종류 이상 10자리), 최소 사용기간 1일, 최대 사용기간 90일, 최근 비밀번호 기억 4회 이상,
+#          "root 계정을 포함한 사용자 계정" 에 적용.
+#   ※ pwquality.conf 값은 PAM 비밀번호 스택에 pam_pwquality.so 가 있을 때만 적용된다(모듈 없으면 무효).
+#     pam_cracklib 은 pwquality.conf 를 읽지 않으므로 모듈 인자만 인정. 모듈 인자가 conf 를 덮어쓴다.
+#     conf 는 pwquality.conf → pwquality.conf.d/*.conf 순서로 키별 마지막 값을 쓴다. '-password' 줄도 인정.
+#   ※ 복잡성(최소 요구 항목 값은 반드시 -1): 영문·숫자·특수 = dcredit·ocredit·(ucredit 또는 lcredit) 모두 -1 이하
+#     또는 minclass>=3 → 길이 8 이상 / 2종류(-1 이하 credit 2개 이상 또는 minclass>=2) → 길이 10 이상.
+#     모듈만 있고 credit/minclass 가 없으면 문자종류 요구 0 → 미흡.
+#   ※ 길이는 모듈 인자/pwquality minlen(미지정이면 모듈 기본값 9), 모듈이 없으면 pam_unix minlen= 만 인정.
+#     login.defs PASS_MIN_LEN 은 PAM 이 쓰지 않으므로 참고로만 표시.
+#   ※ pam_pwquality·pam_pwhistory 는 같은 파일에서 password 유형 pam_unix.so 보다 위에 있어야 적용됨.
+#     대상 파일은 주 비밀번호 스택(RHEL: system-auth, Debian: common-password).
+#   ※ 최근 비밀번호 기억: pam_pwhistory remember=(없으면 pwhistory.conf, 그것도 없으면 모듈 기본값 10) 또는
+#     pam_unix remember=. pwhistory.conf 는 PAM 1.5+(RHEL 8.8+ 백포트)만 읽고 PAM 1.3.x/1.4 는 무시하므로
+#     설치된 pam_pwhistory.so 가 pwhistory.conf 를 참조(문자열 포함)할 때만 인정.
+#   ※ login.defs 는 신규 계정에만 적용 → /etc/shadow 에서 비밀번호가 설정된(해시 '$' 시작) 기존 계정
+#     (root 포함)의 최소 1일·최대 90일 적용 여부도 확인한다(잠금 '!'·'*' 계정 제외, root 권한 필요).
+#   ※ enforce_for_root 는 조치 권고 사항이라 참고로만 표시한다.
 maxd=$(conf_line '^[[:space:]]*PASS_MAX_DAYS' /etc/login.defs | awk '{print $2}')
 mind=$(conf_line '^[[:space:]]*PASS_MIN_DAYS' /etc/login.defs | awk '{print $2}')
 minl=$(conf_line '^[[:space:]]*PASS_MIN_LEN'  /etc/login.defs | awk '{print $2}')
 warn=$(conf_line '^[[:space:]]*PASS_WARN_AGE' /etc/login.defs | awk '{print $2}')
-pq_minlen=$(conf_line '^[[:space:]]*minlen' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null | grep -oE '[0-9]+' | tail -1)
-pq_cx=$(conf_line '^[[:space:]]*(minclass|dcredit|ucredit|lcredit|ocredit)' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null)
-pam_cx=$(grep -hE 'pam_pwquality\.so|pam_cracklib\.so' $PAM_PW 2>/dev/null | grep -vE '^[[:space:]]*#' | head -1)
-[ -n "$pam_cx" ] && [ -z "$pq_cx" ] && pq_cx="$(echo "$pam_cx" | grep -oE '(minlen|dcredit|ucredit|lcredit|ocredit|minclass)=[-0-9]+' | tr '\n' ' ')"
-eff_len=${pq_minlen:-$minl}
+pq_get() {  # $1=키 → pwquality.conf + conf.d/*.conf 의 마지막 값(주석 제외)
+  local f x v=""
+  for f in /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf; do
+    [ -f "$f" ] || continue
+    x=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$f" 2>/dev/null | tail -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]+$//')
+    [ -n "$x" ] && v=$x
+  done
+  printf '%s' "$v"
+}
+pam_arg() { printf '%s\n' "$1" | grep -oE "(^|[[:space:]])$2=[-0-9]+" | tail -1 | cut -d= -f2; }   # $1=PAM줄 $2=인자명
+is_int()  { case "${1:-}" in ''|-|*[!-0-9]*|?*-*) return 1;; esac; return 0; }
+PW_MAIN=${PAM_PW%% *}                                   # 주 비밀번호 스택
+pw_stack=$(grep -nE '^[[:space:]]*-?password[[:space:]]' "$PW_MAIN" 2>/dev/null)   # 주석 제외, 줄번호 포함
+ux_ln=$(printf '%s\n' "$pw_stack" | grep -E 'pam_unix\.so' | head -1 | cut -d: -f1)
+ux_txt=$(printf '%s\n' "$pw_stack" | grep -E 'pam_unix\.so' | head -1 | cut -d: -f2-)
+cx_line=$(printf '%s\n' "$pw_stack" | grep -E 'pam_(pwquality|cracklib|passwdqc)\.so' | head -1)
+cx_ln=${cx_line%%:*}; cx_txt=${cx_line#*:}
+cx_mod=$(printf '%s' "$cx_txt" | grep -oE 'pam_(pwquality|cracklib|passwdqc)' | head -1)
+hs_line=$(printf '%s\n' "$pw_stack" | grep -E 'pam_pwhistory\.so' | head -1)
+hs_ln=${hs_line%%:*}; hs_txt=${hs_line#*:}
 miss=""
-{ [ -n "$maxd" ] && [ "$maxd" -ge 1 ] && [ "$maxd" -le 90 ]; } || miss="$miss 최대사용기간(${maxd:-미설정},기준 1~90)"
-{ [ -n "$mind" ] && [ "$mind" -ge 1 ]; }                       || miss="$miss 최소사용기간(${mind:-미설정},기준 1이상)"
-{ [ -n "$eff_len" ] && [ "$eff_len" -ge 8 ]; }                 || miss="$miss 최소길이(${eff_len:-미설정},기준 8이상)"
-{ [ -n "$pq_cx" ] || [ -n "$pam_cx" ]; }                       || miss="$miss 복잡성(미설정)"
-ev="MAX=${maxd:-미} MIN=${mind:-미} WARN=${warn:-미} LEN=${eff_len:-미} 복잡성=[${pq_cx:-${pam_cx:+pam_pwquality 적용}}]"
+# (1) 사용기간(login.defs)
+{ [ -n "$maxd" ] && [ "$maxd" -ge 1 ] && [ "$maxd" -le 90 ]; } 2>/dev/null || miss="$miss 최대사용기간(${maxd:-미설정},기준 1~90)"
+{ [ -n "$mind" ] && [ "$mind" -ge 1 ]; } 2>/dev/null                       || miss="$miss 최소사용기간(${mind:-미설정},기준 1이상)"
+# (2) 복잡성·길이 (PAM 모듈 적용 필수)
+declare -A CX=(); n_cls=0; eff_len=""; len_src=""
+if [ -z "$cx_mod" ]; then
+  miss="$miss 복잡성(${PW_MAIN##*/} 에 pam_pwquality/pam_cracklib 미적용 → pwquality.conf 값 무효)"
+  ul=$(pam_arg "$ux_txt" minlen); if is_int "$ul"; then eff_len=$ul; len_src="pam_unix"; fi
+  { [ -n "$eff_len" ] && [ "$eff_len" -ge 8 ]; } || miss="$miss 최소길이(PAM 미적용${eff_len:+,$eff_len})"
+elif [ "$cx_mod" = pam_passwdqc ]; then
+  len_src="pam_passwdqc"                                # passwdqc 는 자체 min= 정책(기본 3종 8자 수준) → 적용으로 인정
+else
+  for k in minlen dcredit ucredit lcredit ocredit minclass; do
+    v=$(pam_arg "$cx_txt" "$k")
+    [ -z "$v" ] && [ "$cx_mod" = pam_pwquality ] && v=$(pq_get "$k")
+    is_int "$v" && CX[$k]=$v
+  done
+  for k in dcredit ucredit lcredit ocredit; do [ "${CX[$k]:-0}" -le -1 ] && n_cls=$((n_cls+1)); done
+  mcl=${CX[minclass]:-0}
+  if [ -n "${CX[minlen]:-}" ]; then eff_len=${CX[minlen]}; len_src=$cx_mod; else eff_len=9; len_src="$cx_mod 기본값"; fi
+  cls3=0   # 영문·숫자·특수 3종류 요구
+  { [ "${CX[dcredit]:-0}" -le -1 ] && [ "${CX[ocredit]:-0}" -le -1 ] && { [ "${CX[ucredit]:-0}" -le -1 ] || [ "${CX[lcredit]:-0}" -le -1 ]; }; } && cls3=1
+  [ "$mcl" -ge 3 ] && cls3=1
+  cls2=0; { [ "$n_cls" -ge 2 ] || [ "$mcl" -ge 2 ]; } && cls2=1
+  { [ "$cls3" -eq 1 ] && [ "$eff_len" -ge 8 ]; } || { [ "$cls2" -eq 1 ] && [ "$eff_len" -ge 10 ]; } \
+    || miss="$miss 복잡성/길이(-1 credit ${n_cls}개·minclass ${mcl}·${eff_len}자 → 기준 영문·숫자·특수 3종 8자 또는 2종 10자)"
+  [ -n "$ux_ln" ] && [ "$cx_ln" -gt "$ux_ln" ] && miss="$miss 모듈순서($cx_mod 가 pam_unix 아래 → 미적용)"
+fi
+# (3) 최근 비밀번호 기억 4회 이상
+rem=""; rem_src=""
+if [ -n "$hs_line" ] && { [ -z "$ux_ln" ] || [ "$hs_ln" -lt "$ux_ln" ]; }; then
+  rem=$(pam_arg "$hs_txt" remember); rem_src="pam_pwhistory"
+  if [ -z "$rem" ] && [ -f /etc/security/pwhistory.conf ]; then
+    pwh_so=""
+    for so in /lib*/security/pam_pwhistory.so /usr/lib*/security/pam_pwhistory.so /lib/*/security/pam_pwhistory.so /usr/lib/*/security/pam_pwhistory.so; do
+      [ -f "$so" ] && { pwh_so=$so; break; }
+    done
+    if [ -n "$pwh_so" ] && grep -qsF pwhistory.conf "$pwh_so"; then   # 모듈이 pwhistory.conf 를 읽는 버전일 때만
+      rem=$(grep -E '^[[:space:]]*remember[[:space:]]*=[[:space:]]*[0-9]+' /etc/security/pwhistory.conf 2>/dev/null | tail -1 | grep -oE '[0-9]+$')
+      [ -n "$rem" ] && rem_src="pwhistory.conf"
+    fi
+  fi
+  [ -z "$rem" ] && { rem=10; rem_src="pam_pwhistory 기본값"; }
+elif [ -n "$hs_line" ]; then
+  miss="$miss 모듈순서(pam_pwhistory 가 pam_unix 아래 → 미적용)"
+fi
+ur=$(pam_arg "$ux_txt" remember)
+if is_int "$ur" && { [ -z "$rem" ] || [ "$ur" -gt "$rem" ]; }; then rem=$ur; rem_src="pam_unix"; fi
+{ [ -n "$rem" ] && [ "$rem" -ge 4 ]; } || miss="$miss 최근비밀번호기억(${rem:-미설정},기준 4회 이상)"
+# (4) 기존 계정(root 포함) 사용기간 적용 여부
+if [ "$IS_ROOT" -eq 1 ] && [ -r /etc/shadow ]; then
+  sh_bad=$(awk -F: '$2 ~ /^\$/ && ($5=="" || $5+0>90 || $4=="" || $4+0<1) {printf "%s(%s/%s) ", $1, ($4==""?"-":$4), ($5==""?"-":$5)}' /etc/shadow 2>/dev/null)
+  [ -n "$sh_bad" ] && miss="$miss 기존계정_사용기간미적용(최소/최대):${sh_bad% }"
+  sh_note="shadow 기존계정 확인"
+else
+  sh_note="shadow 확인불가(비-root)"
+fi
+efr="없음"
+{ printf '%s\n' "$cx_txt" | grep -qw enforce_for_root || grep -qsE '^[[:space:]]*enforce_for_root([[:space:]]|$)' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf; } && efr="있음"
+cx_view="${cx_mod:-미적용}"
+[ ${#CX[@]} -gt 0 ] && cx_view="$cx_view $(for k in minlen dcredit ucredit lcredit ocredit minclass; do [ -n "${CX[$k]:-}" ] && printf '%s=%s ' "$k" "${CX[$k]}"; done | sed 's/ $//')"
+ev="MAX=${maxd:-미} MIN=${mind:-미} WARN=${warn:-미} LEN=${eff_len:-미}(${len_src:-없음}) 복잡성=[${cx_view}] 기억=${rem:-미}(${rem_src:-없음}) | ${PW_MAIN}, login.defs PASS_MIN_LEN=${minl:-미}(참고), enforce_for_root=${efr}(권고), ${sh_note}"
 if [ -z "$miss" ]; then rep U-02 "비밀번호 관리정책 설정" GOOD "$ev"
 else rep U-02 "비밀번호 관리정책 설정" VULN "미흡:$miss" "$ev"; fi
 
 # U-03 계정 잠금 임계값 설정
 # [기준] 양호 - 계정 잠금 임계값이 10회 이하로 설정
 #        취약 - 미설정 또는 10회 초과
-fl_mod=$(grep -hE 'pam_faillock\.so|pam_tally2\.so' $PAM_AUTH 2>/dev/null | grep -vE '^[[:space:]]*#' | head -1)
-deny=$(grep -rhoE 'deny[[:space:]]*=[[:space:]]*[0-9]+' /etc/security/faillock.conf $PAM_AUTH 2>/dev/null | grep -oE '[0-9]+' | head -1)
-if [ -z "$fl_mod" ] && ! grep -qE '^[[:space:]]*deny' /etc/security/faillock.conf 2>/dev/null; then
-  rep U-03 "계정 잠금 임계값 설정" VULN "pam_faillock/pam_tally2 미적용 → 로그인 실패 임계값 없음"
+#   ※ 잠금은 PAM auth 스택($PAM_AUTH)에 pam_faillock(또는 pam_tally/pam_tally2)이 실제로 로드될 때만 동작한다
+#     (주석 아닌 'auth'/'-auth' 줄). faillock.conf 는 pam_faillock.so 가 읽는 설정일 뿐 → 파일에 deny 만 있고
+#     모듈이 없으면 취약.
+#   ※ deny 우선순위: 모듈 인자 > faillock.conf 의 주석 아닌 deny(pam_faillock 일 때만) > pam_faillock 기본값 3.
+#     pam_tally(2) 는 deny 미지정 시 잠금 없음 → 취약.
+fl_lines=$(grep -hE '^[[:space:]]*-?auth[[:space:]].*pam_(faillock|tally2?)\.so' $PAM_AUTH 2>/dev/null)
+fl_mod=$(printf '%s\n' "$fl_lines" | grep -oE 'pam_(faillock|tally2?)' | head -1)
+fl_conf_deny=$(grep -E '^[[:space:]]*deny[[:space:]]*=[[:space:]]*[0-9]+' /etc/security/faillock.conf 2>/dev/null | tail -1 | grep -oE '[0-9]+$')
+deny=$(printf '%s\n' "$fl_lines" | grep -oE '(^|[[:space:]])deny=[0-9]+' | cut -d= -f2 | sort -n | tail -1); deny_src="PAM 인자"
+if [ -z "$deny" ] && [ "$fl_mod" = pam_faillock ]; then
+  if [ -n "$fl_conf_deny" ]; then deny=$fl_conf_deny; deny_src="faillock.conf"; else deny=3; deny_src="pam_faillock 기본값"; fi
+fi
+if [ -z "$fl_mod" ]; then
+  rep U-03 "계정 잠금 임계값 설정" VULN "PAM auth 스택($PAM_AUTH)에 pam_faillock/pam_tally2 미적용 → 로그인 실패 임계값 없음${fl_conf_deny:+ (faillock.conf deny=$fl_conf_deny 는 모듈 미로드로 무효)}"
 elif [ -n "$deny" ] && [ "$deny" -ge 1 ] && [ "$deny" -le 10 ]; then
-  rep U-03 "계정 잠금 임계값 설정" GOOD "잠금 모듈 적용 + deny=$deny (10회 이하)"
+  rep U-03 "계정 잠금 임계값 설정" GOOD "잠금 모듈($fl_mod) 적용 + deny=$deny (${deny_src}, 10회 이하)"
 else
-  rep U-03 "계정 잠금 임계값 설정" VULN "잠금 모듈은 적용됐으나 deny=${deny:-미지정} (1~10 필요)"
+  rep U-03 "계정 잠금 임계값 설정" VULN "잠금 모듈($fl_mod)은 적용됐으나 deny=${deny:-미지정} (1~10 필요)"
 fi
 
 # U-04 비밀번호 파일 보호
@@ -380,30 +483,55 @@ else
 fi
 
 # U-08 관리자 그룹에 최소한의 계정 포함
-# [기준] 양호 - 관리자 그룹(root/wheel/sudo 등)에 불필요한 계정이 등록되어 있지 않은 경우
-#        취약 - GID 0 그룹에 root 외 계정, 또는 관리자 그룹에 방치(미사용/잠금) 계정 등록
-rootg=$(getent group root 2>/dev/null | awk -F: '{print $4}')
+# [기준] 양호 - 관리자 그룹에 불필요한 계정이 등록되어 있지 않은 경우
+#        취약 - 관리자 그룹에 불필요한 계정이 등록된 경우
+#   원문 점검(Step 1)은 /etc/group 의 root 그룹(GID 0) 구성원 확인 → root 그룹에 root 외 계정이 있으면 취약.
+#   확장 범위(원문 밖 — 판정은 양호/수동확인만): wheel·sudo 그룹, sudoers 에서 ALL 권한을 받는 %그룹·사용자.
+#   ※ Debian/Ubuntu 의 adm 그룹은 로그 열람용 시스템 그룹(기본 구성원 syslog: nologin·잠금)이라
+#     root 권한과 무관하다 → 점검 대상에서 제외. (포함하면 기본 설치 Ubuntu 가 항상 취약으로 오탐)
+#   ※ 확장 범위 계정은 lastlog 로그인 이력이 있으면 암호 잠금과 무관하게 활성으로 본다
+#     (키 전용 관리자 계정은 useradd 기본 '!'/'!!' 라 passwd -S 가 L/LK — 잠금만으로 방치로 보지 않음).
+#     root 자신과, amazon-ssm-agent 가 동작 중인 ssm-user(Session Manager 전용)는 사용 중으로 본다.
+#   ※ 로그인 이력 없음·확인불가 계정(잠금 + authorized_keys 없음이면 '로그인 불가·방치 의심' 표기)은 불필요 여부를
+#     시스템 상태로 확정할 수 없어 수동확인. 미사용 클라우드 기본계정의 취약 판정은 U-07 에서 한다(이중 계상 방지).
+#   판정: root 그룹 구성원 → 취약 / 확장 범위에 사용 확인 필요 계정 → 수동확인 / 그 외(모두 활성·해당 없음) → 양호.
+rootg=$(getent group root 2>/dev/null | awk -F: '{print $4}' | tr ',' '\n' | grep -vxE 'root|' | tr '\n' ' ')
 sudo_groups=$(grep -rhE '^[[:space:]]*%[A-Za-z0-9_.-]+[[:space:]]+ALL=\(ALL' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | sed 's/^[[:space:]]*%//' | awk '{print $1}' | sort -u | tr '\n' ' ')
 sudoall=$(grep -rhE '^[[:space:]]*[%A-Za-z0-9_.-]+[[:space:]]+ALL=\(ALL' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
-adm_view=""; stale_adm=""
-for g in root wheel sudo adm $sudo_groups; do
+sudo_users=$(printf '%s\n' $sudoall | grep -vE '^$|^%|^root$|^[A-Z][A-Z0-9_]*$' | tr '\n' ' ')   # 사용자 단위 ALL (별칭 제외)
+adm_view=""; idle_adm=""; declare -A adm_src=()
+adm_chk() {  # $1=계정  $2=소속(그룹명 또는 sudoers) → 사용 확인이 필요하면 idle_adm 에 추가
+  local u=$1 g=$2 nl h t
+  id "$u" >/dev/null 2>&1 || return 0                 # 존재하지 않는 계정 참조는 무시
+  [ "$u" = root ] && return 0
+  [ "$u" = ssm-user ] && proc_run amazon-ssm-agent && return 0   # Session Manager 사용 중
+  never_login "$u"; nl=$?                               # 0=이력없음 1=이력있음 2=확인불가
+  [ "$nl" -eq 1 ] && return 0                           # 로그인 이력 있음 → 활성(암호 잠금 여부 무관)
+  h=$(getent passwd "$u" 2>/dev/null | cut -d: -f6)
+  case $nl in 0) t="로그인이력없음";; *) t="로그인이력 확인불가";; esac
+  case "$CLOUD_DEFAULT" in *" $u "*) t="클라우드기본,$t";; esac
+  if acct_locked "$u"; then
+    if has_keys "$h"; then t="$t,암호잠금(authorized_keys 있음 → 키 로그인 가능)"; else t="$t,잠금·키없음(로그인 불가·방치 의심)"; fi
+  elif has_keys "$h"; then t="$t,authorized_keys있음"; fi
+  idle_adm="$idle_adm ${u}($g,$t)"
+}
+for g in $(printf '%s\n' root wheel sudo $sudo_groups | awk 'NF && !s[$0]++'); do
   mm=$(getent group "$g" 2>/dev/null | awk -F: '{gsub(/,/," ",$4); print $4}')
   [ -z "$mm" ] && continue
   adm_view="$adm_view ${g}:{${mm}}"
-  for u in $mm; do
-    case "$CLOUD_DEFAULT" in *" $u "*) continue;; esac
-    if acct_locked "$u"; then stale_adm="$stale_adm ${u}($g,잠금)"
-    elif never_login "$u"; then stale_adm="$stale_adm ${u}($g,로그인이력없음)"; fi
-  done
+  for u in $mm; do adm_src[$u]="${adm_src[$u]:+${adm_src[$u]}/}$g"; done
 done
+for u in $sudo_users; do adm_src[$u]="${adm_src[$u]:+${adm_src[$u]}/}sudoers"; done
+for u in $(printf '%s\n' "${!adm_src[@]}" | sort); do adm_chk "$u" "${adm_src[$u]}"; done   # 계정별 1회 판정
+[ -n "$sudo_users" ] && adm_view="$adm_view sudoers-ALL:{${sudo_users% }}"
 if [ -n "$rootg" ]; then
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "GID 0(root) 그룹에 일반 계정: $rootg"
-elif [ -n "$stale_adm" ]; then
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "관리자 그룹에 방치 계정:$stale_adm (sudo ALL 권한 부여: ${sudoall:-없음})"
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "GID 0(root) 그룹에 root 외 계정: ${rootg% } → 불필요 계정은 root 그룹에서 제거" ${adm_view:+"참고(확장 범위) 관리자 권한 계정 구성:${adm_view}"}
 elif [ -z "$adm_view" ]; then
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "관리자 그룹(root/wheel/sudo)에 추가 계정 없음"
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "root 그룹(GID 0)에 root 외 계정 없음, wheel/sudo·sudoers ALL 에도 root 외 계정 없음"
+elif [ -n "$idle_adm" ]; then
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" MAN "root 그룹(GID 0)에 root 외 계정 없음(원문 기준 충족). 확장 범위(wheel/sudo·sudoers ALL) 계정 중 사용 확인 필요:${idle_adm} → 불필요하면 관리자 그룹/sudoers 에서 제거" "확장 범위 구성:${adm_view}"
 else
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" MAN "관리자 그룹 구성:${adm_view} (sudo ALL: ${sudoall:-없음}) → 각 계정의 관리자 권한 필요성 확인"
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "root 그룹(GID 0)에 root 외 계정 없음. 확장 범위 관리자 권한 계정 구성:${adm_view} — 모두 로그인 이력이 있는 활성 계정(ssm-user 는 SSM 에이전트 동작)"
 fi
 
 # U-09 계정이 존재하지 않는 GID 금지
@@ -622,8 +750,19 @@ else rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD "신뢰파일 존
 
 # U-28 접속 IP 및 포트 제한
 # [기준] 양호 - 허용 호스트 IP/포트 제한 설정(TCP Wrapper 또는 호스트 방화벽) / 취약 - 미설정
+#   ※ TCP Wrapper 는 hosts.deny ALL:ALL + hosts.allow 허용 줄이 있고, 다음을 모두 만족할 때만 제한으로 인정한다.
+#     - 데몬 필드가 sshd 또는 ALL 인 허용 줄이 전체 허용이 아님: 클라이언트 목록에 ALL(목록 중간 포함)·0.0.0.0/0
+#       이 있으면 전체 허용(단, ': DENY' 로 끝나는 거부 줄은 제외).
+#     - sshd 가 libwrap 에 링크됨(ldd). RHEL/Rocky 8+ 등 tcp_wrappers 가 제거된 sshd 는 hosts.allow/deny 가 무효.
+#     위 조건을 못 채우면 호스트 방화벽 판정으로 넘어간다.
 tcpw_deny=$(grep -viE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.deny 2>/dev/null | grep -icE 'ALL[[:space:]]*:[[:space:]]*ALL')
 tcpw_allow=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.allow 2>/dev/null)
+allow_open=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.allow 2>/dev/null \
+  | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(sshd|ALL)([,[:space:]][^:]*)?:' \
+  | grep -viE ':[[:space:]]*DENY[[:space:]]*$' \
+  | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|0\.0\.0\.0/0)([[:space:]]*$|[[:space:]]*:|[[:space:],]|$)' | head -3 | tr '\n' ';')
+sshd_bin=$(command -v sshd 2>/dev/null); [ -z "$sshd_bin" ] && [ -x /usr/sbin/sshd ] && sshd_bin=/usr/sbin/sshd
+wrap_ok=0; [ -n "$sshd_bin" ] && have ldd && ldd "$sshd_bin" 2>/dev/null | grep -q libwrap && wrap_ok=1
 fw="none"; fw_rules=0
 svc_active firewalld && { fw="firewalld"; firewall-cmd --list-rich-rules 2>/dev/null | grep -q . && fw_rules=1; firewall-cmd --list-sources 2>/dev/null | grep -q . && fw_rules=1; }
 { have ufw && ufw status 2>/dev/null | grep -qi '^Status: active'; } && { fw="ufw"; ufw status 2>/dev/null | grep -qiE 'ALLOW|DENY' && fw_rules=1; }
@@ -631,14 +770,17 @@ if [ "$fw" = none ] && [ "$IS_ROOT" -eq 1 ]; then
   if have nft && nft list ruleset 2>/dev/null | grep -qE 'ip (saddr|daddr)|tcp dport'; then fw="nftables"; fw_rules=1
   elif have iptables && iptables -S 2>/dev/null | grep -qE '(-s |--dport ).*-j (ACCEPT|DROP|REJECT)'; then fw="iptables"; fw_rules=1; fi
 fi
-if [ "$tcpw_deny" -ge 1 ] && [ "$tcpw_allow" -ge 1 ]; then
-  rep U-28 "접속 IP 및 포트 제한" GOOD "TCP Wrapper: hosts.deny ALL:ALL + hosts.allow ${tcpw_allow}줄 (방화벽=$fw)"
+u28_why="TCP Wrapper 미설정"
+[ "$tcpw_deny" -ge 1 ] && [ -n "$allow_open" ] && u28_why="TCP Wrapper hosts.allow 가 전체 허용(${allow_open%;})"
+[ "$tcpw_deny" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 0 ] && u28_why="TCP Wrapper 설정은 있으나 sshd 가 libwrap 미연동(${sshd_bin:-sshd 없음}) → 무효"
+if [ "$tcpw_deny" -ge 1 ] && [ "$tcpw_allow" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 1 ]; then
+  rep U-28 "접속 IP 및 포트 제한" GOOD "TCP Wrapper: hosts.deny ALL:ALL + hosts.allow ${tcpw_allow}줄(특정 호스트만 허용), sshd libwrap 연동 (방화벽=$fw)"
 elif [ "$fw_rules" -eq 1 ]; then
   rep U-28 "접속 IP 및 포트 제한" GOOD "호스트 방화벽($fw)에 소스/포트 제한 규칙 존재"
 elif [ "$fw" = none ] && [ "$IS_ROOT" -ne 1 ]; then
-  rep U-28 "접속 IP 및 포트 제한" MAN "TCP Wrapper 미설정. 방화벽 규칙은 root 확인 필요 (클라우드는 SG/NACL 별도 점검)"
+  rep U-28 "접속 IP 및 포트 제한" MAN "$u28_why. 방화벽 규칙은 root 확인 필요 (클라우드는 SG/NACL 별도 점검)"
 else
-  rep U-28 "접속 IP 및 포트 제한" VULN "TCP Wrapper 미설정 + 호스트 방화벽($fw) 제한 규칙 없음 (클라우드 SG는 별도 점검)"
+  rep U-28 "접속 IP 및 포트 제한" VULN "$u28_why + 호스트 방화벽($fw) 제한 규칙 없음 (클라우드 SG는 별도 점검)"
 fi
 
 # U-29 hosts.lpd   [기준] 양호 - 파일 없음, 또는 소유자 root + 권한 600 이하
@@ -649,6 +791,8 @@ else chk_perm U-29 "hosts.lpd 파일 소유자 및 권한 설정" /etc/hosts.lpd
 # [기준] 양호 - UMASK 값이 022 이상(그룹·타 사용자 쓰기 비트가 마스킹) / 취약 - 022 미만
 #  점검 대상: /etc/login.defs, PAM pam_umask, /etc/profile·bashrc·csh 계열,
 #            /etc/profile.d/*, /etc/default/login, 로그인 계정 dotfile, 현재 세션 umask
+#  ※ 가이드는 "022 미만이면 취약" 이며 예외가 없다 → RHEL 기본 /etc/profile·bashrc 의 UPG 조건부
+#    "UID>199 && 그룹명=계정명 → umask 002" 도 그대로 취약으로 평가한다(일반 사용자에게 실제 적용되는 값).
 um_ge() { [ "$(( 8#${1:-0} & 8#022 ))" -eq "$(( 8#022 ))" ]; }
 um_all=""; um_bad=""
 um_take() {   # $1=출처라벨  $2=umask값
@@ -677,11 +821,6 @@ for d in /root $(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $7 !~ /(nologin|f
       grep -hE '^[[:space:]]*umask[[:space:]]+[0-7]{3,4}' "$rc" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE '[0-7]{3,4}')
   done
 done
-# 6) RHEL UPG 조건부 umask 002 (/etc/bashrc·/etc/profile 의 "id -gn = id -un" 블록 한정)는
-#    Red Hat 표준 동작이므로 취약으로 보지 않음. profile.d/login.defs 등의 002 는 그대로 평가.
-if [ "$FAM" = rhel ] && grep -qsE 'id -gn.*id -un|UID.*-gt.*(199|200)' /etc/bashrc /etc/profile; then
-  um_bad=$(printf '%s' " $um_bad " | sed -E 's/ (bashrc|profile)\(00[27]\) / /g' | xargs)
-fi
 cur_um=$(umask 2>/dev/null)
 if [ -n "$um_bad" ]; then
   rep U-30 "UMASK 설정 관리" VULN "022 미만 UMASK 설정 존재:${um_bad} (현재 세션 umask=$cur_um) → 022 이상으로 설정"
@@ -756,13 +895,20 @@ if [ -n "$r_hit" ]; then rep U-36 "r 계열 서비스 비활성화" VULN "r계�
 else rep U-36 "r 계열 서비스 비활성화" GOOD "rlogin/rsh/rexec 미실행"; fi
 
 # U-37 crontab 설정파일 권한 설정
-# [기준] 양호 - cron/at '설정파일'의 소유자 root + 그룹/기타 과도권한 없음(640 이하) / 취약 - 아님
-#   ※ 점검 대상은 cron 작업을 정의하는 설정파일이다:
-#      /etc/crontab, /etc/cron.allow, /etc/cron.deny, /etc/at.allow, /etc/at.deny,
-#      /etc/cron.d/*, /var/spool/cron/ 하위 사용자 crontab.
+# [기준] 양호 - crontab·at 명령어에 일반 사용자 실행 권한이 제거되어 있고, cron/at 관련 파일 권한이 640 이하
+#        취약 - 위 두 조건 중 하나라도 미충족
+#   ※ 명령어: /usr/bin/crontab, /usr/bin/at → 소유자 root + 750 이하(타 사용자 실행 없음, SUID/SGID 제거).
+#     (배포판 기본값 crontab 2755/4755, at 6755/4755 는 일반 사용자가 예약 작업을 등록할 수 있어 취약)
+#   ※ 관련 파일: /etc/crontab, /etc/cron.allow, /etc/cron.deny, /etc/at.allow, /etc/at.deny,
+#      /etc/cron.d/*, /var/spool/cron/ 하위 사용자 crontab → 소유자 root + 640 이하.
 #   ※ run-parts 스크립트 디렉터리(cron.hourly/daily/weekly/monthly)의 실행 스크립트는
 #      설정파일이 아니라 실행 권한(x)이 필요한 스크립트이므로 상세가이드 점검 대상이 아니다.
 #   ※ 권한은 숫자 크기가 아니라 그룹/기타 비트로 비교(perm_go_le) — 700 은 640 보다 제한적이라 양호.
+cmd_bad=""
+for f in /usr/bin/crontab /usr/bin/at; do
+  [ -e "$f" ] || continue; p=$(stat -Lc '%a' "$f"); o=$(stat -Lc '%U' "$f")
+  { [ "$o" = root ] && [ $(( 8#$p & 8#7000 )) -eq 0 ] && perm_go_le "$p" 750; } || cmd_bad="$cmd_bad $f($o,$p)"
+done
 cron_bad=""
 for f in /etc/crontab /etc/cron.allow /etc/cron.deny /etc/at.allow /etc/at.deny; do
   [ -e "$f" ] || continue; p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
@@ -779,12 +925,15 @@ for f in /var/spool/cron/* /var/spool/cron/crontabs/*; do
   perm_go_le "$p" 600 || cron_bad="$cron_bad $f($p)"
 done
 [ -e /etc/cron.allow ] && cron_restrict="cron.allow 존재(허용목록 방식)" || cron_restrict="cron.allow 없음(전체 사용자 crontab 가능)"
-if [ -n "$cron_bad" ]; then
-  rep U-37 "crontab 설정파일 권한 설정" VULN "cron/at 설정파일 권한 기준(소유자 root, 그룹/기타 640 이하) 초과:$cron_bad. $cron_restrict"
+if [ -n "$cmd_bad$cron_bad" ]; then
+  u37=""
+  [ -n "$cmd_bad" ]  && u37="$u37 명령어 일반 사용자 실행/SUID·SGID 허용(기준: root, 750 이하):$cmd_bad."
+  [ -n "$cron_bad" ] && u37="$u37 설정파일 권한 초과(기준: root, 640 이하):$cron_bad."
+  rep U-37 "crontab 설정파일 권한 설정" VULN "${u37# } $cron_restrict"
 elif [ -e /etc/cron.allow ]; then
-  rep U-37 "crontab 설정파일 권한 설정" GOOD "cron/at 설정파일 소유자 root + 그룹/기타 과도권한 없음(640 이하), $cron_restrict"
+  rep U-37 "crontab 설정파일 권한 설정" GOOD "crontab/at 명령어 root·750 이하(SUID/SGID 없음) + cron/at 설정파일 root·640 이하, $cron_restrict"
 else
-  rep U-37 "crontab 설정파일 권한 설정" MAN "cron/at 설정파일 권한은 양호. 다만 $cron_restrict → cron.allow 로 일반 사용자 crontab 제한 권고(인터뷰)"
+  rep U-37 "crontab 설정파일 권한 설정" MAN "crontab/at 명령어·설정파일 권한은 양호. 다만 $cron_restrict → cron.allow 로 일반 사용자 crontab 제한 권고(인터뷰)"
 fi
 
 # U-38 DoS 취약 서비스 비활성화   [기준] 양호 - 비활성화 / 취약 - 활성화
@@ -1091,19 +1240,53 @@ echo -e "${W}[ 4. 패치 관리 ]${N}"
 
 # U-64 주기적인 보안 패치 및 벤더 권고사항 적용
 # [기준] 양호 - 패치 정책 수립 + 주기적 패치 관리 + 패치 확인/적용 / 취약 - 아님
+#   ※ OS 표준 지원 종료(EOL)라도 확장 지원이 활성이면 보안 패치를 받으므로 EOL 로 보지 않는다.
+#     Ubuntu ESM : /var/lib/ubuntu-advantage/status.json(오프라인 파일, 1순위)의 attached=true + esm-infra status=enabled
+#                  (+ 계약 만료일 미경과). 파일이 없을 때만 'pro status'(timeout 20초)의 esm-infra enabled 로 확인.
+#     Debian ELTS: 주석 제외 활성 소스(deb 줄·deb822 URIs)에 extended-lts(Freexian). Amazon Linux 2 는 연장 수단 없음.
 sec_pend=$(sec_update_count '' '')   # 전체 보안 업데이트 건수 (dnf/yum/apt 자동 분기)
+today=$(date +%Y%m%d)
+ext_on=0; ext_note=""
+if [ "${ID:-}" = ubuntu ]; then
+  st=/var/lib/ubuntu-advantage/status.json
+  if [ -f "$st" ]; then
+    st_py=""
+    have python3 && st_py=$(run_to 10 python3 -c 'import json,re,sys
+d=json.loads(open(sys.argv[1],"rb").read().decode("utf-8","replace"))
+s=[x.get("status","") for x in d.get("services",[]) if x.get("name")=="esm-infra"]
+w=lambda v: re.sub(r"[^A-Za-z0-9_.:-]","",str(v)) or "none"
+print(w(str(d.get("attached")).lower()), w(s[0] if s else "none"), w((d.get("expires") or "none")[:10]))' "$st" 2>/dev/null)
+    att=$(printf '%s' "$st_py" | awk '{print $1}'); esm=$(printf '%s' "$st_py" | awk '{print $2}'); exp=$(printf '%s' "$st_py" | awk '{print $3}')
+    [ -z "$att" ] && att=$(grep -oE '"attached": *(true|false)' "$st" 2>/dev/null | head -1 | grep -oE 'true|false')
+    [ -z "$esm" ] && esm=$(grep -oE '"name": *"esm-infra"[^}]*' "$st" 2>/dev/null | grep -oE '"status": *"[a-z/-]+"' | head -1 | sed -E 's/.*"([a-z/-]+)"$/\1/')
+    [ -z "$exp" ] && exp=$(grep -oE '"expires": *"[0-9]{4}-[0-9]{2}-[0-9]{2}' "$st" 2>/dev/null | head -1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')
+    ext_note="Ubuntu Pro status.json: attached=${att:-?}, esm-infra=${esm:-?}, 만료=${exp:-?}"
+    if [ "$att" = true ] && [ "$esm" = enabled ]; then
+      case "$exp" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) [ "${exp//-/}" -ge "$today" ] && ext_on=1 ;; *) ext_on=1 ;; esac
+    fi
+  elif have pro; then
+    run_to 20 pro status 2>/dev/null | grep -qE '^esm-infra[[:space:]]+yes[[:space:]]+enabled' && ext_on=1
+    ext_note="pro status: esm-infra $([ "$ext_on" -eq 1 ] && echo enabled || echo 미활성/확인불가)"
+  fi
+elif [ "${ID:-}" = debian ]; then
+  if { grep -hsE '^[[:space:]]*deb(-src)?[[:space:]]' /etc/apt/sources.list /etc/apt/sources.list.d/*.list
+       grep -hsiE '^[[:space:]]*URIs:' /etc/apt/sources.list.d/*.sources; } | grep -q 'extended-lts'; then
+    ext_on=1; ext_note="Debian ELTS(extended-lts) 활성 소스"
+  fi
+fi
 eol_note=""
 case "${ID}:${VERSION_ID}" in
-  debian:11) [ "$(date +%Y%m%d)" -ge 20260831 ] && eol_note=" (Debian 11 표준 지원 종료)";;
-  ubuntu:20.04) [ "$(date +%Y%m%d)" -ge 20250531 ] && eol_note=" (Ubuntu 20.04 표준 지원 종료, ESM 필요)";;
-  amzn:2) [ "$(date +%Y%m%d)" -ge 20260630 ] && eol_note=" (Amazon Linux 2 지원 종료 임박/종료)";;
+  debian:11) [ "$today" -ge 20260831 ] && eol_note=" (Debian 11 표준 지원 종료)";;
+  ubuntu:20.04) [ "$today" -ge 20250531 ] && eol_note=" (Ubuntu 20.04 표준 지원 종료, ESM 필요)";;
+  amzn:2) [ "$today" -ge 20260630 ] && eol_note=" (Amazon Linux 2 지원 종료 임박/종료)";;
 esac
+[ -n "$eol_note" ] && [ "$ext_on" -eq 1 ] && { ext_note="OS 표준 지원 종료이나 확장 지원 활성 — $ext_note"; eol_note=""; }
 if [ "$sec_pend" != "?" ] && [ "${sec_pend:-0}" -gt 0 ]; then
-  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "미적용 보안 업데이트 약 ${sec_pend}건$eol_note"
+  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "미적용 보안 업데이트 약 ${sec_pend}건$eol_note" ${ext_note:+"확장지원: $ext_note"}
 elif [ -n "$eol_note" ]; then
-  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "OS 지원 종료$eol_note → 보안 패치 수급 불가"
+  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "OS 지원 종료$eol_note + 확장 지원(ESM/ELTS) 없음 → 보안 패치 수급 불가" ${ext_note:+"확장지원: $ext_note"}
 else
-  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" MAN "미적용 보안 업데이트 없음(sec_pend=$sec_pend). 패치 적용 정책/주기/이력은 인터뷰 확인"
+  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" MAN "미적용 보안 업데이트 없음(sec_pend=$sec_pend). 패치 적용 정책/주기/이력은 인터뷰 확인" ${ext_note:+"확장지원: $ext_note"}
 fi
 
 #==============================================================================
@@ -1111,13 +1294,31 @@ echo -e "${W}[ 5. 로그 관리 ]${N}"
 #==============================================================================
 
 # U-65 NTP 및 시각 동기화 설정   [기준] 양호 - NTP/시각 동기화가 기준에 따라 적용 / 취약 - 아님
+#   동기화 판단(원문 점검: chronyc sources / ntpq -pn 으로 '동기화된 서버' 확인) — 아래 중 하나면 동기화됨:
+#     timedatectl NTPSynchronized=yes,
+#     chronyc -n tracking 의 Leap status 가 Normal(Insert/Delete second 포함) + chronyc -n sources 에 선택된 소스
+#       ('^*' 서버, '#*' 참조클럭, '=*' peer),
+#     ntpstat 성공 또는 ntpq -pn 의 선택 피어('*').
+#   ※ chronyc 종료코드는 쓰지 않는다(데몬과 통신만 되면 'Leap status: Not synchronised' 여도 0 을 돌려줌).
 ntp_svc=""
 for s in chronyd ntpd ntp systemd-timesyncd; do svc_active "$s" && ntp_svc="$s"; done
-synced=$(timedatectl show 2>/dev/null | grep -E 'NTPSynchronized=yes|SystemClockSynchronized=yes')
-if [ -n "$ntp_svc" ] && { [ -n "$synced" ] || chronyc tracking >/dev/null 2>&1 || ntpstat >/dev/null 2>&1; }; then
-  rep U-65 "NTP 및 시각 동기화 설정" GOOD "$ntp_svc 활성 + 시각 동기화됨"
+synced=$(timedatectl show 2>/dev/null | grep -E '^NTPSynchronized=yes')
+chr_leap=""; chr_sel=""; chr_ok=0
+if have chronyc && { svc_active chronyd || svc_active chrony; }; then
+  chr_leap=$(run_to 10 chronyc -n tracking 2>/dev/null | sed -n 's/^Leap status[[:space:]]*:[[:space:]]*//p')
+  chr_sel=$(run_to 10 chronyc -n sources 2>/dev/null | grep -E '^[#^=]\*' | head -1 | awk '{print $2}')
+  case "$chr_leap" in Normal|"Insert second"|"Delete second") [ -n "$chr_sel" ] && chr_ok=1 ;; esac
+fi
+ntp_sel=""; ntp_ok=0
+if svc_active ntpd || svc_active ntp; then
+  have ntpq && ntp_sel=$(run_to 10 ntpq -pn 2>/dev/null | grep -E '^\*' | head -1 | awk '{print substr($1, 2)}')
+  { [ -n "$ntp_sel" ] || { have ntpstat && run_to 10 ntpstat >/dev/null 2>&1; }; } && ntp_ok=1
+fi
+u65_ev="NTPSynchronized=$([ -n "$synced" ] && echo yes || echo no/확인불가)${chr_leap:+, chrony Leap status=$chr_leap}${chr_sel:+, chrony 선택 소스=$chr_sel}${ntp_sel:+, ntpd 선택 피어=$ntp_sel}"
+if [ -n "$ntp_svc" ] && { [ -n "$synced" ] || [ "$chr_ok" -eq 1 ] || [ "$ntp_ok" -eq 1 ]; }; then
+  rep U-65 "NTP 및 시각 동기화 설정" GOOD "$ntp_svc 활성 + 시각 동기화됨 ($u65_ev)"
 elif [ -n "$ntp_svc" ]; then
-  rep U-65 "NTP 및 시각 동기화 설정" VULN "$ntp_svc 활성이나 동기화 미확인 → NTP 서버 접근/설정 확인"
+  rep U-65 "NTP 및 시각 동기화 설정" VULN "$ntp_svc 활성이나 시각 동기화 안 됨($u65_ev, 선택된 소스 없음) → NTP 서버 접근(UDP 123)/설정 확인"
 else
   rep U-65 "NTP 및 시각 동기화 설정" VULN "NTP/시각 동기화 서비스 미실행"
 fi
