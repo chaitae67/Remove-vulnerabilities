@@ -1,6 +1,6 @@
 {
   "schemaVersion": "2.2",
-  "description": "DB server scan: KISA infra(linux) + Oracle DBMS. Oracle connect string comes from SSM Parameter Store (SecureString), never echoed. Uploads both CSVs to S3 results/.",
+  "description": "DB server scan: Oracle DBMS only (infra excluded - the DB host's large filesystem makes the infra file-walk too heavy). Oracle connect string from SSM Parameter Store (SecureString), never echoed. Uploads CSV to S3 results/.",
   "parameters": {
     "S3Base": {
       "type": "String",
@@ -23,10 +23,7 @@
           "if ! command -v aws >/dev/null 2>&1; then echo '[!] aws CLI not available on this host'; exit 1; fi",
           "WORK=/tmp/autodiag; mkdir -p \"$WORK/scan\"; cd \"$WORK\"",
           "rm -f scan/*.csv scan/*.html 2>/dev/null || true",
-          "echo '[*] (1/2) infra scan...'",
-          "aws s3 cp {{S3Base}}/tools/kisa_all_check.ps1 kisa_all_check.ps1 || { echo '[!] download kisa_all_check failed'; exit 1; }",
-          "timeout 600 bash kisa_all_check.ps1 --only infra -o scan; rc=$?; echo \"[*] infra rc=$rc (124=timeout, else ignore)\"",
-          "echo '[*] (2/2) oracle scan...'",
+          "echo '[*] oracle scan (infra excluded on DB host)...'",
           "aws s3 cp {{S3Base}}/tools/db_oracle_check.sh db_oracle_check.sh || { echo '[!] download db_oracle_check failed'; exit 1; }",
           "export ORACLE_CONN=\"$(aws ssm get-parameter --name {{OracleConnParam}} --with-decryption --query Parameter.Value --output text 2>/dev/null)\"",
           "if [ -z \"$ORACLE_CONN\" ] || [ \"$ORACLE_CONN\" = 'None' ]; then echo '[!] Oracle conn param empty - create SecureString {{OracleConnParam}} first (skipping oracle scan)'; else ( cd scan && timeout 300 bash ../db_oracle_check.sh ); echo \"[*] oracle rc=$? (124=timeout, else ignore)\"; fi",
