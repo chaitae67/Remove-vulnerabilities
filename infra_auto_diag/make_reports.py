@@ -98,6 +98,7 @@ REPORT_NAME = {
     "cloud":   "(자동화진단)클라우드_서버_취약점진단_결과보고서",
 }
 MANIFEST = ".report_version.json"       # 출력 폴더에 저장: 종류별 최신 버전·내용 서명 기록(ASCII 이름)
+HOSTMAP = {}                            # IP → EC2 Name 매핑(--hostmap 로 주입). 보고서 진단대상 이름을 Name 으로.
 
 
 def _safe(s):
@@ -227,7 +228,9 @@ def _one_report(fill_kind, tpl_key, files, out_dir, meta, manifest):
         if not d.get("results"):
             print(f"  [!] 건너뜀 {os.path.basename(path)}: 결과 없음")
             continue
-        sv = {"host": d.get("host") or host or "server", "ip": d.get("ip") or "-",
+        ip = d.get("ip") or "-"
+        disp_host = HOSTMAP.get(ip) or d.get("host") or host or "server"   # IP→EC2 Name 우선
+        sv = {"host": disp_host, "ip": ip,
               "osver": d.get("os", ""), "target": d.get("target", ""), "role": "",
               "results": d["results"]}
         if sw:
@@ -308,7 +311,16 @@ def main():
                     help="종류를 직접 지정(파일명이 규칙과 다를 때 — 입력을 파일들로 줄 것)")
     ap.add_argument("--project", help="표지 사업명")
     ap.add_argument("--date", help="표지 날짜 YYYY-MM-DD")
+    ap.add_argument("--hostmap", help="IP→EC2 Name 매핑 JSON({\"10.0.2.203\":\"web-adm1\"}) — 진단대상 이름을 Name 으로")
     args = ap.parse_args()
+
+    if args.hostmap and os.path.exists(args.hostmap):     # IP→EC2 Name (merge_local 이 생성)
+        try:
+            with open(args.hostmap, encoding="utf-8-sig") as f:
+                HOSTMAP.update({str(k): str(v) for k, v in json.load(f).items() if v})
+            print(f"[*] 호스트맵 {len(HOSTMAP)}개 적용(IP→EC2 Name)")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [!] 호스트맵 무시({args.hostmap}): {e}")
 
     # 입력 파일 수집(폴더면 그 안의 csv/json)
     files = []

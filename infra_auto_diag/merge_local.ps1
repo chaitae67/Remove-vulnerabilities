@@ -26,8 +26,19 @@ New-Item -ItemType Directory -Force -Path $Csv, $Out | Out-Null
 Write-Host "[*] pulling CSVs from $S3Base/results/ ..."
 aws s3 sync "$S3Base/results/" $Csv --exclude "*" --include "*.csv"
 
+# build IP -> EC2 Name map so reports show the EC2 Name (e.g. web-adm1) instead of the OS hostname/IP
+$mapPath = Join-Path $here "hostmap.json"
+try {
+  $rows = aws ec2 describe-instances --query "Reservations[].Instances[].{Ip:PrivateIpAddress,Name:Tags[?Key=='Name']|[0].Value}" --output json | ConvertFrom-Json
+  $map = @{}
+  foreach ($r in $rows) { if ($r.Ip -and $r.Name) { $map[[string]$r.Ip] = [string]$r.Name } }
+  if ($map.Count -gt 0) { ($map | ConvertTo-Json) | Out-File -Encoding utf8 $mapPath; Write-Host "[*] EC2 Name map: $($map.Count) hosts" }
+  else { $mapPath = $null; Write-Host "[!] no EC2 Name tags found (using hostnames)" }
+} catch { Write-Host "[!] could not build EC2 Name map (using hostnames): $_"; $mapPath = $null }
+
 Write-Host "[*] building reports with make_reports.py ..."
-& $py make_reports.py $Csv -o $Out
+if ($mapPath -and (Test-Path $mapPath)) { & $py make_reports.py $Csv -o $Out --hostmap $mapPath }
+else { & $py make_reports.py $Csv -o $Out }
 if ($LASTEXITCODE -ne 0) { Write-Host "[!] report build failed"; exit 1 }
 
 if ($Upload) {
