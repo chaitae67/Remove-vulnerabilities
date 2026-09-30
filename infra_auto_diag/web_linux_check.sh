@@ -130,6 +130,23 @@ except Exception:
   fi
   printf '%s' "$out"
 }
+# jar 내부 파일 목록(읽기 전용): unzip -l → python(zipfile)
+jar_ls() {
+  local out="" p
+  have unzip && out=$(unzip -l "$1" 2>/dev/null)
+  if [ -z "$out" ]; then
+    for p in python3 /usr/libexec/platform-python python; do
+      have "$p" || continue
+      out=$(tmo 30 "$p" -c 'import sys, zipfile
+try:
+    print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))
+except Exception:
+    sys.exit(1)' "$1" 2>/dev/null)
+      break
+    done
+  fi
+  printf '%s\n' "$out"
+}
 # 관리자 권한 계정 여부(WEB-09): priv_chk 계정 → PRIV_ST(VULN/MAN/빈값=권한 없음) PRIV_EV(근거)
 #   UID 0 또는 sudo -l -U 에 (ALL|root) ... ALL 전권 → VULN, sudo 일부 명령 허용·확인 불가 → MAN (그룹명만으로 판정하지 않음)
 priv_chk() {
@@ -187,7 +204,7 @@ else
   fi
   TOMCAT_VER=""
   # 내장 Tomcat 버전은 BOOT-INF/lib/tomcat-embed-core-<ver>.jar 파일명에서 추출
-  [ -n "$APP_JAR" ] && have unzip && TOMCAT_VER=$(unzip -l "$APP_JAR" 2>/dev/null | grep -oE 'tomcat-embed-core-[0-9.]+\.jar' | head -1 | sed -E 's/tomcat-embed-core-([0-9.]+)\.jar/\1/')
+  [ -n "$APP_JAR" ] && [ -f "$APP_JAR" ] && TOMCAT_VER=$(jar_ls "$APP_JAR" | grep -oE 'tomcat-embed-core-[0-9.]+\.jar' | head -1 | sed -E 's/tomcat-embed-core-([0-9.]+)\.jar/\1/')
   SW_VER="Tomcat ${TOMCAT_VER:-내장(Spring Boot)}"
   # 로그 디렉터리 후보(application.yml logging.file.* + 관용 경로)
   yml_logpath=$(printf '%s\n' "$APP_YML_CONTENT" | grep -iE 'logging\.file\.(path|name)|^\s*(path|name):' | grep -iE 'log' | head -1 | sed -E 's/.*[:=] *//' | tr -d '"'"'"' \r')
@@ -564,12 +581,23 @@ if [ "$TARGET" = nginx ]; then
     rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel / 패키지 $npkg — rpm 계열은 저장소 메타데이터 조회(부하·네트워크) 생략 → 배포판 보안 공지와 수동 비교"
   else rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel — 패키지 미소유(소스 빌드 등)·실행 바이너리 확인 불가 → nginx.org 최신 stable/mainline 및 보안 공지와 수동 비교"; fi
 else
-  # 10.1.31 < 최신 10.1.x
-  if [ -n "$TOMCAT_VER" ]; then
-    IFSV=.; set -- $TOMCAT_VER; t1=${1:-0}; t2=${2:-0}; t3=${3:-0}; unset IFSV
-    if [ "$t1" -eq 10 ] && [ "$t2" -eq 1 ] && [ "$t3" -lt 40 ]; then
-      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER — 현행 10.1.x 대비 다수 보안 수정 미반영, 최신 패치 버전으로 업그레이드 권장"
-    else rep WEB-25 GOOD "내장 Tomcat $TOMCAT_VER (비교적 최신) — 정기 패치 관리 유지 권장"; fi
+  # 지원 브랜치별 최신 패치 버전(기준표)과 비교, 지원 종료 브랜치는 취약
+  #   기준표: Maven Central tomcat-embed-core 기준일 현재 최신. 기준일 90일 경과 후 최신 이상이면 새 릴리스 확인 필요(수동확인)
+  TC_REF=2026-09-15
+  if printf '%s' "$TOMCAT_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    t1=${TOMCAT_VER%%.*}; t3=${TOMCAT_VER##*.}; br=${TOMCAT_VER%.*}
+    case "$br" in 11.0) tl=26;; 10.1) tl=60;; 9.0) tl=122;; *) tl="";; esac
+    ref_s=$(date -d "$TC_REF" +%s 2>/dev/null); stale=0
+    [ -n "$ref_s" ] && [ $(( $(date +%s) - ref_s )) -gt $(( 90 * 86400 )) ] && stale=1
+    if [ -n "$tl" ] && [ "$t3" -lt "$tl" ]; then
+      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER < $br.$tl($TC_REF 기준 최신) → 이후 보안 수정 미반영, 최신 패치 버전으로 업그레이드(Spring Boot tomcat.version 지정 또는 Boot 업그레이드)"
+    elif [ -n "$tl" ] && [ "$stale" = 1 ]; then
+      rep WEB-25 MAN "내장 Tomcat $TOMCAT_VER ≥ $br.$tl 이나 기준표($TC_REF)가 오래됨 → tomcat.apache.org 최신 패치·보안 공지와 비교"
+    elif [ -n "$tl" ]; then
+      rep WEB-25 GOOD "내장 Tomcat $TOMCAT_VER — $br 브랜치 최신($br.$tl, $TC_REF 기준) 적용, 정기 패치 관리 유지(패치 정책은 인터뷰로 확인)"
+    elif [ "$t1" -lt 11 ]; then
+      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER — 지원 종료(EOL) 브랜치($br) → 보안 패치 미제공, 지원 브랜치(9.0/10.1/11.0 등)로 업그레이드"
+    else rep WEB-25 MAN "내장 Tomcat $TOMCAT_VER — 기준표에 없는 브랜치($br) → tomcat.apache.org 최신 패치·보안 공지와 비교"; fi
   else rep WEB-25 MAN "내장 Tomcat 버전 미확인 → Spring Boot/Tomcat 최신 보안 패치 적용 여부 확인"; fi
 fi
 
