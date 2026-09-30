@@ -82,10 +82,16 @@ def _load_scan(path):
             return json.load(f)
     if ext in (".csv", ".tsv"):
         with open(path, encoding="utf-8-sig", newline="") as f:
-            sample = f.read(2048)
-            f.seek(0)
-            delim = "\t" if ext == ".tsv" or sample.count("\t") > sample.count(",") else ","
-            rows = list(csv.DictReader(f, delimiter=delim))
+            lines = f.readlines()
+        # 맨 위 '# key,value' 주석 줄 = 진단대상 정보(cloud_scan 이 남김)
+        meta = {}
+        while lines and lines[0].lstrip().startswith("#"):
+            parts = next(csv.reader([lines.pop(0)]))
+            if len(parts) >= 2:
+                meta[parts[0].lstrip("# ").strip()] = parts[1].strip()
+        sample = "".join(lines[:20])
+        delim = "\t" if ext == ".tsv" or sample.count("\t") > sample.count(",") else ","
+        rows = list(csv.DictReader(lines, delimiter=delim))
         if not rows:
             raise ValueError("CSV 에 데이터 행이 없습니다.")
         # 헤더 앞뒤 공백/BOM 제거
@@ -108,7 +114,8 @@ def _load_scan(path):
             })
         if not results:
             raise ValueError("CSV 에서 항목코드가 있는 행을 찾지 못했습니다.")
-        return {"results": results}
+        return {"results": results, **{k: meta[k] for k in ("provider", "account", "region", "kind")
+                                       if meta.get(k)}}
     raise ValueError(f"지원하지 않는 형식입니다({ext}). JSON 또는 CSV 를 주세요.")
 
 

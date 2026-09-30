@@ -131,6 +131,11 @@ def save_results(provider, os_label, host, results, out_path=None, want_xlsx=Tru
     csv_path = base + ".csv"
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
+        # 진단대상 정보(계정/리전/구분)를 맨 위 주석 줄로 남긴다 → make_report 가 CSV 만으로도 진단대상을 채움
+        meta = {"provider": provider, **(target or {})}
+        for k in ("provider", "account", "region", "kind"):
+            if meta.get(k):
+                w.writerow([f"# {k}", meta[k]])
         w.writerow(["항목코드", "진단항목", "중요도", "진단결과", "상세", "리소스"])
         for r in results:
             verdict = REPORT_STATUS.get(r.get("status", ""), r.get("status", ""))
