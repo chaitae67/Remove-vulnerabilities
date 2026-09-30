@@ -1179,8 +1179,13 @@ if [ -z "$CSV_FILE" ] && [ "$NO_SAVE" -ne 1 ]; then
   CSV_FILE="server_linux_${_h}_$(date +%Y%m%d_%H%M).csv"
 fi
 if [ -n "$CSV_FILE" ]; then
+  _ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [ -z "$_ip" ] && _ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
   {
     printf '\357\273\277'                              # UTF-8 BOM (엑셀 한글)
+    printf '# host,%s\n' "$(hostname)"                 # 진단대상 Hostname/IP/버전정보 (make_report 가 읽음)
+    printf '# ip,%s\n'   "${_ip:--}"
+    printf '# os,%s\n'   "${PRETTY_NAME:-unknown}"
     printf '항목코드,중요도,진단항목,진단결과,상세\n'
     printf '%s' "$CBUF"
   } > "$CSV_FILE"

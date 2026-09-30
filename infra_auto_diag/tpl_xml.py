@@ -906,8 +906,7 @@ def ensure_dxf(pkg, kind):
     body = {
         "vuln": '<font><b/><color rgb="FFFF0000"/></font>',
         "na": '<font><i/><color rgb="FF7F7F7F"/></font>',
-        "interview": ('<fill><patternFill patternType="solid"><fgColor rgb="FFFFC000"/>'
-                      '<bgColor rgb="FFFFC000"/></patternFill></fill>'),
+        "interview": '<font><color theme="1"/></font>',      # 배경 없이 기본 글자색(주황 배경 제거)
         "check": '<font><b/><color rgb="FF0070C0"/></font>',
     }[kind]
     dxfs.append(etree.fromstring(f'<dxf xmlns="{NS}">{body}</dxf>'))

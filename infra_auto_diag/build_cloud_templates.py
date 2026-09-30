@@ -169,13 +169,14 @@ def rebuild_table(pkg, ws, kind, items, codes, areas, det_name):
     merges += [f"B{t1}:B{t2}", f"C{t1}:E{t1}", f"C{t2}:E{t2}"]
     X.set_merges(ws, merges)
 
-    # 조건부서식: 판정 열만 깔끔하게(원본 dxf 재사용)
+    # 조건부서식: 판정 열만 깔끔하게(원본 dxf 재사용). 인터뷰 필요는 배경 없이 기본 글자.
+    itv = X.ensure_dxf(pkg, "interview")
     f_rng = f"F{FIRST}:F{last}"
     if kind == "summary":
         X.set_conditional_formats(ws, [
             (f_rng, [{"type": "cellIs", "formula": '"취약"', "dxfId": 50},
                      {"type": "cellIs", "formula": '"N/A"', "dxfId": 49},
-                     {"type": "containsText", "text": "인터뷰", "dxfId": 45},
+                     {"type": "containsText", "text": "인터뷰", "dxfId": itv},
                      {"type": "containsText", "text": "확인", "dxfId": 44}]),
             (f"I{FIRST}:I{last}", [{"type": "cellIs", "formula": '"N/A"', "dxfId": 49}]),
             (f"F{t2}", [{"type": "cellIs", "formula": '"N/A"', "dxfId": 49}]),
@@ -184,7 +185,7 @@ def rebuild_table(pkg, ws, kind, items, codes, areas, det_name):
         X.set_conditional_formats(ws, [
             (f_rng, [{"type": "containsText", "text": "취약", "dxfId": 34},
                      {"type": "cellIs", "formula": '"N/A"', "dxfId": 10},
-                     {"type": "containsText", "text": "인터뷰", "dxfId": 27},
+                     {"type": "containsText", "text": "인터뷰", "dxfId": itv},
                      {"type": "containsText", "text": "확인", "dxfId": 33}]),
             (f"F{t2}", [{"type": "cellIs", "formula": '"N/A"', "dxfId": 10}]),
         ])

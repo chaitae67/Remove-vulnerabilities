@@ -819,5 +819,10 @@ if ($Csv -ne "") {
         }
     }
     $rows | Export-Csv -Path $Csv -NoTypeInformation -Encoding UTF8
+    # 진단대상 Hostname/IP/버전정보를 CSV 맨 위 주석 줄로 (make_report 가 읽어 보고서에 채움)
+    $ip = try { (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -notlike '169.254*' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress } catch { "" }
+    if (-not $ip) { $ip = "-" }
+    $meta = @("# host,$HOSTN", "# ip,$ip", "# os,$OS_NAME (Build $OS_BUILD)")
+    Set-Content -Path $Csv -Value ($meta + (Get-Content -Path $Csv -Encoding UTF8)) -Encoding UTF8
     Write-Host (" CSV 저장: {0}   (엑셀에서 바로 열림)" -f $Csv)
 }

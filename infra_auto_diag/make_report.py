@@ -114,7 +114,8 @@ def _load_scan(path):
             })
         if not results:
             raise ValueError("CSV 에서 항목코드가 있는 행을 찾지 못했습니다.")
-        return {"results": results, **{k: meta[k] for k in ("provider", "account", "region", "kind")
+        return {"results": results, **{k: meta[k] for k in
+                                       ("provider", "account", "region", "kind", "host", "ip", "os")
                                        if meta.get(k)}}
     raise ValueError(f"지원하지 않는 형식입니다({ext}). JSON 또는 CSV 를 주세요.")
 

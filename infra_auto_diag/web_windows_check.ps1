@@ -388,6 +388,11 @@ if (-not $NoSave) {
         $st=$_.status; $rstat = switch ($st) { "수동확인" {"인터뷰 필요"} "N/A" {"양호"} default {$st} }
         [pscustomobject][ordered]@{ "항목코드"=$_.code; "중요도"=$_.importance; "점검항목"=$_.title; "진단결과"=$rstat; "근거"=($_.evidence -join " | ") } }
     $rows | Export-Csv -Path $Csv -NoTypeInformation -Encoding UTF8
+    # 진단대상 Hostname/IP/버전정보를 CSV 맨 위 주석 줄로 (make_report 가 읽어 보고서에 채움)
+    $ip = try { (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -notlike '169.254*' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress } catch { "" }
+    if (-not $ip) { $ip = "-" }
+    $meta = @("# host,$HOSTN", "# ip,$ip", "# os,$swver")
+    Set-Content -Path $Csv -Value ($meta + (Get-Content -Path $Csv -Encoding UTF8)) -Encoding UTF8
     Write-Host (" CSV 저장: {0}   (엑셀에서 바로 열림)" -f $Csv)
 
     function HEsc { param([string]$s) if ($null -eq $s) { return "" } $s.Replace("&","&amp;").Replace("<","&lt;").Replace(">","&gt;").Replace('"',"&quot;") }

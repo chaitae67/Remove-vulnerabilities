@@ -302,7 +302,9 @@ if [ -n "$JSON_FILE" ]; then
     printf '%s' "${JBUF%,}"; printf ']}'; } > "$JSON_FILE" && echo -e "  ${W}JSON${N}  저장: $JSON_FILE"
 fi
 if [ "$NO_SAVE" -eq 0 ]; then
-  { printf '\xEF\xBB\xBF'; echo "항목코드,중요도,점검항목,진단결과,근거"; printf '%s' "$CBUF"; } > "$CSV_FILE" && echo -e "  ${W}CSV${N}   저장: $CSV_FILE"
+  _ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [ -z "$_ip" ] && _ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+  { printf '\xEF\xBB\xBF'; printf '# host,%s\n# ip,%s\n# os,Oracle %s\n' "$HOSTN" "${_ip:--}" "${DB_VER:-?}"; echo "항목코드,중요도,점검항목,진단결과,근거"; printf '%s' "$CBUF"; } > "$CSV_FILE" && echo -e "  ${W}CSV${N}   저장: $CSV_FILE"
   {
     cat <<HTMLHEAD
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><title>DBMS(Oracle) 취약점 진단 - ${HOSTN}</title>
