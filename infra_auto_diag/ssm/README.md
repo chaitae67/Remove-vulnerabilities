@@ -56,11 +56,34 @@ cd C:\Users\EZ\repo-remove-vuln\infra_auto_diag
 powershell -ExecutionPolicy Bypass -File merge_local.ps1        # S3 results/ → 보고서 (-Upload 로 S3 reports/ 공유)
 ```
 
-## db(Oracle) 는 별도
+## db(Oracle) — 인프라 + Oracle 한 번에 (`AutoDiag-DBMS`)
 
-- db 인스턴스를 먼저 SSM 관리대상으로 올린다(IAM 역할에 `AmazonSSMManagedInstanceCore`; Amazon Linux 2 는 에이전트 기본 탑재).
-- Oracle 접속 비밀번호는 **SSM Parameter Store(SecureString)** 에 넣고 문서에서 참조한다(명령/로그에 평문 노출 금지).
-- 전용 문서 `AutoDiag-DBMS`(인프라 + Oracle) 는 온보딩 확인 후 추가.
+db 서버는 리눅스 인프라 점검 + Oracle 점검을 **한 문서**로 돌린다. Oracle 접속정보는
+**SSM Parameter Store(SecureString)** 에 넣고 문서가 런타임에 읽어 `ORACLE_CONN` 으로만 쓴다(명령/로그에 평문 노출 없음).
+
+준비(1회):
+```powershell
+# 1) db 가 SSM 관리대상인지 확인(Online 으로 떠야 함)
+aws ssm describe-instance-information --query "InstanceInformationList[].[InstanceId,IPAddress,PlatformName]" --output table
+
+# 2) Oracle 접속정보를 SecureString 으로 저장 (콘솔에서 넣으면 히스토리에 안 남아 더 안전)
+aws ssm put-parameter --name /autodiag/oracle_conn --type SecureString --value "oraadmin/<비번>@//localhost:1521/FREEPDB1 as sysdba"
+
+# 3) db 인스턴스에 태그
+aws ec2 create-tags --resources <db-instance-id> --tags Key=AutoDiag,Value=db
+
+# 4) 문서 등록
+aws ssm create-document --name AutoDiag-DBMS --document-type Command --document-format JSON --content file://ssm/AutoDiag-DBMS.json
+```
+
+실행:
+```powershell
+aws ssm send-command --document-name AutoDiag-DBMS --targets Key=tag:AutoDiag,Values=db --comment "KISA db scan"
+```
+
+db 인스턴스 IAM 역할에 필요한 권한: `s3:GetObject/PutObject`(tools/·results/), `ssm:GetParameter`
+(+ SecureString 이 고객관리 KMS 키면 `kms:Decrypt`). → `server_linux_db_*.csv`(리눅스 보고서로) +
+`db_oracle_db_*.csv`(DBMS 보고서로) 두 CSV 가 올라간다.
 
 ## 참고
 

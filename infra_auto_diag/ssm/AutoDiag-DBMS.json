@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "2.2",
+  "description": "DB server scan: KISA infra(linux) + Oracle DBMS. Oracle connect string comes from SSM Parameter Store (SecureString), never echoed. Uploads both CSVs to S3 results/.",
+  "parameters": {
+    "S3Base": {
+      "type": "String",
+      "description": "S3 base prefix (tools/ and results/ live under it).",
+      "default": "s3://vuln-lab-backup/infra-auto-diag"
+    },
+    "OracleConnParam": {
+      "type": "String",
+      "description": "SSM Parameter Store name (SecureString) holding the Oracle connect string, e.g. oraadmin/PW@//localhost:1521/FREEPDB1 as sysdba",
+      "default": "/autodiag/oracle_conn"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "scan",
+      "inputs": {
+        "timeoutSeconds": "3600",
+        "runCommand": [
+          "if ! command -v aws >/dev/null 2>&1; then echo '[!] aws CLI not available on this host'; exit 1; fi",
+          "WORK=/tmp/autodiag; mkdir -p \"$WORK/scan\"; cd \"$WORK\"",
+          "rm -f scan/*.csv scan/*.html 2>/dev/null || true",
+          "echo '[*] (1/2) infra scan...'",
+          "aws s3 cp {{S3Base}}/tools/kisa_all_check.ps1 kisa_all_check.ps1 || { echo '[!] download kisa_all_check failed'; exit 1; }",
+          "bash kisa_all_check.ps1 --only infra -o scan; echo \"[*] infra done (exit $?, not a failure)\"",
+          "echo '[*] (2/2) oracle scan...'",
+          "aws s3 cp {{S3Base}}/tools/db_oracle_check.sh db_oracle_check.sh || { echo '[!] download db_oracle_check failed'; exit 1; }",
+          "export ORACLE_CONN=\"$(aws ssm get-parameter --name {{OracleConnParam}} --with-decryption --query Parameter.Value --output text 2>/dev/null)\"",
+          "if [ -z \"$ORACLE_CONN\" ] || [ \"$ORACLE_CONN\" = 'None' ]; then echo '[!] Oracle 접속정보 없음 - SecureString 파라미터 {{OracleConnParam}} 를 먼저 만드세요(오라클 점검 생략)'; else ( cd scan && bash ../db_oracle_check.sh ); echo \"[*] oracle done (exit $?, not a failure)\"; fi",
+          "ls scan/*.csv >/dev/null 2>&1 || { echo '[!] no CSV produced'; exit 1; }",
+          "aws s3 cp scan/ {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv' || { echo '[!] S3 upload failed - check this instance IAM role has s3:PutObject'; exit 1; }",
+          "echo '[*] uploaded CSV to {{S3Base}}/results/'"
+        ]
+      }
+    }
+  ]
+}
