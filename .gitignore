@@ -21,3 +21,7 @@ infra_auto_diag/cloud_*_*.xlsx
 # 공식 결과보고서 원본·가이드(다른 사업 실제 진단 데이터, 양식 생성 입력용) — 로컬에만 둔다
 infra_auto_diag/결과보고서/
 infra_auto_diag/진단가이드/
+# 일괄 변환 입력/출력 폴더(실제 스캔 CSV·생성 보고서) — 로컬 작업용, 커밋 금지
+infra_auto_diag/csv_files/
+infra_auto_diag/결과보고서_출력/
+결과보고서_출력/
