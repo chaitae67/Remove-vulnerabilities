@@ -14,6 +14,7 @@
 양식 칸보다 서버가 많으면(리눅스 4대·윈도우 2대 초과) 보고서를 여러 파일로 나눠 저장한다.
 """
 import argparse
+import csv
 import json
 import os
 import sys
@@ -54,6 +55,62 @@ def _find_template(key, explicit):
 CLOUD_KINDS = {"aws", "azure", "gcp", "naver"}
 WEB_SW = {"nginx", "iis", "tomcat"}
 
+# CSV 열 이름(스크립트별로 조금씩 다름) → 표준 필드
+_CSV_COLS = {
+    "code": ("항목코드", "코드", "code"),
+    "status": ("진단결과", "결과", "판정", "status"),
+    "evidence": ("상세", "근거", "상세 내용", "상세내용", "evidence"),
+    "resources": ("리소스", "대상 리소스", "resources"),
+    "title": ("진단항목", "점검항목", "title"),
+    "importance": ("중요도", "importance"),
+}
+
+
+def _pick(row, keys):
+    for k in keys:
+        if k in row and row[k] not in (None, ""):
+            return row[k]
+    return ""
+
+
+def _load_scan(path):
+    """진단 결과 파일(JSON 또는 CSV) → {host?, os?, results:[...]} 형태로 읽는다.
+    CSV 는 진단 스크립트/클라우드 스캔이 저장한 것(항목코드·진단결과·상세[·리소스])을 그대로 받는다."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".json":
+        with open(path, encoding="utf-8-sig") as f:
+            return json.load(f)
+    if ext in (".csv", ".tsv"):
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            sample = f.read(2048)
+            f.seek(0)
+            delim = "\t" if ext == ".tsv" or sample.count("\t") > sample.count(",") else ","
+            rows = list(csv.DictReader(f, delimiter=delim))
+        if not rows:
+            raise ValueError("CSV 에 데이터 행이 없습니다.")
+        # 헤더 앞뒤 공백/BOM 제거
+        rows = [{(k or "").strip().lstrip("﻿"): (v or "").strip() for k, v in r.items()} for r in rows]
+        results = []
+        for r in rows:
+            code = _pick(r, _CSV_COLS["code"])
+            if not code:
+                continue                       # 빈 줄/합계 줄 건너뜀
+            ev = _pick(r, _CSV_COLS["evidence"])
+            res = _pick(r, _CSV_COLS["resources"])
+            results.append({
+                "code": code,
+                "title": _pick(r, _CSV_COLS["title"]),
+                "importance": _pick(r, _CSV_COLS["importance"]),
+                "status": _pick(r, _CSV_COLS["status"]),
+                # 스크립트가 근거·리소스를 ' / ' 로 이어 붙였으므로 줄 단위로 되돌린다
+                "evidence": [e.strip() for e in ev.split(" / ") if e.strip()] if ev else [],
+                "resources": [x.strip() for x in res.split(" / ") if x.strip()] if res else [],
+            })
+        if not results:
+            raise ValueError("CSV 에서 항목코드가 있는 행을 찾지 못했습니다.")
+        return {"results": results}
+    raise ValueError(f"지원하지 않는 형식입니다({ext}). JSON 또는 CSV 를 주세요.")
+
 
 def main():
     ap = argparse.ArgumentParser(description="진단 JSON → 보고서 엑셀(xlsx) 생성")
@@ -62,7 +119,7 @@ def main():
                     help="대상: linux/windows(서버) · web·nginx·iis·tomcat(웹서버) · "
                          "dbms/oracle(DB) · aws/azure/gcp/naver(클라우드)")
     ap.add_argument("--result", "-r", required=True, nargs="+",
-                    help="점검 JSON 파일(들). 여러 대를 나열하면 한 보고서에 열로 합침")
+                    help="점검 결과 파일(들) — JSON 또는 CSV. 여러 대를 나열하면 한 보고서에 열로 합침")
     ap.add_argument("--template", "-t", help="보고서 양식 xlsx (기본: 같은 폴더에서 자동 탐색)")
     ap.add_argument("--host", help="진단 대상 호스트명(기본: JSON host) — 단일 대상에만 적용")
     ap.add_argument("--ip", nargs="*", default=[], help="진단 대상 IP(들). --result 순서와 매칭(기본: JSON ip)")
@@ -74,18 +131,19 @@ def main():
     ap.add_argument("--grade", help="표지 보안등급(기본: Confidential)")
     ap.add_argument("--version", help="표지 버전(기본: ver 1.0)")
     ap.add_argument("--date", help="표지 날짜 YYYY-MM-DD(기본: 오늘)")
+    ap.add_argument("--account", help="(클라우드) 진단대상 계정 ID/이름 — CSV 는 계정 정보가 없어 직접 지정")
+    ap.add_argument("--region", help="(클라우드) 진단대상 리전")
     ap.add_argument("--fix-template", action="store_true", help=argparse.SUPPRESS)   # 예전 옵션(이제 불필요)
     args = ap.parse_args()
 
     loaded = []
     for i, path in enumerate(args.result):
         try:
-            with open(path, encoding="utf-8-sig") as f:      # PowerShell 이 붙이는 BOM 허용
-                d = json.load(f)
+            d = _load_scan(path)                             # JSON 또는 CSV
         except Exception as e:  # noqa: BLE001
-            sys.exit(f"[!] JSON 을 읽을 수 없습니다: {path} ({type(e).__name__}: {e})")
+            sys.exit(f"[!] 결과 파일을 읽을 수 없습니다: {path} ({type(e).__name__}: {e})")
         if not d.get("results"):
-            sys.exit(f"[!] {path} 에 results 가 없습니다. 점검 스크립트를 --json 으로 먼저 실행하세요.")
+            sys.exit(f"[!] {path} 에 결과가 없습니다. 점검 스크립트를 --json/--csv 로 먼저 실행하세요.")
         prov = str(d.get("provider") or "").lower()
         if args.kind in CLOUD_KINDS and prov and prov != args.kind:
             sys.exit(f"[!] {path} 는 {prov} 스캔 결과입니다 — 'make_report.py {prov} --result {path}' 로 실행하세요.")
@@ -103,6 +161,10 @@ def main():
         for k in ("account", "region", "kind"):              # 클라우드 진단대상(계정 ID/리전/구분)
             if d.get(k):
                 sv[k] = d[k]
+        if args.account:                                     # CLI 지정이 우선(CSV 는 계정 정보 없음)
+            sv["account"] = args.account
+        if args.region:
+            sv["region"] = args.region
         loaded.append(sv)
 
     if args.kind in CLOUD_KINDS:

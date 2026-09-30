@@ -64,6 +64,7 @@ python make_report.py web  --result web1.json web-adm1.json was1.json was-adm1.j
 python make_report.py nginx --result web-adm1.json                                     # 소프트웨어 직접 지정
 python make_report.py dbms --result db.json  --host db
 python make_report.py aws  --result aws.json                     # 클라우드(cloud_scan --json 결과)
+python make_report.py aws  --result cloud_AWS_...csv --account 862016452072 --region ap-northeast-2   # CSV 로도 변환
 
 # 표지 문서정보(선택)
 python make_report.py linux --result a.json --project 제로데이클리닉 --docno XXXXX-VA-2026001 --date 2026-09-29
