@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "2.2",
+  "description": "KISA infra+web vulnerability scan on Windows; uploads CSV to S3 results/. Reuses kisa_all_check.ps1 from S3 tools/ (fetched via instance role).",
+  "parameters": {
+    "S3Base": {
+      "type": "String",
+      "description": "S3 base prefix (tools/ and results/ live under it).",
+      "default": "s3://vuln-lab-backup/infra-auto-diag"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runPowerShellScript",
+      "name": "scan",
+      "inputs": {
+        "timeoutSeconds": "3600",
+        "runCommand": [
+          "$ErrorActionPreference = 'Stop'",
+          "if (-not (Get-Command aws -ErrorAction SilentlyContinue)) { Write-Host '[*] installing aws cli...'; Start-Process msiexec.exe -ArgumentList '/i https://awscli.amazonaws.com/AWSCLIV2.msi /qn' -Wait; $env:Path += ';C:\\Program Files\\Amazon\\AWSCLIV2' }",
+          "if (-not (Get-Command aws -ErrorAction SilentlyContinue)) { Write-Host '[!] aws CLI not available'; exit 1 }",
+          "$work = 'C:\\autodiag'; New-Item -ItemType Directory -Force \"$work\\scan\" | Out-Null; Set-Location $work",
+          "aws s3 cp {{S3Base}}/tools/kisa_all_check.ps1 kisa_all_check.ps1",
+          "Get-ChildItem \"$work\\scan\\*\" -Include *.csv,*.html -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue",
+          "powershell -ExecutionPolicy Bypass -File kisa_all_check.ps1 -OutDir \"$work\\scan\"",
+          "if (-not (Get-ChildItem \"$work\\scan\\*.csv\" -ErrorAction SilentlyContinue)) { Write-Host '[!] no CSV produced'; exit 1 }",
+          "aws s3 cp \"$work\\scan\\\" {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv'",
+          "Write-Host '[*] uploaded CSV to {{S3Base}}/results/'"
+        ]
+      }
+    }
+  ]
+}
