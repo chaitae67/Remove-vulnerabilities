@@ -13,6 +13,7 @@ KISA 주통기 / SK Shieldus·네이버 클라우드 보안가이드 기준. GUI
 | **윈도우** | `kisa_win_check.ps1` | Windows 서버 | W-01~W-64 |
 | **웹서버** | `web_linux_check.sh` (Nginx·Tomcat) / `web_windows_check.ps1` (IIS) | web·was | WEB-01~WEB-26 |
 | DBMS | `db_oracle_check.sh` | Oracle DB | D-01~D-26 |
+| (통합) | `kisa_all_check.ps1` — 서버+웹서버, 리눅스·윈도우 겸용 단일 파일 | 위 리눅스/윈도우/웹서버 | U·W·WEB |
 
 > 웹서버는 소프트웨어가 OS를 걸쳐 있어(IIS=Windows, Nginx/Tomcat=Linux) 리눅스용 `.sh` + 윈도우용 `.ps1`
 > 두 파일로 나뉘지만 **항목 코드(WEB-01~26)는 동일**하다. 서버(리눅스/윈도우)·웹서버·DB 스크립트는
@@ -39,6 +40,35 @@ powershell -ExecutionPolicy Bypass -File web_windows_check.ps1 -Target tomcat -A
 > `web_windows_check.ps1` 은 IIS 와 **Windows 의 Spring Boot 내장 Tomcat(nssm)** 을 자동 감지한다.
 > 웹서버 대상: web1(IIS)·was1(Windows Tomcat)=`.ps1`, web-adm1(Nginx)·was-adm1(Linux Tomcat)=`web_linux_check.sh`.
 결과는 현재 폴더에 `*.csv` 와 `*.html`(브라우저로 바로 열리는 리포트)로 남는다. 사설망이면 그 파일만 내려받으면 된다.
+
+### 통합 점검 — `kisa_all_check.ps1` 파일 하나로 서버+웹서버 (리눅스·윈도우 겸용)
+
+위 4개(서버 리눅스/윈도우 + 웹서버 리눅스/윈도우)를 내장한 **단일 파일**. OS 가 달라도 같은 파일을 올리면 된다.
+
+```bash
+sudo bash kisa_all_check.ps1                                        # 리눅스: 서버 + 웹서버(감지된 것만)
+sudo bash kisa_all_check.ps1 --only web --target tomcat --app-url http://localhost:8080
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File kisa_all_check.ps1         # 윈도우: 서버 + 웹서버(감지된 것만)
+powershell -ExecutionPolicy Bypass -File kisa_all_check.ps1 -Only infra -OutDir C:\kisa_result
+```
+- 서버 점검 → 웹서버 자동 감지(리눅스 Nginx·Java WAS / 윈도우 IIS·Java WAS) → **감지된 웹서버마다** 웹 점검 → 통합 요약.
+  웹서버가 없으면 웹 점검은 생략(`--force-web` / `-ForceWeb` 로 강제). Nginx+Tomcat 이 같이 있으면 둘 다 점검한다.
+- 진단은 한 번에 하지만 **결과 CSV 는 4종으로 따로** 저장된다(웹은 HTML 리포트도 함께, 한 번 실행한 결과는 같은 일시):
+
+  | 구분 | 파일명 |
+  |---|---|
+  | 리눅스 | `server_linux_<호스트>_<YYYYMMDD_HHMM>.csv` |
+  | 리눅스 웹서비스 | `web_linux_<nginx\|tomcat>_<호스트>_<YYYYMMDD_HHMM>.csv` / `.html` |
+  | 윈도우 | `server_windows_<호스트>_<YYYYMMDD_HHMM>.csv` |
+  | 윈도우 웹서비스 | `web_windows_<iis\|tomcat>_<호스트>_<YYYYMMDD_HHMM>.csv` / `.html` |
+
+  `python make_reports.py <폴더>`(또는 단일 파일 `makereport_all.py`)가 이 이름(및 단독 실행 이름 `web_nginx_*` 등)을 그대로 인식한다.
+- 옵션: `--only all|infra|web`, `-o/--out-dir`, `--no-save`, `--no-color`, 웹 옵션(`--target`·`--app-url`·`--app-jar` 등)은 그대로 전달.
+  윈도우는 `-Only`·`-OutDir`·`-NoSave` 처럼 써도 된다(`--help` / `-Help`). 종료코드 0=취약 없음, 1=취약 있음, 2=실행 오류.
+- **자동 생성 파일** — 원본 4개를 고친 뒤 `python build_allinone.py` 로 재생성한다(원본은 평문 그대로 내장).
+  bash·PowerShell 겸용이라 **반드시 LF** 여야 한다(`.gitattributes` 에 지정됨. 윈도우 메모장 등으로 저장하지 말 것).
 
 ### 정형 보고서(양식 xlsx)로 만들기
 
@@ -229,6 +259,8 @@ kisa_win_check.ps1   Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
 web_linux_check.sh   웹서버(Nginx/리눅스 Tomcat) 점검 (WEB-01~26, 자동감지, CSV/JSON/HTML)
 web_windows_check.ps1 웹서버(IIS/윈도우 Tomcat) 점검 (WEB-01~26, 자동감지, UTF-8 BOM 필수)
 db_oracle_check.sh   DBMS(Oracle) 점검 (D-01~26, sqlplus, CSV/JSON/HTML)
+kisa_all_check.ps1   통합 점검 단일 파일(서버+웹서버, 리눅스 bash·윈도우 PowerShell 겸용) — 자동 생성, LF 필수
+build_allinone.py    위 4개 점검 스크립트 → kisa_all_check.ps1 생성기(원본 수정 후 재실행)
 make_report.py       진단 결과(JSON/CSV) → 공식 양식 보고서 xlsx (linux/windows/dbms/web/aws/azure/gcp/naver)
 make_reports.py      폴더 안 CSV/JSON 을 종류별로 묶어 일괄 보고서 생성(결과보고서_출력/)
 makereport_all.py    양식·변환코드 내장 단일 파일 — 서버/PC 어디서든 CSV→xlsx (파이썬3+lxml)
@@ -250,3 +282,5 @@ requirements.txt     클라우드 CLI 의존성 (CSP별 SDK + openpyxl)
 - 양식 재생성 순서: `python build_server_templates.py` → `python build_cloud_templates.py`(DBMS 양식을 원본으로 씀)
   → `python build_onefile.py`(cloudscan_all.py 에 새 양식 내장). 양식은 openpyxl 로 열어 저장하지 말 것
   (표지 로고·그래프 제목 도형·3D 원형 설정이 사라진다).
+- 단일 파일은 원본을 내장하므로 원본을 고치면 재생성한다: 점검 스크립트 4개(`kisa_unix_check.sh`·`kisa_win_check.ps1`·
+  `web_linux_check.sh`·`web_windows_check.ps1`) → `python build_allinone.py`, `make_reports.py` 등 → `python build_report_onefile.py`.
