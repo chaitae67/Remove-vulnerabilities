@@ -17,7 +17,7 @@
 #     윈도우 웹서비스   web_windows_<iis|tomcat>_<호스트>_<YYYYMMDD_HHMM>.csv/.html
 #   → python make_reports.py <폴더> 로 바로 보고서 변환 가능
 #
-#   내장 원본: kisa_unix_check.sh(c639288e), kisa_win_check.ps1(e6956d73), web_linux_check.sh(d5ac9f8d), web_windows_check.ps1(eb9a4d96)
+#   내장 원본: kisa_unix_check.sh(c639288e), kisa_win_check.ps1(e6956d73), web_linux_check.sh(243a6c2a), web_windows_check.ps1(db4a08d3)
 #==============================================================================
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 
@@ -1719,6 +1719,23 @@ except Exception:
   fi
   printf '%s' "$out"
 }
+# jar 내부 파일 목록(읽기 전용): unzip -l → python(zipfile)
+jar_ls() {
+  local out="" p
+  have unzip && out=$(unzip -l "$1" 2>/dev/null)
+  if [ -z "$out" ]; then
+    for p in python3 /usr/libexec/platform-python python; do
+      have "$p" || continue
+      out=$(tmo 30 "$p" -c 'import sys, zipfile
+try:
+    print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))
+except Exception:
+    sys.exit(1)' "$1" 2>/dev/null)
+      break
+    done
+  fi
+  printf '%s\n' "$out"
+}
 # 관리자 권한 계정 여부(WEB-09): priv_chk 계정 → PRIV_ST(VULN/MAN/빈값=권한 없음) PRIV_EV(근거)
 #   UID 0 또는 sudo -l -U 에 (ALL|root) ... ALL 전권 → VULN, sudo 일부 명령 허용·확인 불가 → MAN (그룹명만으로 판정하지 않음)
 priv_chk() {
@@ -1776,7 +1793,7 @@ else
   fi
   TOMCAT_VER=""
   # 내장 Tomcat 버전은 BOOT-INF/lib/tomcat-embed-core-<ver>.jar 파일명에서 추출
-  [ -n "$APP_JAR" ] && have unzip && TOMCAT_VER=$(unzip -l "$APP_JAR" 2>/dev/null | grep -oE 'tomcat-embed-core-[0-9.]+\.jar' | head -1 | sed -E 's/tomcat-embed-core-([0-9.]+)\.jar/\1/')
+  [ -n "$APP_JAR" ] && [ -f "$APP_JAR" ] && TOMCAT_VER=$(jar_ls "$APP_JAR" | grep -oE 'tomcat-embed-core-[0-9.]+\.jar' | head -1 | sed -E 's/tomcat-embed-core-([0-9.]+)\.jar/\1/')
   SW_VER="Tomcat ${TOMCAT_VER:-내장(Spring Boot)}"
   # 로그 디렉터리 후보(application.yml logging.file.* + 관용 경로)
   yml_logpath=$(printf '%s\n' "$APP_YML_CONTENT" | grep -iE 'logging\.file\.(path|name)|^\s*(path|name):' | grep -iE 'log' | head -1 | sed -E 's/.*[:=] *//' | tr -d '"'"'"' \r')
@@ -2153,12 +2170,23 @@ if [ "$TARGET" = nginx ]; then
     rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel / 패키지 $npkg — rpm 계열은 저장소 메타데이터 조회(부하·네트워크) 생략 → 배포판 보안 공지와 수동 비교"
   else rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel — 패키지 미소유(소스 빌드 등)·실행 바이너리 확인 불가 → nginx.org 최신 stable/mainline 및 보안 공지와 수동 비교"; fi
 else
-  # 10.1.31 < 최신 10.1.x
-  if [ -n "$TOMCAT_VER" ]; then
-    IFSV=.; set -- $TOMCAT_VER; t1=${1:-0}; t2=${2:-0}; t3=${3:-0}; unset IFSV
-    if [ "$t1" -eq 10 ] && [ "$t2" -eq 1 ] && [ "$t3" -lt 40 ]; then
-      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER — 현행 10.1.x 대비 다수 보안 수정 미반영, 최신 패치 버전으로 업그레이드 권장"
-    else rep WEB-25 GOOD "내장 Tomcat $TOMCAT_VER (비교적 최신) — 정기 패치 관리 유지 권장"; fi
+  # 지원 브랜치별 최신 패치 버전(기준표)과 비교, 지원 종료 브랜치는 취약
+  #   기준표: Maven Central tomcat-embed-core 기준일 현재 최신. 기준일 90일 경과 후 최신 이상이면 새 릴리스 확인 필요(수동확인)
+  TC_REF=2026-09-15
+  if printf '%s' "$TOMCAT_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    t1=${TOMCAT_VER%%.*}; t3=${TOMCAT_VER##*.}; br=${TOMCAT_VER%.*}
+    case "$br" in 11.0) tl=26;; 10.1) tl=60;; 9.0) tl=122;; *) tl="";; esac
+    ref_s=$(date -d "$TC_REF" +%s 2>/dev/null); stale=0
+    [ -n "$ref_s" ] && [ $(( $(date +%s) - ref_s )) -gt $(( 90 * 86400 )) ] && stale=1
+    if [ -n "$tl" ] && [ "$t3" -lt "$tl" ]; then
+      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER < $br.$tl($TC_REF 기준 최신) → 이후 보안 수정 미반영, 최신 패치 버전으로 업그레이드(Spring Boot tomcat.version 지정 또는 Boot 업그레이드)"
+    elif [ -n "$tl" ] && [ "$stale" = 1 ]; then
+      rep WEB-25 MAN "내장 Tomcat $TOMCAT_VER ≥ $br.$tl 이나 기준표($TC_REF)가 오래됨 → tomcat.apache.org 최신 패치·보안 공지와 비교"
+    elif [ -n "$tl" ]; then
+      rep WEB-25 GOOD "내장 Tomcat $TOMCAT_VER — $br 브랜치 최신($br.$tl, $TC_REF 기준) 적용, 정기 패치 관리 유지(패치 정책은 인터뷰로 확인)"
+    elif [ "$t1" -lt 11 ]; then
+      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER — 지원 종료(EOL) 브랜치($br) → 보안 패치 미제공, 지원 브랜치(9.0/10.1/11.0 등)로 업그레이드"
+    else rep WEB-25 MAN "내장 Tomcat $TOMCAT_VER — 기준표에 없는 브랜치($br) → tomcat.apache.org 최신 패치·보안 공지와 비교"; fi
   else rep WEB-25 MAN "내장 Tomcat 버전 미확인 → Spring Boot/Tomcat 최신 보안 패치 적용 여부 확인"; fi
 fi
 
@@ -3597,6 +3625,15 @@ if ($Target -eq "tomcat") {
         $_.State -eq 'Running' -and ($_.PathName -match 'nssm' -or ($AppJar -and $_.PathName -match [regex]::Escape((Split-Path $AppJar -Leaf)))) }
     if ($svcs) { $svcAcct = ($svcs | Select-Object -First 1).StartName }
     if (-not $svcAcct -and $javaProc) { try { $svcAcct = (Invoke-CimMethod -InputObject $javaProc -MethodName GetOwner).User } catch {} }
+    # nssm 서비스 설정(HKLM\...\Services\<서비스>\Parameters: AppDirectory/AppParameters/AppEnvironmentExtra) — WEB-11/13 공용
+    #   실행 jar 이름이 AppParameters 에 들어 있는 서비스를 우선 선택
+    $svcName = $null; $svcPar = $null
+    foreach ($s in @($svcs)) {
+        $p = Get-ItemProperty ("HKLM:\SYSTEM\CurrentControlSet\Services\{0}\Parameters" -f $s.Name) -ErrorAction SilentlyContinue
+        if (-not $p -or -not ($p.Application -or $p.AppParameters)) { continue }   # nssm 서비스만(Application/AppParameters 보유)
+        if (-not $svcPar -or ($AppJar -and ("$($p.AppParameters)" -like ("*{0}*" -f (Split-Path $AppJar -Leaf))))) { $svcName = $s.Name; $svcPar = $p }
+    }
+    $appDir = if ($svcPar -and $svcPar.AppDirectory) { "$($svcPar.AppDirectory)".TrimEnd('\') } else { "" }
     # application.yml / tomcat 버전
     $ymlText = $null; $tomcatVer = $null
     if ($AppJar -and (Test-Path $AppJar)) {
@@ -3644,18 +3681,70 @@ if ($Target -eq "tomcat") {
     # WEB-10 프록시
     if ($ymlText -and $ymlText -match 'proxyName|proxy-name|use-forward-headers') { Rep "WEB-10" "MAN" @("프록시 관련 설정 존재 → 신뢰 대상 고정 여부 확인") }
     else { Rep "WEB-10" "GOOD" @("Connector proxyName/proxyPort 미설정 → 프록시 구성 없음") }
-    # WEB-11 경로 설정
+    # WEB-11 경로 설정 — 배포(jar)·작업(nssm AppDirectory) 경로가 시스템/JDK 경로이거나,
+    #   개발 소스 저장소(.git·pom.xml·build.gradle 이 있는 폴더) 안의 빌드 산출물(target 등)을 그대로 실행하면 업무영역 미분리
+    $sysRe = 'Program Files|jdk|corretto|jre|\\bin($|\\)|^[A-Za-z]:\\Windows($|\\)'
+    $srcRoot = $null
+    if ($jarDir) {
+        $d = $jarDir
+        for ($i = 0; $i -lt 6 -and $d; $i++) {
+            if ((Test-Path -LiteralPath (Join-Path $d '.git')) -or (Test-Path -LiteralPath (Join-Path $d 'pom.xml')) -or
+                (Test-Path -LiteralPath (Join-Path $d 'build.gradle')) -or (Test-Path -LiteralPath (Join-Path $d 'build.gradle.kts'))) { $srcRoot = $d; break }
+            $d = Split-Path $d -Parent
+        }
+    }
+    $ev11 = @(); if ($svcName) { $ev11 += "서비스 $svcName AppDirectory=$(if($appDir){$appDir}else{'(미설정)'})" }
     if ($jarDir -eq "") { Rep "WEB-11" "MAN" @("배포 경로 미확인 → 업무영역과 분리된 전용 경로 사용 확인") }
-    elseif ($jarDir -match 'Program Files|jdk|corretto|jre|\\bin($|\\)') { Rep "WEB-11" "VULN" @("작업/배포 경로가 JDK/시스템 경로 하위($jarDir) → 업무영역 미분리, 전용 경로 권장") }
-    else { Rep "WEB-11" "GOOD" @("배포 경로=$jarDir (전용 경로)") }
+    elseif ($jarDir -match $sysRe) { Rep "WEB-11" "VULN" (@("작업/배포 경로가 JDK/시스템 경로 하위($jarDir) → 업무영역 미분리, 전용 경로 권장") + $ev11) }
+    elseif ($appDir -and $appDir -match $sysRe) { Rep "WEB-11" "VULN" (@("서비스 작업 경로(AppDirectory)가 JDK/시스템 경로 하위($appDir) → 업무영역 미분리, 전용 경로 권장") + $ev11) }
+    elseif ($srcRoot) { Rep "WEB-11" "VULN" (@("실행 jar 가 개발 소스 저장소의 빌드 산출물 경로($jarDir, 소스 루트 $srcRoot 에 .git/pom.xml/build.gradle) → 운영 배포 경로가 개발 영역과 미분리, 전용 배포 경로로 복사해 실행") + $ev11) }
+    else { Rep "WEB-11" "GOOD" (@("배포 경로=$jarDir (시스템/JDK·소스 저장소와 분리된 전용 경로)") + $ev11) }
     # WEB-12 링크
     Rep "WEB-12" "GOOD" @("Tomcat allowLinking 미설정 + 웹 경로 내 심볼릭 링크/바로가기 없음")
-    # WEB-13 설정 파일 노출(app.jar ACL)
+    # WEB-13 설정 파일 노출 — DB 접속정보가 일반 사용자에게 보이는 곳이 있으면 취약
+    #   (1) 실행 jar ACL  (2) 서비스 레지스트리(nssm AppParameters/AppEnvironmentExtra, ImagePath)의 평문 비밀번호 + 키 ACL
+    #   (3) jar/AppDirectory 옆 외부 설정(application*.yml/properties, config\)의 평문 비밀번호 + 파일 ACL
+    #   비밀번호 값은 출력하지 않고 길이만 표시, ${...} 자리표시자는 평문으로 보지 않음
+    function PwHits { param([string]$Text)
+        $o = @()
+        foreach ($m in [regex]::Matches("$Text", '(?i)([\w.\-]*(?:password|passwd|pwd))["'']?[ \t]*(?:=|:[ \t]*)["'']?([^\s"'']+)')) {
+            if ($m.Groups[2].Value -notmatch '^\$\{') { $o += ("{0}(평문 {1}자)" -f $m.Groups[1].Value.TrimStart('-'), $m.Groups[2].Value.Length) } }
+        return $o }
+    function RegUsersRead { param([string]$Key)
+        try { foreach ($a in (Get-Acl $Key -ErrorAction Stop).Access) {
+                if ($a.AccessControlType -eq 'Allow' -and $a.IdentityReference.Value -match '(Users|Everyone|Authenticated Users|INTERACTIVE)$' -and
+                    ("$($a.RegistryRights)" -match 'ReadKey|QueryValues|FullControl|^-2147483648$')) { return $a.IdentityReference.Value } }
+            return $null } catch { return $null } }
+    $w13 = @(); $ok13 = @()
     if ($AppJar -and (Test-Path $AppJar)) {
-        $u = AclHasUsers $AppJar
-        if ($u) { Rep "WEB-13" "VULN" @("DB 접속정보 포함 $AppJar 에 BUILTIN\Users 읽기·실행(RX) 권한 → 접근 제한 필요") }
-        else { Rep "WEB-13" "GOOD" @("$AppJar 에 일반 사용자(Users) 접근 권한 없음") }
-    } else { Rep "WEB-13" "MAN" @("app.jar 미확인 → DB 접속정보 포함 파일의 Users 접근 권한 확인") }
+        if (AclHasUsers $AppJar) { $w13 += "DB 접속정보 포함 $AppJar 에 BUILTIN\Users 읽기·실행(RX) 권한 → 접근 제한 필요" }
+        else { $ok13 += "$AppJar 에 일반 사용자(Users) 접근 권한 없음" }
+    }
+    if ($svcName) {
+        $sk = "HKLM:\SYSTEM\CurrentControlSet\Services\$svcName"
+        $img = (Get-ItemProperty $sk -ErrorAction SilentlyContinue).ImagePath
+        foreach ($src in @(@("$sk\Parameters", "AppParameters", "$($svcPar.AppParameters)"),
+                           @("$sk\Parameters", "AppEnvironmentExtra", (@($svcPar.AppEnvironmentExtra) -join ' ')),
+                           @($sk, "ImagePath", "$img"))) {
+            $hits = PwHits $src[2]
+            if (-not $hits) { continue }
+            $who = RegUsersRead $src[0]
+            $loc = "서비스 $svcName 레지스트리 $($src[1])"
+            if ($who) { $w13 += "$loc 에 DB 비밀번호 평문 저장: $($hits -join ', ') + 키 ACL $who 읽기 허용 → 일반 사용자가 DB 접속정보 조회 가능, 권한 제한된 외부 설정/비밀 저장소로 이전" }
+            else { $ok13 += "$loc 에 비밀번호 평문($($hits -join ', ')) 있으나 키에 일반 사용자 읽기 권한 없음(평문 보관 자체는 개선 권장)" }
+        }
+    }
+    $cfgDirs = @($jarDir, $appDir) | Where-Object { $_ } | ForEach-Object { $_; Join-Path $_ 'config' } | Select-Object -Unique
+    foreach ($cd in $cfgDirs) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $cd -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^application.*\.(ya?ml|properties)$' })) {
+            $hits = PwHits (Get-Content -LiteralPath $f.FullName -Raw -ErrorAction SilentlyContinue)
+            if ($hits -and (AclHasUsers $f.FullName)) { $w13 += "외부 설정 $($f.FullName) 에 DB 비밀번호 평문($($hits -join ', ')) + Users 접근 권한 → 권한 제한 필요" }
+            elseif ($hits) { $ok13 += "외부 설정 $($f.FullName) 는 Users 접근 권한 없음" }
+        }
+    }
+    if ($w13) { Rep "WEB-13" "VULN" ($w13 + $ok13) }
+    elseif ($AppJar -and (Test-Path $AppJar)) { Rep "WEB-13" "GOOD" $ok13 }
+    else { Rep "WEB-13" "MAN" (@("app.jar 미확인 → DB 접속정보 포함 파일/서비스 설정의 Users 접근 권한 확인") + $ok13) }
     # WEB-14 경로 내 파일 접근 통제(로그 디렉터리)
     $logDir = $null
     if ($ymlText -and $ymlText -match '(?im)^\s*(logging\.file\.path|path)\s*[:=]\s*(.+)$') { $logDir = ($matches[2].Trim().Trim('"').Trim("'")) }
@@ -3706,11 +3795,19 @@ if ($Target -eq "tomcat") {
         elseif ((Test-Path $upDir) -and (AclHasUsers $upDir)) { Rep "WEB-24" "VULN" @("업로드 경로($upDir)에 Users 접근 권한 부여 → 권한 제거") }
         else { Rep "WEB-24" "GOOD" @("업로드 경로=$upDir (전용 경로/권한 적절)") }
     } else { Rep "WEB-24" "MAN" @("업로드 경로 미확인 → 별도 전용 경로/권한 여부 확인") }
-    # WEB-25 패치
+    # WEB-25 패치 — 지원 브랜치별 최신 패치 버전(기준표)과 비교, 지원 종료 브랜치는 취약
+    #   기준표: Maven Central tomcat-embed-core 기준일 현재 최신. 기준일 90일 경과 후 최신 이상이면 새 릴리스 확인 필요(수동확인)
+    $TC_REF = "2026-09-15"; $TC_LATEST = @{ "11.0" = 26; "10.1" = 60; "9.0" = 122 }
     if ($tomcatVer -and $tomcatVer -match '^(\d+)\.(\d+)\.(\d+)') {
-        $t1=[int]$matches[1]; $t2=[int]$matches[2]; $t3=[int]$matches[3]
-        if ($t1 -eq 10 -and $t2 -eq 1 -and $t3 -lt 40) { Rep "WEB-25" "VULN" @("내장 Tomcat $tomcatVer — 현행 10.1.x 대비 다수 보안 수정 미반영, 최신 패치 버전 업그레이드 권장") }
-        else { Rep "WEB-25" "GOOD" @("내장 Tomcat $tomcatVer (비교적 최신) — 정기 패치 관리 유지 권장") }
+        $br = "$($matches[1]).$($matches[2])"; $t3 = [int]$matches[3]
+        $stale = ((Get-Date) - [datetime]$TC_REF).TotalDays -gt 90
+        if ($TC_LATEST.ContainsKey($br)) {
+            $lv = "$br.$($TC_LATEST[$br])"
+            if ($t3 -lt $TC_LATEST[$br]) { Rep "WEB-25" "VULN" @("내장 Tomcat $tomcatVer < $lv($TC_REF 기준 최신) → 이후 보안 수정 미반영, 최신 패치 버전으로 업그레이드(Spring Boot tomcat.version 지정 또는 Boot 업그레이드)") }
+            elseif ($stale) { Rep "WEB-25" "MAN" @("내장 Tomcat $tomcatVer ≥ $lv 이나 기준표($TC_REF)가 오래됨 → tomcat.apache.org 최신 패치·보안 공지와 비교") }
+            else { Rep "WEB-25" "GOOD" @("내장 Tomcat $tomcatVer — $br 브랜치 최신($lv, $TC_REF 기준) 적용, 정기 패치 관리 유지(패치 정책은 인터뷰로 확인)") }
+        } elseif ([int]$matches[1] -lt 11) { Rep "WEB-25" "VULN" @("내장 Tomcat $tomcatVer — 지원 종료(EOL) 브랜치($br) → 보안 패치 미제공, 지원 브랜치(9.0/10.1/11.0 등)로 업그레이드") }
+        else { Rep "WEB-25" "MAN" @("내장 Tomcat $tomcatVer — 기준표에 없는 브랜치($br) → tomcat.apache.org 최신 패치·보안 공지와 비교") }
     } else { Rep "WEB-25" "MAN" @("내장 Tomcat 버전 미확인 → Spring Boot/Tomcat 최신 보안 패치 적용 여부 확인") }
     # WEB-26 로그 디렉터리 권한
     if ($logDir -and (Test-Path $logDir)) {
