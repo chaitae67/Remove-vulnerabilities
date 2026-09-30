@@ -17,7 +17,7 @@
 #     윈도우 웹서비스   web_windows_<iis|tomcat>_<호스트>_<YYYYMMDD_HHMM>.csv/.html
 #   → python make_reports.py <폴더> 로 바로 보고서 변환 가능
 #
-#   내장 원본: kisa_unix_check.sh(11c4352e), kisa_win_check.ps1(54b7c537), web_linux_check.sh(4a81af91), web_windows_check.ps1(7fc9f660)
+#   내장 원본: kisa_unix_check.sh(c639288e), kisa_win_check.ps1(e6956d73), web_linux_check.sh(d5ac9f8d), web_windows_check.ps1(eb9a4d96)
 #==============================================================================
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 
@@ -291,6 +291,8 @@ rep() {
 # 공통 헬퍼
 #------------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
+# 느릴 수 있는 조회 명령을 제한 시간(초) 안에서만 실행 (timeout 이 없으면 그냥 실행)
+run_to() { local s=$1; shift; if have timeout; then timeout -k 2 "$s" "$@"; else "$@"; fi; }
 
 # 미적용 보안 업데이트 개수 조회 (계열/패키지관리자 자동 분기)
 #  $1 = dnf/yum updateinfo 에서 찾을 grep 패턴 (예: 'postfix|sendmail', 'bind')
@@ -387,6 +389,7 @@ never_login() {   # 0=한번도 로그인 안함, 1=로그인 이력 있음, 2=�
   return 1
 }
 acct_locked() { case "$(passwd -S "$1" 2>/dev/null | awk '{print $2}')" in L|LK) return 0;; *) return 1;; esac; }
+has_keys() { [ -s "$1/.ssh/authorized_keys" ] || [ -s "$1/.ssh/authorized_keys2" ]; }   # $1=홈 → SSH 키 로그인 가능 여부
 
 # ---- OS / 계열 정보 ----
 . /etc/os-release 2>/dev/null
@@ -471,37 +474,137 @@ else fv=GOOD; fi
 rep U-01 "root 계정 원격 접속 제한" $fv "Telnet: $te" "SSH: $se"
 
 # U-02 비밀번호 관리정책 설정
-# [기준] 양호 - 최대사용기간·최소길이·복잡성 등 비밀번호 관리 정책이 설정된 경우
-#        취약 - 정책이 설정되지 않은 경우
+# [기준] 양호 - 비밀번호 관리 정책이 설정된 경우 / 취약 - 설정되지 않은 경우
+#   정책 = 가이드 조치 기준: 영문·숫자·특수문자 포함 8자리 이상(비밀번호 관리 방법: 3종류 이상 8자리
+#          또는 2종류 이상 10자리), 최소 사용기간 1일, 최대 사용기간 90일, 최근 비밀번호 기억 4회 이상,
+#          "root 계정을 포함한 사용자 계정" 에 적용.
+#   ※ pwquality.conf 값은 PAM 비밀번호 스택에 pam_pwquality.so 가 있을 때만 적용된다(모듈 없으면 무효).
+#     pam_cracklib 은 pwquality.conf 를 읽지 않으므로 모듈 인자만 인정. 모듈 인자가 conf 를 덮어쓴다.
+#     conf 는 pwquality.conf → pwquality.conf.d/*.conf 순서로 키별 마지막 값을 쓴다. '-password' 줄도 인정.
+#   ※ 복잡성(최소 요구 항목 값은 반드시 -1): 영문·숫자·특수 = dcredit·ocredit·(ucredit 또는 lcredit) 모두 -1 이하
+#     또는 minclass>=3 → 길이 8 이상 / 2종류(-1 이하 credit 2개 이상 또는 minclass>=2) → 길이 10 이상.
+#     모듈만 있고 credit/minclass 가 없으면 문자종류 요구 0 → 미흡.
+#   ※ 길이는 모듈 인자/pwquality minlen(미지정이면 모듈 기본값 9), 모듈이 없으면 pam_unix minlen= 만 인정.
+#     login.defs PASS_MIN_LEN 은 PAM 이 쓰지 않으므로 참고로만 표시.
+#   ※ pam_pwquality·pam_pwhistory 는 같은 파일에서 password 유형 pam_unix.so 보다 위에 있어야 적용됨.
+#     대상 파일은 주 비밀번호 스택(RHEL: system-auth, Debian: common-password).
+#   ※ 최근 비밀번호 기억: pam_pwhistory remember=(없으면 pwhistory.conf, 그것도 없으면 모듈 기본값 10) 또는
+#     pam_unix remember=. pwhistory.conf 는 PAM 1.5+(RHEL 8.8+ 백포트)만 읽고 PAM 1.3.x/1.4 는 무시하므로
+#     설치된 pam_pwhistory.so 가 pwhistory.conf 를 참조(문자열 포함)할 때만 인정.
+#   ※ login.defs 는 신규 계정에만 적용 → /etc/shadow 에서 비밀번호가 설정된(해시 '$' 시작) 기존 계정
+#     (root 포함)의 최소 1일·최대 90일 적용 여부도 확인한다(잠금 '!'·'*' 계정 제외, root 권한 필요).
+#   ※ enforce_for_root 는 조치 권고 사항이라 참고로만 표시한다.
 maxd=$(conf_line '^[[:space:]]*PASS_MAX_DAYS' /etc/login.defs | awk '{print $2}')
 mind=$(conf_line '^[[:space:]]*PASS_MIN_DAYS' /etc/login.defs | awk '{print $2}')
 minl=$(conf_line '^[[:space:]]*PASS_MIN_LEN'  /etc/login.defs | awk '{print $2}')
 warn=$(conf_line '^[[:space:]]*PASS_WARN_AGE' /etc/login.defs | awk '{print $2}')
-pq_minlen=$(conf_line '^[[:space:]]*minlen' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null | grep -oE '[0-9]+' | tail -1)
-pq_cx=$(conf_line '^[[:space:]]*(minclass|dcredit|ucredit|lcredit|ocredit)' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null)
-pam_cx=$(grep -hE 'pam_pwquality\.so|pam_cracklib\.so' $PAM_PW 2>/dev/null | grep -vE '^[[:space:]]*#' | head -1)
-[ -n "$pam_cx" ] && [ -z "$pq_cx" ] && pq_cx="$(echo "$pam_cx" | grep -oE '(minlen|dcredit|ucredit|lcredit|ocredit|minclass)=[-0-9]+' | tr '\n' ' ')"
-eff_len=${pq_minlen:-$minl}
+pq_get() {  # $1=키 → pwquality.conf + conf.d/*.conf 의 마지막 값(주석 제외)
+  local f x v=""
+  for f in /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf; do
+    [ -f "$f" ] || continue
+    x=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$f" 2>/dev/null | tail -1 | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]+$//')
+    [ -n "$x" ] && v=$x
+  done
+  printf '%s' "$v"
+}
+pam_arg() { printf '%s\n' "$1" | grep -oE "(^|[[:space:]])$2=[-0-9]+" | tail -1 | cut -d= -f2; }   # $1=PAM줄 $2=인자명
+is_int()  { case "${1:-}" in ''|-|*[!-0-9]*|?*-*) return 1;; esac; return 0; }
+PW_MAIN=${PAM_PW%% *}                                   # 주 비밀번호 스택
+pw_stack=$(grep -nE '^[[:space:]]*-?password[[:space:]]' "$PW_MAIN" 2>/dev/null)   # 주석 제외, 줄번호 포함
+ux_ln=$(printf '%s\n' "$pw_stack" | grep -E 'pam_unix\.so' | head -1 | cut -d: -f1)
+ux_txt=$(printf '%s\n' "$pw_stack" | grep -E 'pam_unix\.so' | head -1 | cut -d: -f2-)
+cx_line=$(printf '%s\n' "$pw_stack" | grep -E 'pam_(pwquality|cracklib|passwdqc)\.so' | head -1)
+cx_ln=${cx_line%%:*}; cx_txt=${cx_line#*:}
+cx_mod=$(printf '%s' "$cx_txt" | grep -oE 'pam_(pwquality|cracklib|passwdqc)' | head -1)
+hs_line=$(printf '%s\n' "$pw_stack" | grep -E 'pam_pwhistory\.so' | head -1)
+hs_ln=${hs_line%%:*}; hs_txt=${hs_line#*:}
 miss=""
-{ [ -n "$maxd" ] && [ "$maxd" -ge 1 ] && [ "$maxd" -le 90 ]; } || miss="$miss 최대사용기간(${maxd:-미설정},기준 1~90)"
-{ [ -n "$mind" ] && [ "$mind" -ge 1 ]; }                       || miss="$miss 최소사용기간(${mind:-미설정},기준 1이상)"
-{ [ -n "$eff_len" ] && [ "$eff_len" -ge 8 ]; }                 || miss="$miss 최소길이(${eff_len:-미설정},기준 8이상)"
-{ [ -n "$pq_cx" ] || [ -n "$pam_cx" ]; }                       || miss="$miss 복잡성(미설정)"
-ev="MAX=${maxd:-미} MIN=${mind:-미} WARN=${warn:-미} LEN=${eff_len:-미} 복잡성=[${pq_cx:-${pam_cx:+pam_pwquality 적용}}]"
+# (1) 사용기간(login.defs)
+{ [ -n "$maxd" ] && [ "$maxd" -ge 1 ] && [ "$maxd" -le 90 ]; } 2>/dev/null || miss="$miss 최대사용기간(${maxd:-미설정},기준 1~90)"
+{ [ -n "$mind" ] && [ "$mind" -ge 1 ]; } 2>/dev/null                       || miss="$miss 최소사용기간(${mind:-미설정},기준 1이상)"
+# (2) 복잡성·길이 (PAM 모듈 적용 필수)
+declare -A CX=(); n_cls=0; eff_len=""; len_src=""
+if [ -z "$cx_mod" ]; then
+  miss="$miss 복잡성(${PW_MAIN##*/} 에 pam_pwquality/pam_cracklib 미적용 → pwquality.conf 값 무효)"
+  ul=$(pam_arg "$ux_txt" minlen); if is_int "$ul"; then eff_len=$ul; len_src="pam_unix"; fi
+  { [ -n "$eff_len" ] && [ "$eff_len" -ge 8 ]; } || miss="$miss 최소길이(PAM 미적용${eff_len:+,$eff_len})"
+elif [ "$cx_mod" = pam_passwdqc ]; then
+  len_src="pam_passwdqc"                                # passwdqc 는 자체 min= 정책(기본 3종 8자 수준) → 적용으로 인정
+else
+  for k in minlen dcredit ucredit lcredit ocredit minclass; do
+    v=$(pam_arg "$cx_txt" "$k")
+    [ -z "$v" ] && [ "$cx_mod" = pam_pwquality ] && v=$(pq_get "$k")
+    is_int "$v" && CX[$k]=$v
+  done
+  for k in dcredit ucredit lcredit ocredit; do [ "${CX[$k]:-0}" -le -1 ] && n_cls=$((n_cls+1)); done
+  mcl=${CX[minclass]:-0}
+  if [ -n "${CX[minlen]:-}" ]; then eff_len=${CX[minlen]}; len_src=$cx_mod; else eff_len=9; len_src="$cx_mod 기본값"; fi
+  cls3=0   # 영문·숫자·특수 3종류 요구
+  { [ "${CX[dcredit]:-0}" -le -1 ] && [ "${CX[ocredit]:-0}" -le -1 ] && { [ "${CX[ucredit]:-0}" -le -1 ] || [ "${CX[lcredit]:-0}" -le -1 ]; }; } && cls3=1
+  [ "$mcl" -ge 3 ] && cls3=1
+  cls2=0; { [ "$n_cls" -ge 2 ] || [ "$mcl" -ge 2 ]; } && cls2=1
+  { [ "$cls3" -eq 1 ] && [ "$eff_len" -ge 8 ]; } || { [ "$cls2" -eq 1 ] && [ "$eff_len" -ge 10 ]; } \
+    || miss="$miss 복잡성/길이(-1 credit ${n_cls}개·minclass ${mcl}·${eff_len}자 → 기준 영문·숫자·특수 3종 8자 또는 2종 10자)"
+  [ -n "$ux_ln" ] && [ "$cx_ln" -gt "$ux_ln" ] && miss="$miss 모듈순서($cx_mod 가 pam_unix 아래 → 미적용)"
+fi
+# (3) 최근 비밀번호 기억 4회 이상
+rem=""; rem_src=""
+if [ -n "$hs_line" ] && { [ -z "$ux_ln" ] || [ "$hs_ln" -lt "$ux_ln" ]; }; then
+  rem=$(pam_arg "$hs_txt" remember); rem_src="pam_pwhistory"
+  if [ -z "$rem" ] && [ -f /etc/security/pwhistory.conf ]; then
+    pwh_so=""
+    for so in /lib*/security/pam_pwhistory.so /usr/lib*/security/pam_pwhistory.so /lib/*/security/pam_pwhistory.so /usr/lib/*/security/pam_pwhistory.so; do
+      [ -f "$so" ] && { pwh_so=$so; break; }
+    done
+    if [ -n "$pwh_so" ] && grep -qsF pwhistory.conf "$pwh_so"; then   # 모듈이 pwhistory.conf 를 읽는 버전일 때만
+      rem=$(grep -E '^[[:space:]]*remember[[:space:]]*=[[:space:]]*[0-9]+' /etc/security/pwhistory.conf 2>/dev/null | tail -1 | grep -oE '[0-9]+$')
+      [ -n "$rem" ] && rem_src="pwhistory.conf"
+    fi
+  fi
+  [ -z "$rem" ] && { rem=10; rem_src="pam_pwhistory 기본값"; }
+elif [ -n "$hs_line" ]; then
+  miss="$miss 모듈순서(pam_pwhistory 가 pam_unix 아래 → 미적용)"
+fi
+ur=$(pam_arg "$ux_txt" remember)
+if is_int "$ur" && { [ -z "$rem" ] || [ "$ur" -gt "$rem" ]; }; then rem=$ur; rem_src="pam_unix"; fi
+{ [ -n "$rem" ] && [ "$rem" -ge 4 ]; } || miss="$miss 최근비밀번호기억(${rem:-미설정},기준 4회 이상)"
+# (4) 기존 계정(root 포함) 사용기간 적용 여부
+if [ "$IS_ROOT" -eq 1 ] && [ -r /etc/shadow ]; then
+  sh_bad=$(awk -F: '$2 ~ /^\$/ && ($5=="" || $5+0>90 || $4=="" || $4+0<1) {printf "%s(%s/%s) ", $1, ($4==""?"-":$4), ($5==""?"-":$5)}' /etc/shadow 2>/dev/null)
+  [ -n "$sh_bad" ] && miss="$miss 기존계정_사용기간미적용(최소/최대):${sh_bad% }"
+  sh_note="shadow 기존계정 확인"
+else
+  sh_note="shadow 확인불가(비-root)"
+fi
+efr="없음"
+{ printf '%s\n' "$cx_txt" | grep -qw enforce_for_root || grep -qsE '^[[:space:]]*enforce_for_root([[:space:]]|$)' /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf; } && efr="있음"
+cx_view="${cx_mod:-미적용}"
+[ ${#CX[@]} -gt 0 ] && cx_view="$cx_view $(for k in minlen dcredit ucredit lcredit ocredit minclass; do [ -n "${CX[$k]:-}" ] && printf '%s=%s ' "$k" "${CX[$k]}"; done | sed 's/ $//')"
+ev="MAX=${maxd:-미} MIN=${mind:-미} WARN=${warn:-미} LEN=${eff_len:-미}(${len_src:-없음}) 복잡성=[${cx_view}] 기억=${rem:-미}(${rem_src:-없음}) | ${PW_MAIN}, login.defs PASS_MIN_LEN=${minl:-미}(참고), enforce_for_root=${efr}(권고), ${sh_note}"
 if [ -z "$miss" ]; then rep U-02 "비밀번호 관리정책 설정" GOOD "$ev"
 else rep U-02 "비밀번호 관리정책 설정" VULN "미흡:$miss" "$ev"; fi
 
 # U-03 계정 잠금 임계값 설정
 # [기준] 양호 - 계정 잠금 임계값이 10회 이하로 설정
 #        취약 - 미설정 또는 10회 초과
-fl_mod=$(grep -hE 'pam_faillock\.so|pam_tally2\.so' $PAM_AUTH 2>/dev/null | grep -vE '^[[:space:]]*#' | head -1)
-deny=$(grep -rhoE 'deny[[:space:]]*=[[:space:]]*[0-9]+' /etc/security/faillock.conf $PAM_AUTH 2>/dev/null | grep -oE '[0-9]+' | head -1)
-if [ -z "$fl_mod" ] && ! grep -qE '^[[:space:]]*deny' /etc/security/faillock.conf 2>/dev/null; then
-  rep U-03 "계정 잠금 임계값 설정" VULN "pam_faillock/pam_tally2 미적용 → 로그인 실패 임계값 없음"
+#   ※ 잠금은 PAM auth 스택($PAM_AUTH)에 pam_faillock(또는 pam_tally/pam_tally2)이 실제로 로드될 때만 동작한다
+#     (주석 아닌 'auth'/'-auth' 줄). faillock.conf 는 pam_faillock.so 가 읽는 설정일 뿐 → 파일에 deny 만 있고
+#     모듈이 없으면 취약.
+#   ※ deny 우선순위: 모듈 인자 > faillock.conf 의 주석 아닌 deny(pam_faillock 일 때만) > pam_faillock 기본값 3.
+#     pam_tally(2) 는 deny 미지정 시 잠금 없음 → 취약.
+fl_lines=$(grep -hE '^[[:space:]]*-?auth[[:space:]].*pam_(faillock|tally2?)\.so' $PAM_AUTH 2>/dev/null)
+fl_mod=$(printf '%s\n' "$fl_lines" | grep -oE 'pam_(faillock|tally2?)' | head -1)
+fl_conf_deny=$(grep -E '^[[:space:]]*deny[[:space:]]*=[[:space:]]*[0-9]+' /etc/security/faillock.conf 2>/dev/null | tail -1 | grep -oE '[0-9]+$')
+deny=$(printf '%s\n' "$fl_lines" | grep -oE '(^|[[:space:]])deny=[0-9]+' | cut -d= -f2 | sort -n | tail -1); deny_src="PAM 인자"
+if [ -z "$deny" ] && [ "$fl_mod" = pam_faillock ]; then
+  if [ -n "$fl_conf_deny" ]; then deny=$fl_conf_deny; deny_src="faillock.conf"; else deny=3; deny_src="pam_faillock 기본값"; fi
+fi
+if [ -z "$fl_mod" ]; then
+  rep U-03 "계정 잠금 임계값 설정" VULN "PAM auth 스택($PAM_AUTH)에 pam_faillock/pam_tally2 미적용 → 로그인 실패 임계값 없음${fl_conf_deny:+ (faillock.conf deny=$fl_conf_deny 는 모듈 미로드로 무효)}"
 elif [ -n "$deny" ] && [ "$deny" -ge 1 ] && [ "$deny" -le 10 ]; then
-  rep U-03 "계정 잠금 임계값 설정" GOOD "잠금 모듈 적용 + deny=$deny (10회 이하)"
+  rep U-03 "계정 잠금 임계값 설정" GOOD "잠금 모듈($fl_mod) 적용 + deny=$deny (${deny_src}, 10회 이하)"
 else
-  rep U-03 "계정 잠금 임계값 설정" VULN "잠금 모듈은 적용됐으나 deny=${deny:-미지정} (1~10 필요)"
+  rep U-03 "계정 잠금 임계값 설정" VULN "잠금 모듈($fl_mod)은 적용됐으나 deny=${deny:-미지정} (1~10 필요)"
 fi
 
 # U-04 비밀번호 파일 보호
@@ -570,30 +673,55 @@ else
 fi
 
 # U-08 관리자 그룹에 최소한의 계정 포함
-# [기준] 양호 - 관리자 그룹(root/wheel/sudo 등)에 불필요한 계정이 등록되어 있지 않은 경우
-#        취약 - GID 0 그룹에 root 외 계정, 또는 관리자 그룹에 방치(미사용/잠금) 계정 등록
-rootg=$(getent group root 2>/dev/null | awk -F: '{print $4}')
+# [기준] 양호 - 관리자 그룹에 불필요한 계정이 등록되어 있지 않은 경우
+#        취약 - 관리자 그룹에 불필요한 계정이 등록된 경우
+#   원문 점검(Step 1)은 /etc/group 의 root 그룹(GID 0) 구성원 확인 → root 그룹에 root 외 계정이 있으면 취약.
+#   확장 범위(원문 밖 — 판정은 양호/수동확인만): wheel·sudo 그룹, sudoers 에서 ALL 권한을 받는 %그룹·사용자.
+#   ※ Debian/Ubuntu 의 adm 그룹은 로그 열람용 시스템 그룹(기본 구성원 syslog: nologin·잠금)이라
+#     root 권한과 무관하다 → 점검 대상에서 제외. (포함하면 기본 설치 Ubuntu 가 항상 취약으로 오탐)
+#   ※ 확장 범위 계정은 lastlog 로그인 이력이 있으면 암호 잠금과 무관하게 활성으로 본다
+#     (키 전용 관리자 계정은 useradd 기본 '!'/'!!' 라 passwd -S 가 L/LK — 잠금만으로 방치로 보지 않음).
+#     root 자신과, amazon-ssm-agent 가 동작 중인 ssm-user(Session Manager 전용)는 사용 중으로 본다.
+#   ※ 로그인 이력 없음·확인불가 계정(잠금 + authorized_keys 없음이면 '로그인 불가·방치 의심' 표기)은 불필요 여부를
+#     시스템 상태로 확정할 수 없어 수동확인. 미사용 클라우드 기본계정의 취약 판정은 U-07 에서 한다(이중 계상 방지).
+#   판정: root 그룹 구성원 → 취약 / 확장 범위에 사용 확인 필요 계정 → 수동확인 / 그 외(모두 활성·해당 없음) → 양호.
+rootg=$(getent group root 2>/dev/null | awk -F: '{print $4}' | tr ',' '\n' | grep -vxE 'root|' | tr '\n' ' ')
 sudo_groups=$(grep -rhE '^[[:space:]]*%[A-Za-z0-9_.-]+[[:space:]]+ALL=\(ALL' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | sed 's/^[[:space:]]*%//' | awk '{print $1}' | sort -u | tr '\n' ' ')
 sudoall=$(grep -rhE '^[[:space:]]*[%A-Za-z0-9_.-]+[[:space:]]+ALL=\(ALL' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
-adm_view=""; stale_adm=""
-for g in root wheel sudo adm $sudo_groups; do
+sudo_users=$(printf '%s\n' $sudoall | grep -vE '^$|^%|^root$|^[A-Z][A-Z0-9_]*$' | tr '\n' ' ')   # 사용자 단위 ALL (별칭 제외)
+adm_view=""; idle_adm=""; declare -A adm_src=()
+adm_chk() {  # $1=계정  $2=소속(그룹명 또는 sudoers) → 사용 확인이 필요하면 idle_adm 에 추가
+  local u=$1 g=$2 nl h t
+  id "$u" >/dev/null 2>&1 || return 0                 # 존재하지 않는 계정 참조는 무시
+  [ "$u" = root ] && return 0
+  [ "$u" = ssm-user ] && proc_run amazon-ssm-agent && return 0   # Session Manager 사용 중
+  never_login "$u"; nl=$?                               # 0=이력없음 1=이력있음 2=확인불가
+  [ "$nl" -eq 1 ] && return 0                           # 로그인 이력 있음 → 활성(암호 잠금 여부 무관)
+  h=$(getent passwd "$u" 2>/dev/null | cut -d: -f6)
+  case $nl in 0) t="로그인이력없음";; *) t="로그인이력 확인불가";; esac
+  case "$CLOUD_DEFAULT" in *" $u "*) t="클라우드기본,$t";; esac
+  if acct_locked "$u"; then
+    if has_keys "$h"; then t="$t,암호잠금(authorized_keys 있음 → 키 로그인 가능)"; else t="$t,잠금·키없음(로그인 불가·방치 의심)"; fi
+  elif has_keys "$h"; then t="$t,authorized_keys있음"; fi
+  idle_adm="$idle_adm ${u}($g,$t)"
+}
+for g in $(printf '%s\n' root wheel sudo $sudo_groups | awk 'NF && !s[$0]++'); do
   mm=$(getent group "$g" 2>/dev/null | awk -F: '{gsub(/,/," ",$4); print $4}')
   [ -z "$mm" ] && continue
   adm_view="$adm_view ${g}:{${mm}}"
-  for u in $mm; do
-    case "$CLOUD_DEFAULT" in *" $u "*) continue;; esac
-    if acct_locked "$u"; then stale_adm="$stale_adm ${u}($g,잠금)"
-    elif never_login "$u"; then stale_adm="$stale_adm ${u}($g,로그인이력없음)"; fi
-  done
+  for u in $mm; do adm_src[$u]="${adm_src[$u]:+${adm_src[$u]}/}$g"; done
 done
+for u in $sudo_users; do adm_src[$u]="${adm_src[$u]:+${adm_src[$u]}/}sudoers"; done
+for u in $(printf '%s\n' "${!adm_src[@]}" | sort); do adm_chk "$u" "${adm_src[$u]}"; done   # 계정별 1회 판정
+[ -n "$sudo_users" ] && adm_view="$adm_view sudoers-ALL:{${sudo_users% }}"
 if [ -n "$rootg" ]; then
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "GID 0(root) 그룹에 일반 계정: $rootg"
-elif [ -n "$stale_adm" ]; then
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "관리자 그룹에 방치 계정:$stale_adm (sudo ALL 권한 부여: ${sudoall:-없음})"
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" VULN "GID 0(root) 그룹에 root 외 계정: ${rootg% } → 불필요 계정은 root 그룹에서 제거" ${adm_view:+"참고(확장 범위) 관리자 권한 계정 구성:${adm_view}"}
 elif [ -z "$adm_view" ]; then
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "관리자 그룹(root/wheel/sudo)에 추가 계정 없음"
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "root 그룹(GID 0)에 root 외 계정 없음, wheel/sudo·sudoers ALL 에도 root 외 계정 없음"
+elif [ -n "$idle_adm" ]; then
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" MAN "root 그룹(GID 0)에 root 외 계정 없음(원문 기준 충족). 확장 범위(wheel/sudo·sudoers ALL) 계정 중 사용 확인 필요:${idle_adm} → 불필요하면 관리자 그룹/sudoers 에서 제거" "확장 범위 구성:${adm_view}"
 else
-  rep U-08 "관리자 그룹에 최소한의 계정 포함" MAN "관리자 그룹 구성:${adm_view} (sudo ALL: ${sudoall:-없음}) → 각 계정의 관리자 권한 필요성 확인"
+  rep U-08 "관리자 그룹에 최소한의 계정 포함" GOOD "root 그룹(GID 0)에 root 외 계정 없음. 확장 범위 관리자 권한 계정 구성:${adm_view} — 모두 로그인 이력이 있는 활성 계정(ssm-user 는 SSM 에이전트 동작)"
 fi
 
 # U-09 계정이 존재하지 않는 GID 금지
@@ -812,8 +940,19 @@ else rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD "신뢰파일 존
 
 # U-28 접속 IP 및 포트 제한
 # [기준] 양호 - 허용 호스트 IP/포트 제한 설정(TCP Wrapper 또는 호스트 방화벽) / 취약 - 미설정
+#   ※ TCP Wrapper 는 hosts.deny ALL:ALL + hosts.allow 허용 줄이 있고, 다음을 모두 만족할 때만 제한으로 인정한다.
+#     - 데몬 필드가 sshd 또는 ALL 인 허용 줄이 전체 허용이 아님: 클라이언트 목록에 ALL(목록 중간 포함)·0.0.0.0/0
+#       이 있으면 전체 허용(단, ': DENY' 로 끝나는 거부 줄은 제외).
+#     - sshd 가 libwrap 에 링크됨(ldd). RHEL/Rocky 8+ 등 tcp_wrappers 가 제거된 sshd 는 hosts.allow/deny 가 무효.
+#     위 조건을 못 채우면 호스트 방화벽 판정으로 넘어간다.
 tcpw_deny=$(grep -viE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.deny 2>/dev/null | grep -icE 'ALL[[:space:]]*:[[:space:]]*ALL')
 tcpw_allow=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.allow 2>/dev/null)
+allow_open=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.allow 2>/dev/null \
+  | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(sshd|ALL)([,[:space:]][^:]*)?:' \
+  | grep -viE ':[[:space:]]*DENY[[:space:]]*$' \
+  | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|0\.0\.0\.0/0)([[:space:]]*$|[[:space:]]*:|[[:space:],]|$)' | head -3 | tr '\n' ';')
+sshd_bin=$(command -v sshd 2>/dev/null); [ -z "$sshd_bin" ] && [ -x /usr/sbin/sshd ] && sshd_bin=/usr/sbin/sshd
+wrap_ok=0; [ -n "$sshd_bin" ] && have ldd && ldd "$sshd_bin" 2>/dev/null | grep -q libwrap && wrap_ok=1
 fw="none"; fw_rules=0
 svc_active firewalld && { fw="firewalld"; firewall-cmd --list-rich-rules 2>/dev/null | grep -q . && fw_rules=1; firewall-cmd --list-sources 2>/dev/null | grep -q . && fw_rules=1; }
 { have ufw && ufw status 2>/dev/null | grep -qi '^Status: active'; } && { fw="ufw"; ufw status 2>/dev/null | grep -qiE 'ALLOW|DENY' && fw_rules=1; }
@@ -821,14 +960,17 @@ if [ "$fw" = none ] && [ "$IS_ROOT" -eq 1 ]; then
   if have nft && nft list ruleset 2>/dev/null | grep -qE 'ip (saddr|daddr)|tcp dport'; then fw="nftables"; fw_rules=1
   elif have iptables && iptables -S 2>/dev/null | grep -qE '(-s |--dport ).*-j (ACCEPT|DROP|REJECT)'; then fw="iptables"; fw_rules=1; fi
 fi
-if [ "$tcpw_deny" -ge 1 ] && [ "$tcpw_allow" -ge 1 ]; then
-  rep U-28 "접속 IP 및 포트 제한" GOOD "TCP Wrapper: hosts.deny ALL:ALL + hosts.allow ${tcpw_allow}줄 (방화벽=$fw)"
+u28_why="TCP Wrapper 미설정"
+[ "$tcpw_deny" -ge 1 ] && [ -n "$allow_open" ] && u28_why="TCP Wrapper hosts.allow 가 전체 허용(${allow_open%;})"
+[ "$tcpw_deny" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 0 ] && u28_why="TCP Wrapper 설정은 있으나 sshd 가 libwrap 미연동(${sshd_bin:-sshd 없음}) → 무효"
+if [ "$tcpw_deny" -ge 1 ] && [ "$tcpw_allow" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 1 ]; then
+  rep U-28 "접속 IP 및 포트 제한" GOOD "TCP Wrapper: hosts.deny ALL:ALL + hosts.allow ${tcpw_allow}줄(특정 호스트만 허용), sshd libwrap 연동 (방화벽=$fw)"
 elif [ "$fw_rules" -eq 1 ]; then
   rep U-28 "접속 IP 및 포트 제한" GOOD "호스트 방화벽($fw)에 소스/포트 제한 규칙 존재"
 elif [ "$fw" = none ] && [ "$IS_ROOT" -ne 1 ]; then
-  rep U-28 "접속 IP 및 포트 제한" MAN "TCP Wrapper 미설정. 방화벽 규칙은 root 확인 필요 (클라우드는 SG/NACL 별도 점검)"
+  rep U-28 "접속 IP 및 포트 제한" MAN "$u28_why. 방화벽 규칙은 root 확인 필요 (클라우드는 SG/NACL 별도 점검)"
 else
-  rep U-28 "접속 IP 및 포트 제한" VULN "TCP Wrapper 미설정 + 호스트 방화벽($fw) 제한 규칙 없음 (클라우드 SG는 별도 점검)"
+  rep U-28 "접속 IP 및 포트 제한" VULN "$u28_why + 호스트 방화벽($fw) 제한 규칙 없음 (클라우드 SG는 별도 점검)"
 fi
 
 # U-29 hosts.lpd   [기준] 양호 - 파일 없음, 또는 소유자 root + 권한 600 이하
@@ -839,6 +981,8 @@ else chk_perm U-29 "hosts.lpd 파일 소유자 및 권한 설정" /etc/hosts.lpd
 # [기준] 양호 - UMASK 값이 022 이상(그룹·타 사용자 쓰기 비트가 마스킹) / 취약 - 022 미만
 #  점검 대상: /etc/login.defs, PAM pam_umask, /etc/profile·bashrc·csh 계열,
 #            /etc/profile.d/*, /etc/default/login, 로그인 계정 dotfile, 현재 세션 umask
+#  ※ 가이드는 "022 미만이면 취약" 이며 예외가 없다 → RHEL 기본 /etc/profile·bashrc 의 UPG 조건부
+#    "UID>199 && 그룹명=계정명 → umask 002" 도 그대로 취약으로 평가한다(일반 사용자에게 실제 적용되는 값).
 um_ge() { [ "$(( 8#${1:-0} & 8#022 ))" -eq "$(( 8#022 ))" ]; }
 um_all=""; um_bad=""
 um_take() {   # $1=출처라벨  $2=umask값
@@ -867,11 +1011,6 @@ for d in /root $(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $7 !~ /(nologin|f
       grep -hE '^[[:space:]]*umask[[:space:]]+[0-7]{3,4}' "$rc" 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE '[0-7]{3,4}')
   done
 done
-# 6) RHEL UPG 조건부 umask 002 (/etc/bashrc·/etc/profile 의 "id -gn = id -un" 블록 한정)는
-#    Red Hat 표준 동작이므로 취약으로 보지 않음. profile.d/login.defs 등의 002 는 그대로 평가.
-if [ "$FAM" = rhel ] && grep -qsE 'id -gn.*id -un|UID.*-gt.*(199|200)' /etc/bashrc /etc/profile; then
-  um_bad=$(printf '%s' " $um_bad " | sed -E 's/ (bashrc|profile)\(00[27]\) / /g' | xargs)
-fi
 cur_um=$(umask 2>/dev/null)
 if [ -n "$um_bad" ]; then
   rep U-30 "UMASK 설정 관리" VULN "022 미만 UMASK 설정 존재:${um_bad} (현재 세션 umask=$cur_um) → 022 이상으로 설정"
@@ -946,13 +1085,20 @@ if [ -n "$r_hit" ]; then rep U-36 "r 계열 서비스 비활성화" VULN "r계�
 else rep U-36 "r 계열 서비스 비활성화" GOOD "rlogin/rsh/rexec 미실행"; fi
 
 # U-37 crontab 설정파일 권한 설정
-# [기준] 양호 - cron/at '설정파일'의 소유자 root + 그룹/기타 과도권한 없음(640 이하) / 취약 - 아님
-#   ※ 점검 대상은 cron 작업을 정의하는 설정파일이다:
-#      /etc/crontab, /etc/cron.allow, /etc/cron.deny, /etc/at.allow, /etc/at.deny,
-#      /etc/cron.d/*, /var/spool/cron/ 하위 사용자 crontab.
+# [기준] 양호 - crontab·at 명령어에 일반 사용자 실행 권한이 제거되어 있고, cron/at 관련 파일 권한이 640 이하
+#        취약 - 위 두 조건 중 하나라도 미충족
+#   ※ 명령어: /usr/bin/crontab, /usr/bin/at → 소유자 root + 750 이하(타 사용자 실행 없음, SUID/SGID 제거).
+#     (배포판 기본값 crontab 2755/4755, at 6755/4755 는 일반 사용자가 예약 작업을 등록할 수 있어 취약)
+#   ※ 관련 파일: /etc/crontab, /etc/cron.allow, /etc/cron.deny, /etc/at.allow, /etc/at.deny,
+#      /etc/cron.d/*, /var/spool/cron/ 하위 사용자 crontab → 소유자 root + 640 이하.
 #   ※ run-parts 스크립트 디렉터리(cron.hourly/daily/weekly/monthly)의 실행 스크립트는
 #      설정파일이 아니라 실행 권한(x)이 필요한 스크립트이므로 상세가이드 점검 대상이 아니다.
 #   ※ 권한은 숫자 크기가 아니라 그룹/기타 비트로 비교(perm_go_le) — 700 은 640 보다 제한적이라 양호.
+cmd_bad=""
+for f in /usr/bin/crontab /usr/bin/at; do
+  [ -e "$f" ] || continue; p=$(stat -Lc '%a' "$f"); o=$(stat -Lc '%U' "$f")
+  { [ "$o" = root ] && [ $(( 8#$p & 8#7000 )) -eq 0 ] && perm_go_le "$p" 750; } || cmd_bad="$cmd_bad $f($o,$p)"
+done
 cron_bad=""
 for f in /etc/crontab /etc/cron.allow /etc/cron.deny /etc/at.allow /etc/at.deny; do
   [ -e "$f" ] || continue; p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
@@ -969,12 +1115,15 @@ for f in /var/spool/cron/* /var/spool/cron/crontabs/*; do
   perm_go_le "$p" 600 || cron_bad="$cron_bad $f($p)"
 done
 [ -e /etc/cron.allow ] && cron_restrict="cron.allow 존재(허용목록 방식)" || cron_restrict="cron.allow 없음(전체 사용자 crontab 가능)"
-if [ -n "$cron_bad" ]; then
-  rep U-37 "crontab 설정파일 권한 설정" VULN "cron/at 설정파일 권한 기준(소유자 root, 그룹/기타 640 이하) 초과:$cron_bad. $cron_restrict"
+if [ -n "$cmd_bad$cron_bad" ]; then
+  u37=""
+  [ -n "$cmd_bad" ]  && u37="$u37 명령어 일반 사용자 실행/SUID·SGID 허용(기준: root, 750 이하):$cmd_bad."
+  [ -n "$cron_bad" ] && u37="$u37 설정파일 권한 초과(기준: root, 640 이하):$cron_bad."
+  rep U-37 "crontab 설정파일 권한 설정" VULN "${u37# } $cron_restrict"
 elif [ -e /etc/cron.allow ]; then
-  rep U-37 "crontab 설정파일 권한 설정" GOOD "cron/at 설정파일 소유자 root + 그룹/기타 과도권한 없음(640 이하), $cron_restrict"
+  rep U-37 "crontab 설정파일 권한 설정" GOOD "crontab/at 명령어 root·750 이하(SUID/SGID 없음) + cron/at 설정파일 root·640 이하, $cron_restrict"
 else
-  rep U-37 "crontab 설정파일 권한 설정" MAN "cron/at 설정파일 권한은 양호. 다만 $cron_restrict → cron.allow 로 일반 사용자 crontab 제한 권고(인터뷰)"
+  rep U-37 "crontab 설정파일 권한 설정" MAN "crontab/at 명령어·설정파일 권한은 양호. 다만 $cron_restrict → cron.allow 로 일반 사용자 crontab 제한 권고(인터뷰)"
 fi
 
 # U-38 DoS 취약 서비스 비활성화   [기준] 양호 - 비활성화 / 취약 - 활성화
@@ -1281,19 +1430,53 @@ echo -e "${W}[ 4. 패치 관리 ]${N}"
 
 # U-64 주기적인 보안 패치 및 벤더 권고사항 적용
 # [기준] 양호 - 패치 정책 수립 + 주기적 패치 관리 + 패치 확인/적용 / 취약 - 아님
+#   ※ OS 표준 지원 종료(EOL)라도 확장 지원이 활성이면 보안 패치를 받으므로 EOL 로 보지 않는다.
+#     Ubuntu ESM : /var/lib/ubuntu-advantage/status.json(오프라인 파일, 1순위)의 attached=true + esm-infra status=enabled
+#                  (+ 계약 만료일 미경과). 파일이 없을 때만 'pro status'(timeout 20초)의 esm-infra enabled 로 확인.
+#     Debian ELTS: 주석 제외 활성 소스(deb 줄·deb822 URIs)에 extended-lts(Freexian). Amazon Linux 2 는 연장 수단 없음.
 sec_pend=$(sec_update_count '' '')   # 전체 보안 업데이트 건수 (dnf/yum/apt 자동 분기)
+today=$(date +%Y%m%d)
+ext_on=0; ext_note=""
+if [ "${ID:-}" = ubuntu ]; then
+  st=/var/lib/ubuntu-advantage/status.json
+  if [ -f "$st" ]; then
+    st_py=""
+    have python3 && st_py=$(run_to 10 python3 -c 'import json,re,sys
+d=json.loads(open(sys.argv[1],"rb").read().decode("utf-8","replace"))
+s=[x.get("status","") for x in d.get("services",[]) if x.get("name")=="esm-infra"]
+w=lambda v: re.sub(r"[^A-Za-z0-9_.:-]","",str(v)) or "none"
+print(w(str(d.get("attached")).lower()), w(s[0] if s else "none"), w((d.get("expires") or "none")[:10]))' "$st" 2>/dev/null)
+    att=$(printf '%s' "$st_py" | awk '{print $1}'); esm=$(printf '%s' "$st_py" | awk '{print $2}'); exp=$(printf '%s' "$st_py" | awk '{print $3}')
+    [ -z "$att" ] && att=$(grep -oE '"attached": *(true|false)' "$st" 2>/dev/null | head -1 | grep -oE 'true|false')
+    [ -z "$esm" ] && esm=$(grep -oE '"name": *"esm-infra"[^}]*' "$st" 2>/dev/null | grep -oE '"status": *"[a-z/-]+"' | head -1 | sed -E 's/.*"([a-z/-]+)"$/\1/')
+    [ -z "$exp" ] && exp=$(grep -oE '"expires": *"[0-9]{4}-[0-9]{2}-[0-9]{2}' "$st" 2>/dev/null | head -1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}')
+    ext_note="Ubuntu Pro status.json: attached=${att:-?}, esm-infra=${esm:-?}, 만료=${exp:-?}"
+    if [ "$att" = true ] && [ "$esm" = enabled ]; then
+      case "$exp" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) [ "${exp//-/}" -ge "$today" ] && ext_on=1 ;; *) ext_on=1 ;; esac
+    fi
+  elif have pro; then
+    run_to 20 pro status 2>/dev/null | grep -qE '^esm-infra[[:space:]]+yes[[:space:]]+enabled' && ext_on=1
+    ext_note="pro status: esm-infra $([ "$ext_on" -eq 1 ] && echo enabled || echo 미활성/확인불가)"
+  fi
+elif [ "${ID:-}" = debian ]; then
+  if { grep -hsE '^[[:space:]]*deb(-src)?[[:space:]]' /etc/apt/sources.list /etc/apt/sources.list.d/*.list
+       grep -hsiE '^[[:space:]]*URIs:' /etc/apt/sources.list.d/*.sources; } | grep -q 'extended-lts'; then
+    ext_on=1; ext_note="Debian ELTS(extended-lts) 활성 소스"
+  fi
+fi
 eol_note=""
 case "${ID}:${VERSION_ID}" in
-  debian:11) [ "$(date +%Y%m%d)" -ge 20260831 ] && eol_note=" (Debian 11 표준 지원 종료)";;
-  ubuntu:20.04) [ "$(date +%Y%m%d)" -ge 20250531 ] && eol_note=" (Ubuntu 20.04 표준 지원 종료, ESM 필요)";;
-  amzn:2) [ "$(date +%Y%m%d)" -ge 20260630 ] && eol_note=" (Amazon Linux 2 지원 종료 임박/종료)";;
+  debian:11) [ "$today" -ge 20260831 ] && eol_note=" (Debian 11 표준 지원 종료)";;
+  ubuntu:20.04) [ "$today" -ge 20250531 ] && eol_note=" (Ubuntu 20.04 표준 지원 종료, ESM 필요)";;
+  amzn:2) [ "$today" -ge 20260630 ] && eol_note=" (Amazon Linux 2 지원 종료 임박/종료)";;
 esac
+[ -n "$eol_note" ] && [ "$ext_on" -eq 1 ] && { ext_note="OS 표준 지원 종료이나 확장 지원 활성 — $ext_note"; eol_note=""; }
 if [ "$sec_pend" != "?" ] && [ "${sec_pend:-0}" -gt 0 ]; then
-  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "미적용 보안 업데이트 약 ${sec_pend}건$eol_note"
+  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "미적용 보안 업데이트 약 ${sec_pend}건$eol_note" ${ext_note:+"확장지원: $ext_note"}
 elif [ -n "$eol_note" ]; then
-  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "OS 지원 종료$eol_note → 보안 패치 수급 불가"
+  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" VULN "OS 지원 종료$eol_note + 확장 지원(ESM/ELTS) 없음 → 보안 패치 수급 불가" ${ext_note:+"확장지원: $ext_note"}
 else
-  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" MAN "미적용 보안 업데이트 없음(sec_pend=$sec_pend). 패치 적용 정책/주기/이력은 인터뷰 확인"
+  rep U-64 "주기적인 보안 패치 및 벤더 권고사항 적용" MAN "미적용 보안 업데이트 없음(sec_pend=$sec_pend). 패치 적용 정책/주기/이력은 인터뷰 확인" ${ext_note:+"확장지원: $ext_note"}
 fi
 
 #==============================================================================
@@ -1301,13 +1484,31 @@ echo -e "${W}[ 5. 로그 관리 ]${N}"
 #==============================================================================
 
 # U-65 NTP 및 시각 동기화 설정   [기준] 양호 - NTP/시각 동기화가 기준에 따라 적용 / 취약 - 아님
+#   동기화 판단(원문 점검: chronyc sources / ntpq -pn 으로 '동기화된 서버' 확인) — 아래 중 하나면 동기화됨:
+#     timedatectl NTPSynchronized=yes,
+#     chronyc -n tracking 의 Leap status 가 Normal(Insert/Delete second 포함) + chronyc -n sources 에 선택된 소스
+#       ('^*' 서버, '#*' 참조클럭, '=*' peer),
+#     ntpstat 성공 또는 ntpq -pn 의 선택 피어('*').
+#   ※ chronyc 종료코드는 쓰지 않는다(데몬과 통신만 되면 'Leap status: Not synchronised' 여도 0 을 돌려줌).
 ntp_svc=""
 for s in chronyd ntpd ntp systemd-timesyncd; do svc_active "$s" && ntp_svc="$s"; done
-synced=$(timedatectl show 2>/dev/null | grep -E 'NTPSynchronized=yes|SystemClockSynchronized=yes')
-if [ -n "$ntp_svc" ] && { [ -n "$synced" ] || chronyc tracking >/dev/null 2>&1 || ntpstat >/dev/null 2>&1; }; then
-  rep U-65 "NTP 및 시각 동기화 설정" GOOD "$ntp_svc 활성 + 시각 동기화됨"
+synced=$(timedatectl show 2>/dev/null | grep -E '^NTPSynchronized=yes')
+chr_leap=""; chr_sel=""; chr_ok=0
+if have chronyc && { svc_active chronyd || svc_active chrony; }; then
+  chr_leap=$(run_to 10 chronyc -n tracking 2>/dev/null | sed -n 's/^Leap status[[:space:]]*:[[:space:]]*//p')
+  chr_sel=$(run_to 10 chronyc -n sources 2>/dev/null | grep -E '^[#^=]\*' | head -1 | awk '{print $2}')
+  case "$chr_leap" in Normal|"Insert second"|"Delete second") [ -n "$chr_sel" ] && chr_ok=1 ;; esac
+fi
+ntp_sel=""; ntp_ok=0
+if svc_active ntpd || svc_active ntp; then
+  have ntpq && ntp_sel=$(run_to 10 ntpq -pn 2>/dev/null | grep -E '^\*' | head -1 | awk '{print substr($1, 2)}')
+  { [ -n "$ntp_sel" ] || { have ntpstat && run_to 10 ntpstat >/dev/null 2>&1; }; } && ntp_ok=1
+fi
+u65_ev="NTPSynchronized=$([ -n "$synced" ] && echo yes || echo no/확인불가)${chr_leap:+, chrony Leap status=$chr_leap}${chr_sel:+, chrony 선택 소스=$chr_sel}${ntp_sel:+, ntpd 선택 피어=$ntp_sel}"
+if [ -n "$ntp_svc" ] && { [ -n "$synced" ] || [ "$chr_ok" -eq 1 ] || [ "$ntp_ok" -eq 1 ]; }; then
+  rep U-65 "NTP 및 시각 동기화 설정" GOOD "$ntp_svc 활성 + 시각 동기화됨 ($u65_ev)"
 elif [ -n "$ntp_svc" ]; then
-  rep U-65 "NTP 및 시각 동기화 설정" VULN "$ntp_svc 활성이나 동기화 미확인 → NTP 서버 접근/설정 확인"
+  rep U-65 "NTP 및 시각 동기화 설정" VULN "$ntp_svc 활성이나 시각 동기화 안 됨($u65_ev, 선택된 소스 없음) → NTP 서버 접근(UDP 123)/설정 확인"
 else
   rep U-65 "NTP 및 시각 동기화 설정" VULN "NTP/시각 동기화 서비스 미실행"
 fi
@@ -1498,6 +1699,42 @@ http_head() { have curl && curl -sk -m 5 -I "$1" 2>/dev/null; }
 http_get()  { have curl && curl -sk -m 5 "$1" 2>/dev/null; }
 other_readable() { local p; p=$(stat -c '%a' "$1" 2>/dev/null) || return 1; [ "$(( 8#$p & 8#004 ))" -ne 0 ]; }
 other_writable() { local p; p=$(stat -c '%a' "$1" 2>/dev/null) || return 1; [ "$(( 8#$p & 8#002 ))" -ne 0 ]; }
+tmo() { if have timeout; then timeout "$@"; else shift; "$@"; fi; }
+# jar 내부 파일 읽기(표준출력만, 읽기 전용): unzip → python(zipfile, 바이트 그대로 출력해 LANG=C 에서도 안전)
+#   ※ python 코드는 ASCII 만 사용(py3.6 은 C 로케일에서 -c 인자의 비 ASCII 로 실패)
+read_jar() {
+  local out="" p
+  have unzip && out=$(unzip -p "$1" "$2" 2>/dev/null)
+  if [ -z "$out" ]; then
+    for p in python3 /usr/libexec/platform-python python; do
+      have "$p" || continue
+      out=$(tmo 30 "$p" -c 'import sys, zipfile
+o = getattr(sys.stdout, "buffer", sys.stdout)
+try:
+    o.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))
+except Exception:
+    sys.exit(1)' "$1" "$2" 2>/dev/null)
+      break
+    done
+  fi
+  printf '%s' "$out"
+}
+# 관리자 권한 계정 여부(WEB-09): priv_chk 계정 → PRIV_ST(VULN/MAN/빈값=권한 없음) PRIV_EV(근거)
+#   UID 0 또는 sudo -l -U 에 (ALL|root) ... ALL 전권 → VULN, sudo 일부 명령 허용·확인 불가 → MAN (그룹명만으로 판정하지 않음)
+priv_chk() {
+  local u=$1 uid out full part
+  PRIV_ST=""; PRIV_EV=""
+  uid=$(id -u "$u" 2>/dev/null)
+  if [ "$uid" = 0 ]; then PRIV_ST=VULN; PRIV_EV="UID 0(관리자) 계정"; return; fi
+  have sudo || { PRIV_EV="sudo 미설치"; return; }
+  out=$(LC_ALL=C tmo 10 sudo -n -l -U "$u" 2>&1)
+  full=$(printf '%s\n' "$out" | grep -E '^[[:space:]]+\((ALL|root)([[:space:]]*:[[:space:]]*[^)]*)?\)[[:space:]]*([A-Z_]+:[[:space:]]*)*ALL\b' | head -2 | sed -E 's/^[[:space:]]+//' | tr '\n' ' ')
+  part=$(printf '%s\n' "$out" | grep -E '^[[:space:]]+\(' | head -3 | sed -E 's/^[[:space:]]+//' | tr '\n' ' ')
+  if [ -n "$full" ]; then PRIV_ST=VULN; PRIV_EV="sudo 전권 부여: ${full% }(관리자 권한 계정)"
+  elif [ -n "$part" ]; then PRIV_ST=MAN; PRIV_EV="sudo 일부 명령 허용: ${part% } → root 획득 가능한 명령(셸·편집기 등)인지 확인"
+  elif printf '%s' "$out" | grep -q 'not allowed to run sudo'; then PRIV_EV="sudo 권한 없음"
+  else PRIV_ST=MAN; PRIV_EV="sudo 권한(sudo -l -U) 확인 불가 → 관리자 권한 부여 여부 확인"; fi
+}
 
 echo -e "${W}=========================================================${N}"
 echo -e "${W} 웹서버(리눅스) 취약점 점검  —  $HOSTN${N}"
@@ -1609,14 +1846,36 @@ fi
 
 # WEB-07 불필요한 파일
 if [ "$TARGET" = nginx ]; then
-  root_dir=$(conf_grep '^[[:space:]]*root[[:space:]]' | head -1 | awk '{print $2}' | tr -d ';')
-  [ -z "$root_dir" ] && root_dir=/usr/share/nginx/html
-  junk=""
-  for f in index.nginx-debian.html index.html who.html info.php test.html phpinfo.php example_*; do
-    [ -e "$root_dir/$f" ] && junk="$junk $f"
+  # 검사 경로: 설정의 모든 root/alias(변수 경로 제외) + 가이드 예시 <Nginx 설치 디렉터리(--prefix)>/html + 배포판 기본 html 경로
+  ngx_prefix=""; [ -n "$NGX_BIN2" ] && ngx_prefix=$("$NGX_BIN2" -V 2>&1 | tr ' ' '\n' | sed -n 's/^--prefix=//p' | head -1)
+  roots7=$(conf_grep '^[[:space:]]*(root|alias)[[:space:]]' | awk '{print $2}' | tr -d ';"'"'" | grep -v '\$' | sort -u |
+    while IFS= read -r r; do case "$r" in /*) echo "$r";; *) [ -n "$ngx_prefix" ] && echo "${ngx_prefix%/}/$r";; esac; done)
+  rroots=$(printf '%s\n' "$roots7" | while IFS= read -r r; do [ -n "$r" ] && { readlink -f "$r" 2>/dev/null || echo "$r"; }; done)
+  errp=" $(conf_grep '^[[:space:]]*error_page[[:space:]]' | awk '{print $NF}' | tr -d ';' | sed 's#.*/##' | sort -u | tr '\n' ' ') "
+  junk=""; scanned=""
+  for d in $roots7 ${ngx_prefix:+${ngx_prefix%/}/html} /usr/share/nginx/html /var/www/html; do
+    rd=$(readlink -f "$d" 2>/dev/null); [ -n "$rd" ] && [ -d "$rd" ] || continue
+    case " $scanned " in *" $rd "*) continue;; esac; scanned="$scanned $rd"
+    expo="비노출"; printf '%s\n' "$rroots" | grep -qxF "$rd" && expo="노출"
+    # (1) nginx 기본 파일: 파일명이 아니라 기본 페이지 문구(html) 또는 nginx 패키지 소유(그 외)로 판별 → 서비스용 index.html 오탐 방지
+    for n in index.html index.htm index.nginx-debian.html 50x.html 404.html nginx-logo.png poweredby.png; do
+      f="$rd/$n"; [ -f "$f" ] || continue
+      [ "$expo" = 노출 ] && case "$errp" in *" $n "*) continue;; esac   # error_page 로 사용 중인 오류 페이지 제외
+      case "$n" in
+        *.htm|*.html) grep -qiE 'Welcome to nginx|Test Page for the Nginx|HTTP Server Test Page|nginx on Amazon Linux|Thank you for using nginx|Faithfully yours, nginx' "$f" 2>/dev/null || continue;;
+        *) po=""; if have dpkg-query && po=$(dpkg-query -S "$f" 2>/dev/null); then :; elif have rpm && po=$(rpm -qf "$f" 2>/dev/null); then :; else po=""; fi
+           printf '%s' "${po%%:*}" | grep -qi nginx || continue;;
+      esac
+      junk="$junk $f($expo)"
+    done
+    # (2) 백업·임시 파일: 확장자 등 정확한 패턴만(깊이 3), 시스템 최상위 경로는 재귀 탐색 안 함
+    case "$rd" in /|/bin|/boot|/dev|/etc|/home|/lib*|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/usr/bin|/usr/lib*|/usr/local|/usr/sbin|/usr/share|/var|/var/lib|/var/log) continue;; esac
+    bk=$(tmo 20 find "$rd" -xdev -maxdepth 3 -type f \( -name '*.bak' -o -name '*.old' -o -name '*.orig' -o -name '*~' -o -name '*.swp' \
+          -o -name who.html -o -name test.html -o -name info.php -o -name phpinfo.php \) 2>/dev/null | head -10 | tr '\n' ' ')
+    [ -n "$bk" ] && junk="$junk ${bk% }"
   done
-  if [ -n "$junk" ]; then rep WEB-07 VULN "웹 루트($root_dir)에 기본/테스트 파일 잔존:$junk → 제거 필요"
-  else rep WEB-07 GOOD "웹 루트($root_dir)에 기본/테스트 파일 없음"; fi
+  if [ -n "$junk" ]; then rep WEB-07 VULN "웹 루트·기본 html 경로에 기본/백업/테스트 파일 잔존:$junk → 제거 필요(비노출 경로도 가이드 예시 대상)"
+  else rep WEB-07 GOOD "웹 루트·기본 html 경로(${scanned# })에 기본/백업/테스트 파일 없음"; fi
 else
   jdir=$(dirname "${APP_JAR:-/opt/app.jar}")
   junk=$(ls -1 "$jdir" 2>/dev/null | grep -iE 'placeholder|readme|test|sample|\.bak$|\.old$' | head -5 | tr '\n' ' ')
@@ -1629,9 +1888,38 @@ if [ "$TARGET" = nginx ]; then
   if conf_grep 'client_max_body_size' >/dev/null; then rep WEB-08 GOOD "client_max_body_size 설정: $(conf_grep 'client_max_body_size' | head -1 | tr -s ' ' ' ')"
   else rep WEB-08 VULN "client_max_body_size 미설정 → 업로드 용량 제한 없음(자원 고갈 위험)"; fi
 else
-  if printf '%s' "$APP_YML_CONTENT" | grep -qiE 'max-file-size|max-request-size|maxFileSize'; then
-    rep WEB-08 GOOD "application.yml 에 multipart 업로드 용량 제한 설정: $(yml_get 'max-file-size|max-request-size')"
-  else rep WEB-08 VULN "application.yml 에 spring.servlet.multipart.max-file-size/max-request-size 미설정 → 업로드 용량 제한 없음"; fi
+  # 설정 출처 우선순위: 실행 인자(--/-D spring.servlet.multipart.*) > 환경변수(SPRING_SERVLET_MULTIPART_*) > 외부 application.* > jar 내부 application.*
+  #   yml/properties 는 기본 문서(첫 '---' 이전)만, 주석 행 제외. jar 는 unzip 없으면 python(zipfile)으로 읽음
+  pid8=$(printf '%s' "$JPROC" | awk '{print $1}')
+  jar8="$APP_JAR"; [ -f "$jar8" ] || jar8=$(printf '%s' "$JPROC" | grep -oE '/[^ ]+\.jar' | head -1)
+  env8=""; [ -n "$pid8" ] && [ -r "/proc/$pid8/environ" ] && env8=$(tr '\0' '\n' < "/proc/$pid8/environ" 2>/dev/null | grep -E '^SPRING_SERVLET_MULTIPART_')
+  cfg8=""; cread=0
+  if [ -n "$jar8" ]; then
+    jd8=$(dirname "$jar8")
+    for f in "$jd8"/config/application.yml "$jd8"/config/application.yaml "$jd8"/config/application.properties "$jd8"/application.yml "$jd8"/application.yaml "$jd8"/application.properties; do
+      [ -f "$f" ] && { cfg8="$cfg8"$'\n'"$(awk '/^---/{exit} {print}' "$f" 2>/dev/null)"; cread=1; }
+    done
+  fi
+  if [ -n "$APP_YML_CONTENT" ]; then cfg8="$cfg8"$'\n'"$(printf '%s\n' "$APP_YML_CONTENT" | awk '/^---/{exit} {print}')"; cread=1
+  elif [ -n "$jar8" ] && [ -f "$jar8" ]; then
+    for e in BOOT-INF/classes/application.yml BOOT-INF/classes/application.yaml BOOT-INF/classes/application.properties; do
+      c8=$(read_jar "$jar8" "$e"); [ -n "$c8" ] && { cfg8="$cfg8"$'\n'"$(printf '%s\n' "$c8" | awk '/^---/{exit} {print}')"; cread=1; }
+    done
+  fi
+  mf=""; mr=""; sf=""; sr=""
+  for k in file request; do
+    K=$(printf '%s' "$k" | tr 'a-z' 'A-Z'); s="실행인자"
+    v=$(printf '%s' "$JPROC" | grep -oE -- "-(-|D)spring\.servlet\.multipart\.max-$k-size=[^ ]+" | head -1 | sed 's/^[^=]*=//')
+    [ -z "$v" ] && { s="환경변수"; v=$(printf '%s\n' "$env8" | sed -n "s/^SPRING_SERVLET_MULTIPART_MAX${K}SIZE=//p; s/^SPRING_SERVLET_MULTIPART_MAX_${K}_SIZE=//p" | head -1); }
+    [ -z "$v" ] && { s="application 설정"; v=$(printf '%s\n' "$cfg8" | grep -vE '^[[:space:]]*#' | grep -iE "^[[:space:]]*([a-z.]*\.)?(max-$k-size|max${k}size)[[:space:]]*[:=]" | head -1 | sed -E 's/^[^:=]*[:=][[:space:]]*//; s/[[:space:]]+#.*$//' | tr -d '"'"'"' \r'); }
+    if [ "$k" = file ]; then mf="$v"; sf="$s"; else mr="$v"; sr="$s"; fi
+  done
+  case " $mf $mr " in
+    *" -1 "*|*":-1} "*) rep WEB-08 VULN "multipart 업로드 용량 무제한(-1): max-file-size=${mf:-미설정} max-request-size=${mr:-미설정} → 용량 제한 필요";;
+    *) if [ -n "$mf$mr" ]; then rep WEB-08 GOOD "multipart 업로드 용량 제한 설정: max-file-size=${mf:-미설정(기본 1MB)}${mf:+($sf)} max-request-size=${mr:-미설정(기본 10MB)}${mr:+($sr)}"
+       elif [ "$cread" != 1 ]; then rep WEB-08 MAN "애플리케이션 설정(application.yml/properties) 확인 불가(jar: ${jar8:-미상}) → spring.servlet.multipart.max-file-size/max-request-size 설정 확인 필요"
+       else rep WEB-08 VULN "application.yml 에 spring.servlet.multipart.max-file-size/max-request-size 미설정 → 업로드 용량 제한 없음"; fi;;
+  esac
 fi
 
 # WEB-09 프로세스 권한
@@ -1639,12 +1927,25 @@ if [ "$TARGET" = nginx ]; then
   run_user=$(conf_grep '^[[:space:]]*user[[:space:]]' | head -1 | awk '{print $2}' | tr -d ';')
   [ -z "$run_user" ] && run_user=$(ps -eo user,comm 2>/dev/null | awk '$2 ~ /nginx/ && $1!="root"{print $1; exit}')
   if echo "$run_user" | grep -qiE '^root$'; then rep WEB-09 VULN "worker 실행 계정=root → 최소권한 전용 계정으로 변경 필요"
-  elif [ -n "$run_user" ]; then rep WEB-09 GOOD "worker 실행 계정=$run_user (비 root 최소권한)"
+  elif [ -n "$run_user" ]; then
+    priv_chk "$run_user"
+    case "$PRIV_ST" in
+      VULN) rep WEB-09 VULN "worker 실행 계정=$run_user — $PRIV_EV → 관리자 권한 없는 최소권한 전용 계정으로 변경 필요";;
+      MAN)  rep WEB-09 MAN "worker 실행 계정=$run_user (비 root) — $PRIV_EV";;
+      *)    rep WEB-09 GOOD "worker 실행 계정=$run_user (비 root 최소권한${PRIV_EV:+, $PRIV_EV})";;
+    esac
   else rep WEB-09 MAN "worker 실행 계정 확인 필요(user 지시어/프로세스 소유자)"; fi
 else
   if [ -z "$APP_OWNER" ]; then rep WEB-09 MAN "java 프로세스 미탐지 → 서비스 실행 계정(비 root) 확인 필요"
   elif [ "$APP_OWNER" = root ]; then rep WEB-09 VULN "웹 서비스(java) 프로세스가 root 로 구동 → 최소권한 전용 계정으로 변경 필요"
-  else rep WEB-09 GOOD "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER (비 root)"; fi
+  else
+    priv_chk "$APP_OWNER"
+    case "$PRIV_ST" in
+      VULN) rep WEB-09 VULN "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER — $PRIV_EV → 관리자 권한 없는 최소권한 전용 계정으로 변경 필요";;
+      MAN)  rep WEB-09 MAN "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER (비 root) — $PRIV_EV";;
+      *)    rep WEB-09 GOOD "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER (비 root${PRIV_EV:+, $PRIV_EV})";;
+    esac
+  fi
 fi
 
 # WEB-10 프록시
@@ -1806,8 +2107,51 @@ fi
 
 # WEB-25 보안 패치
 if [ "$TARGET" = nginx ]; then
+  # 배포판은 업스트림 버전 번호를 유지한 채 보안 수정을 백포트 → 실행 바이너리의 소유 패키지로 설치/후보 버전 비교(로컬 캐시만, 네트워크 없음)
   osrel=$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")
-  rep WEB-25 VULN "Nginx ${NGX_VER:-?} / $osrel — 최신 안정판·배포판 보안업데이트 적용 여부 확인 필요(구버전은 다수 CVE 대상)"
+  osid=$(. /etc/os-release 2>/dev/null; echo "${ID:-}"); oscode=$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")
+  npid=$(pgrep -o -x nginx 2>/dev/null); nexe=""; ndel=0
+  [ -n "$npid" ] && nexe=$(readlink "/proc/$npid/exe" 2>/dev/null)
+  case "$nexe" in *" (deleted)") ndel=1; nexe=${nexe% (deleted)};; esac
+  [ -z "$nexe" ] && [ -n "$NGX_BIN2" ] && nexe=$(readlink -f "$(command -v "$NGX_BIN2" 2>/dev/null)" 2>/dev/null)
+  npkg=""; nmgr=""
+  if [ -n "$nexe" ]; then
+    if have dpkg-query && o=$(tmo 15 dpkg-query -S "$nexe" 2>/dev/null); then npkg=$(printf '%s\n' "$o" | grep -v '^diversion' | head -1 | sed 's/:.*//; s/,.*//'); nmgr=dpkg
+    elif have rpm && o=$(tmo 15 rpm -qf "$nexe" 2>/dev/null); then npkg=$(printf '%s\n' "$o" | head -1); nmgr=rpm; fi
+  fi
+  if [ "$ndel" = 1 ]; then rep WEB-25 VULN "실행 중인 nginx(pid $npid) 바이너리가 교체 전 파일((deleted)) → 패치 후 재시작 누락, 재시작 필요"
+  elif [ "$nmgr" = dpkg ] && [ -n "$npkg" ]; then
+    inst=$(dpkg-query -W -f='${Version}' "$npkg" 2>/dev/null)
+    # apt 캐시가 오래됐으면 파일 기록 없이 메모리에서만 생성(가용 메모리 충분할 때만)
+    pc=/var/cache/apt/pkgcache.bin; aopt=""; pol=""
+    { [ -f "$pc" ] && [ "$pc" -nt /var/lib/dpkg/status ] && [ "$pc" -nt /var/lib/apt/lists ]; } || aopt="-o Dir::Cache::pkgcache= -o Dir::Cache::srcpkgcache="
+    mem=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)
+    if [ -z "$aopt" ] || [ "${mem:-0}" -gt 400000 ]; then pol=$(LC_ALL=C tmo 30 apt-cache $aopt policy "$npkg" 2>/dev/null); fi
+    cand=$(printf '%s\n' "$pol" | awk '/Candidate:/{print $2; exit}'); [ "$cand" = "(none)" ] && cand=""
+    csrc=$(printf '%s\n' "$pol" | awk -v c="$cand" '/^ (\*\*\*|   ) [^ ]+ [0-9]+$/ { f=($2==c); next } f && /^ +[0-9]+ / && $2 !~ /dpkg\/status$/ { print $2, $3 }' | tr '\n' ' ')
+    st=$(ls -t /var/lib/apt/periodic/update-success-stamp /var/lib/apt/lists/*Release 2>/dev/null | head -1)
+    age=999; t=""; [ -n "$st" ] && t=$(stat -c %Y "$st" 2>/dev/null); [ -n "$t" ] && age=$(( ($(date +%s) - t) / 86400 ))
+    # 배포판 지원 기간(distro-info-data) + Ubuntu Pro ESM(esm-infra)
+    eolv=""; di=/usr/share/distro-info/$osid.csv
+    [ -f "$di" ] && [ -n "$oscode" ] && eolv=$(awk -F, -v c="$oscode" 'NR==1 { for (i=1;i<=NF;i++) H[$i]=i; next }
+      $H["series"]==c { e=$H["eol"]; if (("eol-server" in H) && $H["eol-server"]!="") e=$H["eol-server"]; if (("eol-lts" in H) && $H["eol-lts"]!="") e=$H["eol-lts"]; print e; exit }' "$di")
+    sup=""; [ -n "$eolv" ] && { if [[ "$(date +%F)" > "$eolv" ]]; then sup=0; else sup=1; fi; }
+    esm=0; sj=/var/lib/ubuntu-advantage/status.json
+    [ -f "$sj" ] && tr -d '\n' < "$sj" 2>/dev/null | grep -oE '"name": *"esm-infra"[^}]*' | grep -qE '"status": *"enabled"' && esm=1
+    uu=$(tmo 10 apt-config dump 2>/dev/null | sed -n 's/^APT::Periodic::Unattended-Upgrade "\([^"]*\)";/\1/p' | tail -1)
+    ev25="Nginx ${NGX_VER:-?} / $osrel / 패키지 $npkg 설치 ${inst:-?} 후보 ${cand:-?}${csrc:+(${csrc% })} / 패키지 목록 ${age}일 전 갱신"
+    evs="배포판 지원 종료일 ${eolv:-미상}, ESM(esm-infra) $([ "$esm" = 1 ] && echo 사용 || echo 미사용), 자동 보안 업데이트(Unattended-Upgrade)=${uu:-미설정}"
+    if [ -n "$inst" ] && [ -n "$cand" ] && [ "$inst" != "$cand" ]; then
+      if printf '%s' "$csrc" | grep -qiE -- '-security|esm\.ubuntu\.com|debian-security'; then rep WEB-25 VULN "$ev25 → 보안 업데이트 미적용, 최신 보안 패치 적용 필요" "$evs"
+      else rep WEB-25 MAN "$ev25 → 비보안 업데이트 대기(보안 영향 확인 필요)" "$evs"; fi
+    elif [ "$sup" = 0 ] && [ "$esm" != 1 ]; then rep WEB-25 VULN "$ev25 → 배포판 지원 종료($eolv) 후 ESM 미사용 → 보안 업데이트 미수신" "$evs"
+    elif [ -z "$inst" ] || [ -z "$cand" ]; then rep WEB-25 MAN "$ev25 → 후보 버전 확인 불가(apt 캐시), 최신 보안 패치 적용 여부 수동 확인" "$evs"
+    elif [ "$age" -gt 7 ]; then rep WEB-25 MAN "$ev25 → 패키지 목록이 오래되어(7일 초과) 최신 여부 판단 불가" "$evs"
+    elif [ "$sup" = 1 ] || [ "$esm" = 1 ]; then rep WEB-25 GOOD "$ev25 → 후보(보안 업데이트 포함)와 동일, 최신 보안 패치 적용" "$evs (패치 적용 정책·주기는 인터뷰로 확인)"
+    else rep WEB-25 MAN "$ev25 → 배포판 보안 지원 기간 확인 불가, 보안 업데이트 수신 여부 수동 확인" "$evs"; fi
+  elif [ "$nmgr" = rpm ] && [ -n "$npkg" ]; then
+    rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel / 패키지 $npkg — rpm 계열은 저장소 메타데이터 조회(부하·네트워크) 생략 → 배포판 보안 공지와 수동 비교"
+  else rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel — 패키지 미소유(소스 빌드 등)·실행 바이너리 확인 불가 → nginx.org 최신 stable/mainline 및 보안 공지와 수동 비교"; fi
 else
   # 10.1.31 < 최신 10.1.x
   if [ -n "$TOMCAT_VER" ]; then
@@ -2392,11 +2736,32 @@ if ($as -eq 0 -and $admShares.Count -eq 0) { Rep "W-17" "하드디스크 기본 
 else { Rep "W-17" "하드디스크 기본 공유 제거" "VULN" @("AutoShareServer=$as, 기본 공유: $(if($admShares.Count){$admShares -join ', '}else{'없음'}) → AutoShareServer=0 설정 및 공유 제거") }
 
 # W-18 불필요한 서비스 제거
-# [기준] 양호 - 불필요한 서비스 중지 / 취약 - 구동 중
-$risky = @("Alerter","Messenger","Browser","RemoteRegistry","SharedAccess","TlntSvr","Telnet","SNMPTRAP","simptcp","Fax","upnphost","SSDPSRV","RemoteAccess")
-$running = @($risky | Where-Object { SvcRunning $_ })
-if ($running.Count -eq 0) { Rep "W-18" "불필요한 서비스 제거" "GOOD" @("Alerter/Messenger/Browser/Telnet/SSDP 등 불필요 서비스 미실행") }
-else { Rep "W-18" "불필요한 서비스 제거" "VULN" @("실행 중인 불필요 서비스: $($running -join ', ') → 미사용 시 중지/사용 안 함") }
+# [기준] 양호 - 일반적으로 불필요한 서비스(가이드 목록)가 중지 / 취약 - 구동 중
+#   가이드 목록: Alerter, Clipbook(ClipSrv), Computer Browser(Browser), Distributed Link Tracking(TrkWks/TrkSvr),
+#     Error Reporting(WerSvc/ERSvc), HID(hidserv), IMAPI CD-Burning(ImapiService), Infrared Monitor(Irmon), Messenger,
+#     NetMeeting RDS(mnmsrvc), Portable Media Serial Number(WmdmPmSN), Print Spooler, Remote Registry, Simple TCP/IP(simptcp),
+#     UPnP Device Host(upnphost), Wireless Zero Configuration(WZCSVC/WlanSvc)  + 기존 점검 대상(SharedAccess/Telnet/SNMPTRAP/Fax/SSDPSRV/RemoteAccess)
+#   가이드 조건: TrkWks/TrkSvr 는 AD(도메인) 미구성 시, Print Spooler 는 연결된 프린터가 없을 때만 불필요 → 조건 밖이면 판정 제외(참고 표기)
+#   Automatic Updates·Cryptographic Services·DHCP/DNS Client 는 가이드도 조건부로 적은 OS 필수 구성요소라 판정 제외
+#   ※ 서비스명 정확 일치 + Win32 서비스만 인정 (Get-Service -Name Browser 는 표시 이름이 'Browser' 인 커널 드라이버 bowser 도 반환 → 제외)
+$risky = @("Alerter","ClipSrv","Browser","TrkWks","TrkSvr","WerSvc","ERSvc","hidserv","ImapiService","Irmon","Messenger","mnmsrvc","WmdmPmSN",
+           "Spooler","RemoteRegistry","simptcp","upnphost","WZCSVC","WlanSvc",
+           "SharedAccess","TlntSvr","Telnet","SNMPTRAP","Fax","SSDPSRV","RemoteAccess")
+$running = @(); $cond18 = @()
+foreach ($n in $risky) {
+    $s = @(Get-Service -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $n -and "$($_.ServiceType)" -notmatch 'Driver' }) | Select-Object -First 1
+    if (-not $s -or $s.Status -ne "Running") { continue }
+    if ($n -in @("TrkWks","TrkSvr") -and (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).PartOfDomain) { $cond18 += "$n(도메인 가입 - AD 사용 시 필요)"; continue }
+    if ($n -eq "Spooler") {
+        $prn18 = @(Get-CimInstance Win32_Printer -ErrorAction SilentlyContinue | Where-Object {
+                     "$($_.PortName)" -notmatch '^(PORTPROMPT:|nul:|XPSPort:|SHRFAX:|FILE:)$' -and "$($_.Name)" -notmatch 'Microsoft (Print to PDF|XPS Document Writer)|^Fax$|OneNote' })
+        if ($prn18.Count -gt 0) { $cond18 += "Spooler(연결된 프린터 $($prn18.Count)개 - 필요 서비스)"; continue }
+    }
+    $running += $n
+}
+$cond18Ev = @($cond18 | ForEach-Object { "판정 제외(가이드 조건상 필요): $_" })
+if ($running.Count -eq 0) { Rep "W-18" "불필요한 서비스 제거" "GOOD" (@("가이드 목록의 불필요 서비스(Alerter/Browser/Spooler/RemoteRegistry/TrkWks/upnphost/WerSvc 등) 미실행") + $cond18Ev) }
+else { Rep "W-18" "불필요한 서비스 제거" "VULN" (@("실행 중인 불필요 서비스: $($running -join ', ') → 미사용 시 중지/사용 안 함") + $cond18Ev) }
 
 # W-19 불필요한 IIS 서비스 구동 점검
 # [기준] 양호 - IIS 미사용 또는 필요에 의해 사용 / 취약 - 불필요하게 사용
@@ -2589,18 +2954,62 @@ Write-Host "[ 4. 로그 관리 ]" -ForegroundColor White
 #==============================================================================
 
 # W-40 정책에 따른 시스템 로깅 설정
-# [기준] 양호 - 감사 정책 권고 기준대로 설정 / 취약 - 아님
+# [기준] 양호 - 감사 정책 권고 기준에 따라 감사 설정 / 취약 - 권고 기준대로 설정되지 않음
+#   <감사 정책 권고 기준>(가이드 2000~2022): 계정 관리 실패 / 계정 로그온 이벤트 성공·실패 / 권한 사용 성공·실패 /
+#                                          디렉터리 서비스 액세스 실패 / 로그온 이벤트 성공·실패 / 정책 변경 성공·실패
+#   auditpol /get /category:* /r (CSV) 의 하위 범주 GUID 로 정확히 매칭해 범주별 대표 하위 범주의 요구 수준을 비교
+#     계정 관리    → User Account Management{0CCE9235}, Security Group Management{0CCE9237}: 실패 포함
+#     계정 로그온  → Credential Validation{0CCE923F}: 성공 및 실패 (DC 는 Kerberos 인증 서비스{0CCE9242}·서비스 티켓 작업{0CCE9240} 추가)
+#     권한 사용    → Sensitive Privilege Use{0CCE9228}: 성공 및 실패
+#     DS 액세스    → Directory Service Access{0CCE923B}: 실패 포함
+#     로그온 이벤트 → Logon{0CCE9215}: 성공 및 실패, Logoff{0CCE9216}: 성공 포함(성공 이벤트만 발생), Account Lockout{0CCE9217}: 실패 포함(실패 이벤트만 발생)
+#     정책 변경    → Audit Policy Change{0CCE922F}: 성공 및 실패
+#   '실패 포함'은 '실패' 또는 '성공 및 실패' 인정. 가이드 밖 범주(System 등)는 판정 제외
+#   CSV 헤더·값이 OS 언어로 지역화될 수 있어 열 위치(4번째=GUID, 5번째=포함 설정)로 읽고,
+#   값은 영문/한글(Success|성공, Failure|실패, No Auditing|감사 안 함|감사 없음) 모두 해석. 행 없음·해석 불가 → 수동확인
 if ($IS_ADMIN) {
-    $ap = auditpol /get /category:* 2>$null
-    $need = @("Logon","Logoff","Account Lockout","User Account Management","Security Group Management",
-              "Audit Policy Change","Sensitive Privilege Use","Security State Change","Other System Events")
-    $missAudit = @()
-    foreach ($n in $need) {
-        $l = $ap | Select-String -SimpleMatch $n | Select-Object -First 1
-        if (-not $l -or $l -match "No Auditing|감사 안 함") { $missAudit += $n }
+    function AuditBits { param([string]$S)
+        if ($S -match 'No Auditing|감사 안 함|감사 없음') { return 0 }
+        $b = 0; if ($S -match 'Success|성공') { $b = $b -bor 1 }; if ($S -match 'Failure|실패') { $b = $b -bor 2 }
+        if ($b -eq 0) { return -1 }; return $b }
+    $ap40 = @{}
+    $apRaw = @(auditpol /get /category:* /r 2>$null | Where-Object { "$_".Trim() })
+    foreach ($row in @($apRaw | ConvertFrom-Csv -Header 'c0','c1','c2','c3','c4','c5')) {
+        if ("$($row.c3)" -match '^\s*\{?([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\}?\s*$') {
+            $ap40[$Matches[1].ToUpper()] = "$($row.c4)".Trim()
+        }
     }
-    if ($missAudit.Count -eq 0) { Rep "W-40" "정책에 따른 시스템 로깅 설정" "GOOD" @("주요 감사 범주(로그온/계정 관리/정책 변경/권한 사용/시스템) 성공·실패 감사 설정") }
-    else { Rep "W-40" "정책에 따른 시스템 로깅 설정" "VULN" @("감사 미설정: $($missAudit -join ', ') → 권고 기준대로 성공/실패 감사 설정") }
+    $sfx40 = "-69AE-11D9-BED3-505054503030"
+    $req40 = @(
+        @("계정 관리","User Account Management","0CCE9235",2), @("계정 관리","Security Group Management","0CCE9237",2),
+        @("계정 로그온","Credential Validation","0CCE923F",3), @("권한 사용","Sensitive Privilege Use","0CCE9228",3),
+        @("DS 액세스","Directory Service Access","0CCE923B",2), @("로그온 이벤트","Logon","0CCE9215",3),
+        @("로그온 이벤트","Logoff","0CCE9216",1), @("로그온 이벤트","Account Lockout","0CCE9217",2),
+        @("정책 변경","Audit Policy Change","0CCE922F",3))
+    $cs40 = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $dc40 = [bool]($cs40 -and $cs40.DomainRole -ge 4)
+    if ($dc40) { $req40 += ,@("계정 로그온","Kerberos Authentication Service","0CCE9242",3); $req40 += ,@("계정 로그온","Kerberos Service Ticket Operations","0CCE9240",3) }
+    $need40 = @{ 1 = "성공 포함"; 2 = "실패 포함"; 3 = "성공 및 실패" }
+    $miss40 = @(); $unk40 = @(); $ok40 = @()
+    foreach ($r in $req40) {
+        $set = $ap40["$($r[2])$sfx40"]
+        if ($null -eq $set) { $unk40 += "$($r[0])/$($r[1])(행 없음)"; continue }
+        $bits = AuditBits $set
+        if ($bits -lt 0) { $unk40 += "$($r[0])/$($r[1])='$set'(해석 불가)" }
+        elseif (($bits -band $r[3]) -ne $r[3]) { $miss40 += "$($r[0])/$($r[1])=$set (요구: $($need40[$r[3]]))" }
+        else { $ok40 += "$($r[1])=$set" }
+    }
+    $dsNote40 = if (-not $dc40 -and ($miss40 -match 'Directory Service Access')) { @("※ DS 액세스 실패 감사는 DC 가 아니면 이벤트가 거의 발생하지 않으나 가이드 권고 기준 문구대로 적용") } else { @() }
+    if ($ap40.Count -eq 0) {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "MAN" @("auditpol /r 결과를 읽지 못함 → 로컬 보안 정책 > 감사 정책 수동 확인")
+    } elseif ($miss40.Count -gt 0) {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "VULN" (@("감사 정책 권고 기준 미충족: $($miss40 -join ' / ') → 권고 기준대로 성공/실패 감사 설정") + $dsNote40 +
+            @($unk40 | ForEach-Object { "확인 불가: $_" }) + @("충족: $(if($ok40.Count){$ok40 -join ', '}else{'없음'})"))
+    } elseif ($unk40.Count -gt 0) {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "MAN" @("감사 설정 확인 불가: $($unk40 -join ', ')", "충족: $(if($ok40.Count){$ok40 -join ', '}else{'없음'})")
+    } else {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "GOOD" @("감사 정책 권고 기준(계정 관리/계정 로그온/권한 사용/DS 액세스/로그온 이벤트/정책 변경) 충족: $($ok40 -join ', ')")
+    }
 } else {
     Rep "W-40" "정책에 따른 시스템 로깅 설정" "MAN" @("감사 정책(auditpol)은 관리자 권한 필요 → 관리자로 재점검")
 }
@@ -2634,11 +3043,41 @@ if ($cfgOk -or $srcOk) {
 }
 
 # W-42 이벤트 로그 관리 설정
-# [기준] 양호 - 최대 로그 크기 10,240KB 이상 AND 이벤트 덮어씀 기간 "90일 이후"(또는 덮어쓰지 않음/가득 차면 보관)
-#        취약 - 크기 미달 이거나, "필요에 따라 덮어씀"(=90일 이하)
+# [기준] 양호 - 최대 로그 크기 "10,240KB 이상" + "90일 이후 이벤트 덮어씀" 설정
+#        취약 - 최대 로그 크기 10,240KB 미만 이거나 이벤트 덮어씀 기간 90일 이하
+#   ※ 가이드: 2008 이상은 덮어쓰기 날짜 지정 불가 → '가득 차면 보관(AutoBackup)'·'덮어쓰지 않음(Retain)'을 양호,
+#     '필요한 경우 덮어씀(Circular)'을 취약으로 판정 (크기가 커도 Circular 면 취약)
+#   2008 이상(OS major>=6): 실효값(Get-WinEvent -ListLog 의 LogMode·MaximumSizeInBytes, GPO 포함)으로 판정.
+#     레지스트리 Retention(초)·AutoBackupLogFiles 는 2008 이상 이벤트 로그 서비스가 쓰지 않으므로 판정에 쓰지 않음
+#     (예: Retention=7776000 이어도 실제는 Circular). Get-WinEvent 실패 시 wevtutil gl 로 대체, 둘 다 실패 → 수동확인
+#   2003 이하(OS major<6): 레지스트리 MaxSize·Retention(초, 0xFFFFFFFF=덮어쓰지 않음)·AutoBackupLogFiles 로 판정
 $logbad = @()
 $logunk = @()
+$logev  = @()
+$osMaj42 = if ($os -and "$($os.Version)" -match '^(\d+)\.') { [int]$Matches[1] } else { [Environment]::OSVersion.Version.Major }
 foreach ($lg in @("Security","Application","System")) {
+    if ($osMaj42 -ge 6) {
+        $mode = $null; $max = $null; $fsz = $null
+        $wl = $null; try { $wl = Get-WinEvent -ListLog $lg -ErrorAction Stop } catch {}
+        if ($wl) { $mode = "$($wl.LogMode)"; $max = $wl.MaximumSizeInBytes; $fsz = $wl.FileSize }
+        else {
+            $gl = @(wevtutil gl $lg 2>$null)
+            $gRet = ($gl | Where-Object { $_ -match '^\s*retention:\s*(\S+)' } | Select-Object -First 1) -replace '^\s*retention:\s*', ''
+            $gBak = ($gl | Where-Object { $_ -match '^\s*autoBackup:\s*(\S+)' } | Select-Object -First 1) -replace '^\s*autoBackup:\s*', ''
+            $gMax = ($gl | Where-Object { $_ -match '^\s*maxSize:\s*(\d+)' } | Select-Object -First 1) -replace '^\s*maxSize:\s*', ''
+            if ($gRet -match '^(true|false)$') { $mode = if ($gRet -eq 'true') { if ($gBak -eq 'true') { "AutoBackup" } else { "Retain" } } else { "Circular" } }
+            if ($gMax -match '^\d+$') { $max = [int64]$gMax }
+        }
+        if (-not $mode -or $null -eq $max) { $logunk += $lg; continue }
+        $szKB = [math]::Round($max / 1KB)
+        $old = $null; try { $old = (Get-WinEvent -LogName $lg -Oldest -MaxEvents 1 -ErrorAction Stop).TimeCreated } catch {}
+        $logev += "$lg : LogMode=$mode, 최대 $('{0:N0}' -f $szKB)KB$(if($null -ne $fsz){", 현재 $('{0:N0}' -f [math]::Round($fsz / 1KB))KB"})$(if($old){", 가장 오래된 이벤트 $($old.ToString('yyyy-MM-dd HH:mm'))"})"
+        if ($szKB -lt 10240) { $logbad += "$lg 크기 ${szKB}KB(<10,240)" }
+        if ($mode -eq "Circular") { $logbad += "$lg 필요한 경우 덮어씀(Circular)" }
+        elseif ($mode -eq "Retain") { $logev += "$lg 덮어쓰지 않음(Retain) - 가득 차면 새 이벤트가 기록되지 않으므로 용량 관리 필요" }
+        elseif ($mode -ne "AutoBackup") { $logunk += "$lg(LogMode=$mode)" }
+        continue
+    }
     $base = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\" + $lg
     $sz = RegVal $base "MaxSize"
     if ($null -eq $sz) { $sz = (Get-WinEvent -ListLog $lg -ErrorAction SilentlyContinue).MaximumSizeInBytes }
@@ -2660,11 +3099,11 @@ foreach ($lg in @("Security","Application","System")) {
     }
 }
 if ($logbad.Count -gt 0) {
-    Rep "W-42" "이벤트 로그 관리 설정" "VULN" @(($logbad -join " / "), "최대 로그 크기 10,240KB 이상 및 '90일 이후 이벤트 덮어씀' 설정 필요")
+    Rep "W-42" "이벤트 로그 관리 설정" "VULN" (@(($logbad -join " / ")) + $logev + @("최대 로그 크기 10,240KB 이상 및 '90일 이후 이벤트 덮어씀'(2008 이상: '가득 차면 보관'/'덮어쓰지 않음') 설정 필요"))
 } elseif ($logunk.Count -gt 0) {
-    Rep "W-42" "이벤트 로그 관리 설정" "MAN" @("로그 설정 확인 불가(관리자 권한 필요): $($logunk -join ', ')")
+    Rep "W-42" "이벤트 로그 관리 설정" "MAN" (@("로그 설정 확인 불가(관리자 권한 필요): $($logunk -join ', ')") + $logev)
 } else {
-    Rep "W-42" "이벤트 로그 관리 설정" "GOOD" @("보안/응용/시스템 로그 최대 크기 10,240KB 이상 + 90일 이후 덮어씀(또는 덮어쓰지 않음/보관) 설정")
+    Rep "W-42" "이벤트 로그 관리 설정" "GOOD" (@("보안/응용/시스템 로그 최대 크기 10,240KB 이상 + 90일 이후 덮어씀(또는 덮어쓰지 않음/보관) 설정") + $logev)
 }
 
 # W-43 이벤트 로그 파일 접근 통제 설정
@@ -2712,14 +3151,162 @@ else {
 
 # W-47 화면보호기 설정
 # [기준] 양호 - 화면 보호기 설정 + 대기 10분(600초) 이하 + 해제 암호 사용 / 취약 - 아님
-$ssA = RegVal "HKCU:\Control Panel\Desktop" "ScreenSaveActive"
-$ssS = RegVal "HKCU:\Control Panel\Desktop" "ScreenSaverIsSecure"
-$ssT = [int](RegVal "HKCU:\Control Panel\Desktop" "ScreenSaveTimeOut")
-$ssPol = RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" "ScreenSaverIsSecure"
-if ((($ssA -eq "1") -and ($ssS -eq "1") -and ($ssT -gt 0) -and ($ssT -le 600)) -or ($ssPol -eq "1")) {
-    Rep "W-47" "화면보호기 설정" "GOOD" @("화면 보호기 활성 + 암호 보호 + 대기 $ssT 초")
+#   화면보호기는 사용자별 설정 → 실제 사용자 프로필(ProfileList 의 S-1-5-21-*)마다 판정한다.
+#   (SYSTEM 실행 시 HKCU = S-1-5-18 이고, HKLM\SOFTWARE\Policies\...\Control Panel\Desktop 은 Windows 가 적용하지 않는
+#    키(화면보호기 정책은 사용자 구성 전용)이므로 둘 다 판정에서 제외)
+#   사용자별 값 단위 병합: HKU\<SID>\Software\Policies\Microsoft\Windows\Control Panel\Desktop 값 우선, 없으면 HKU\<SID>\Control Panel\Desktop
+#   네 조건 모두 충족해야 양호: ScreenSaveActive=1, ScreenSaverIsSecure=1, 1<=ScreenSaveTimeOut<=600(없으면 기본 900초), SCRNSAVE.EXE 지정 + 파일 존재
+#   로그오프 사용자(하이브 미로드)는 reg load(하이브 마운트 = 상태 변경) 대신 NTUSER.DAT 를 읽기 전용·공유 모드로 한 번 읽고
+#   regf 구조를 직접 해석(64MB 초과·읽기 실패·dirty(트랜잭션 로그 미반영)·해석 실패 → 해당 사용자 수동확인, 최대 20명)
+#   판정 제외(참고 표기): 비활성 로컬 계정, 삭제된 로컬 계정의 잔여 프로필, ssm-user(SSM Agent 비대화형),
+#     서비스 실행 계정 중 Administrators/Remote Desktop Users 비구성원(비대화형 전용 추정), NTUSER.DAT 없는 프로필
+#   한 명이라도 미흡 → 취약 / 미흡 없이 확인 불가 사용자 존재 또는 점검 대상 없음 → 수동확인
+function RegfLoad { param([string]$Path)      # NTUSER.DAT 읽기 전용 로드(쓰기/마운트 없음)
+    try {
+        $fi = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($fi.Length -lt 8192 -or $fi.Length -gt 64MB) { return $null }
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]'ReadWrite, Delete')
+        try {
+            $buf = New-Object byte[] ([int]$fs.Length); $off = 0
+            while ($off -lt $buf.Length) { $n = $fs.Read($buf, $off, $buf.Length - $off); if ($n -le 0) { break }; $off += $n }
+        } finally { $fs.Close() }
+        if ($off -lt $buf.Length -or [Text.Encoding]::ASCII.GetString($buf, 0, 4) -ne 'regf') { return $null }
+        return ,$buf
+    } catch { return $null }
+}
+function RegfStr { param([byte[]]$B, [int]$Pos, [int]$Len, [bool]$Ascii)
+    if ($Len -le 0) { return "" }
+    if ($Ascii) { return [Text.Encoding]::GetEncoding(28591).GetString($B, $Pos, $Len) }
+    return [Text.Encoding]::Unicode.GetString($B, $Pos, $Len)
+}
+# 하위 키 목록 셀(lf/lh/li/ri) → nk 셀 데이터 절대 오프셋 목록 (셀 데이터 = 0x1000 + 오프셋 + 4)
+function RegfList { param([byte[]]$B, [int]$P, [int]$Depth = 0)
+    $r = New-Object System.Collections.Generic.List[int]
+    if ($Depth -gt 4 -or $P + 4 -gt $B.Length) { return ,$r }
+    $sig = [Text.Encoding]::ASCII.GetString($B, $P, 2); $n = [BitConverter]::ToUInt16($B, $P + 2)
+    if ($sig -eq 'lf' -or $sig -eq 'lh') { for ($i = 0; $i -lt $n; $i++) { $r.Add([int](4100 + [BitConverter]::ToUInt32($B, $P + 4 + 8 * $i))) } }
+    elseif ($sig -eq 'li') { for ($i = 0; $i -lt $n; $i++) { $r.Add([int](4100 + [BitConverter]::ToUInt32($B, $P + 4 + 4 * $i))) } }
+    elseif ($sig -eq 'ri') { for ($i = 0; $i -lt $n; $i++) { foreach ($x in (RegfList $B ([int](4100 + [BitConverter]::ToUInt32($B, $P + 4 + 4 * $i))) ($Depth + 1))) { $r.Add($x) } } }
+    return ,$r
+}
+# 루트 nk 에서 경로(대소문자 무시)를 따라 내려가 nk 오프셋 반환, 없으면 -1
+function RegfKey { param([byte[]]$B, [string[]]$Parts)
+    $k = [int](4100 + [BitConverter]::ToUInt32($B, 0x24))
+    foreach ($part in $Parts) {
+        if ([BitConverter]::ToUInt32($B, $k + 20) -eq 0) { return -1 }
+        $lst = [BitConverter]::ToUInt32($B, $k + 28); if ($lst -ge 2147483648) { return -1 }
+        $next = -1
+        foreach ($c in (RegfList $B ([int](4100 + $lst)))) {
+            if ($c + 76 -ge $B.Length -or $B[$c] -ne 0x6E -or $B[$c + 1] -ne 0x6B) { continue }   # 'nk'
+            $nm = RegfStr $B ($c + 76) ([BitConverter]::ToUInt16($B, $c + 72)) ((([BitConverter]::ToUInt16($B, $c + 2)) -band 0x20) -ne 0)
+            if ($nm -ieq $part) { $next = $c; break }
+        }
+        if ($next -lt 0) { return -1 }
+        $k = $next
+    }
+    return $k
+}
+# nk 의 값들 → @{ 이름 = 값 } (REG_SZ/EXPAND_SZ = 문자열, REG_DWORD = 정수, 그 외 형식은 생략)
+function RegfValues { param([byte[]]$B, [int]$K)
+    $h = @{}
+    $cnt = [BitConverter]::ToUInt32($B, $K + 36); $vl = [BitConverter]::ToUInt32($B, $K + 40)
+    if ($cnt -eq 0 -or $cnt -gt 4096 -or $vl -ge 2147483648) { return $h }
+    for ($i = 0; $i -lt $cnt; $i++) {
+        $v = [int](4100 + [BitConverter]::ToUInt32($B, [int](4100 + $vl + 4 * $i)))
+        if ($v + 20 -ge $B.Length -or $B[$v] -ne 0x76 -or $B[$v + 1] -ne 0x6B) { continue }   # 'vk'
+        $nl = [BitConverter]::ToUInt16($B, $v + 2); $ds = [BitConverter]::ToUInt32($B, $v + 4)
+        $do = [BitConverter]::ToUInt32($B, $v + 8); $ty = [BitConverter]::ToUInt32($B, $v + 12)
+        $vn = RegfStr $B ($v + 20) $nl ((([BitConverter]::ToUInt16($B, $v + 16)) -band 1) -ne 0)
+        $inl = ($ds -ge 2147483648); $len = if ($inl) { [int]($ds - 2147483648) } else { [int]$ds }
+        $dp = if ($inl) { $v + 8 } else { [int](4100 + $do) }
+        if ($len -gt 16344 -or $dp + $len -gt $B.Length) { continue }
+        if ($ty -eq 1 -or $ty -eq 2) { $h[$vn] = (RegfStr $B $dp $len $false).TrimEnd([char]0) }
+        elseif ($ty -eq 4 -and $len -ge 4) { $h[$vn] = [BitConverter]::ToUInt32($B, $dp) }
+    }
+    return $h
+}
+function KeyVals47 { param([string]$P)    # 로드된 하이브의 키 값 → @{ 이름 = 값 }
+    $h = @{}
+    if (Test-Path -LiteralPath $P) {
+        $ip = Get-ItemProperty -LiteralPath $P -ErrorAction SilentlyContinue
+        if ($ip) { foreach ($pp in $ip.PSObject.Properties) { if ($pp.Name -notin @("PSPath","PSParentPath","PSChildName","PSDrive","PSProvider")) { $h[$pp.Name] = $pp.Value } } }
+    }
+    return $h
+}
+function Pick47 { param($Pol, $Usr, [string]$N) if ($Pol.ContainsKey($N)) { return $Pol[$N] } if ($Usr.ContainsKey($N)) { return $Usr[$N] } return $null }
+
+$lu47 = @{}
+foreach ($u in @(LocalUsers)) { $sid = if ($u.SID -is [string]) { $u.SID } else { "$($u.SID.Value)" }; if ($sid) { $lu47[$sid] = $u } }
+$pfx47 = ""; foreach ($k in @($lu47.Keys)) { if ("$k" -match '^(S-1-5-21-\d+-\d+-\d+)-\d+$') { $pfx47 = $Matches[1]; break } }   # 로컬 머신 SID
+$svc47 = @{}                                   # 서비스 실행 계정 SID → 서비스 이름
+foreach ($s in @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { $_.StartName -and "$($_.StartName)" -notmatch '^(LocalSystem|NT AUTHORITY\\|NT SERVICE\\)' })) {
+    try { $sid = (New-Object System.Security.Principal.NTAccount ("$($s.StartName)" -replace '^\.\\', "$env:COMPUTERNAME\")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          if (-not $svc47.ContainsKey($sid)) { $svc47[$sid] = $s.Name } } catch {}
+}
+$ia47 = @{}; $grp47 = $true                    # Administrators / Remote Desktop Users 직접 구성원 SID
+foreach ($g in @("S-1-5-32-544","S-1-5-32-555")) {
+    try { foreach ($m in @(Get-LocalGroupMember -SID $g -ErrorAction Stop)) { $ia47["$($m.SID)"] = 1 } } catch { $grp47 = $false }
+}
+$bad47 = @(); $ok47 = @(); $unk47 = @(); $ex47 = @(); $off47 = 0
+foreach ($pk in @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue)) {
+    $sid = $pk.PSChildName
+    if ($sid -notmatch '^S-1-5-21-[\d-]+$') { continue }                 # 시스템 계정·.bak 제외
+    $img = [Environment]::ExpandEnvironmentVariables([string](RegVal $pk.PSPath "ProfileImagePath"))
+    if (-not $img) { continue }
+    $u = $lu47[$sid]; $trOk = $true
+    $nm = if ($u) { "$($u.Name)" } else { try { (New-Object System.Security.Principal.SecurityIdentifier $sid).Translate([System.Security.Principal.NTAccount]).Value } catch { $trOk = $false; Split-Path $img -Leaf } }
+    $dat = Join-Path $img "NTUSER.DAT"
+    $loaded = Test-Path -LiteralPath "Registry::HKEY_USERS\$sid"
+    if ($u -and -not (UserEnabled $u)) { $ex47 += "$nm(비활성)"; continue }
+    if (-not $u -and $pfx47 -and $sid.StartsWith("$pfx47-")) { $ex47 += "$nm(삭제된 로컬 계정의 잔여 프로필)"; continue }
+    if (-not $u -and -not $trOk) { $unk47 += "$nm($sid 계정명 확인 불가 → 수동 확인)"; continue }
+    if ("$nm" -match '(^|\\)ssm-user$') { $ex47 += "$nm(SSM Agent 비대화형)"; continue }
+    if ($svc47.ContainsKey($sid) -and -not $ia47.ContainsKey($sid)) {
+        if ($grp47) { $ex47 += "$nm(서비스 $($svc47[$sid]) 실행 계정, 관리자·RDP 그룹 비구성원 → 비대화형 추정)" }
+        else { $unk47 += "$nm(서비스 $($svc47[$sid]) 실행 계정, 그룹 조회 실패로 대화형 여부 미확인 → 수동 확인)" }
+        continue
+    }
+    if ($loaded) {
+        $pol = KeyVals47 "Registry::HKEY_USERS\$sid\Software\Policies\Microsoft\Windows\Control Panel\Desktop"
+        $usr = KeyVals47 "Registry::HKEY_USERS\$sid\Control Panel\Desktop"
+        $src = "로드된 하이브"
+    } else {
+        if (-not (Test-Path -LiteralPath $dat)) { $ex47 += "$nm(NTUSER.DAT 없음)"; continue }
+        if ($off47 -ge 20) { $unk47 += "$nm(오프라인 하이브 읽기 상한 20명 초과 → 수동 확인)"; continue }
+        $off47++
+        $b = RegfLoad $dat
+        if ($null -eq $b) { $unk47 += "$nm(NTUSER.DAT 읽기 실패/64MB 초과 → 수동 확인)"; continue }
+        if ([BitConverter]::ToUInt32($b, 4) -ne [BitConverter]::ToUInt32($b, 8)) { $unk47 += "$nm(하이브 dirty - 트랜잭션 로그 미반영 → 수동 확인)"; $b = $null; continue }
+        try {
+            $pol = @{}; $k = RegfKey $b @("Software","Policies","Microsoft","Windows","Control Panel","Desktop"); if ($k -ge 0) { $pol = RegfValues $b $k }
+            $usr = @{}; $k = RegfKey $b @("Control Panel","Desktop"); if ($k -ge 0) { $usr = RegfValues $b $k }
+        } catch { $unk47 += "$nm(하이브 해석 실패 → 수동 확인)"; $b = $null; continue }
+        $b = $null
+        $src = "오프라인 하이브"
+    }
+    $ssA = "$(Pick47 $pol $usr 'ScreenSaveActive')"; $ssS = "$(Pick47 $pol $usr 'ScreenSaverIsSecure')"
+    $ssT = "$(Pick47 $pol $usr 'ScreenSaveTimeOut')"; $ssE = "$(Pick47 $pol $usr 'SCRNSAVE.EXE')".Trim()
+    $why = @()
+    if ($ssA -ne "1") { $why += "화면보호기 미사용" }
+    if ($ssS -ne "1") { $why += "암호 보호 미사용" }
+    $ti = 0; if (-not [int]::TryParse($ssT, [ref]$ti) -or $ti -lt 1 -or $ti -gt 600) { $why += "대기 $(if($ssT){"${ssT}초"}else{'미설정(기본 900초)'})(기준 1~600초)" }
+    $exeOk = $false
+    if ($ssE) { $x = [Environment]::ExpandEnvironmentVariables($ssE); if (-not [IO.Path]::IsPathRooted($x)) { $x = Join-Path "$env:SystemRoot\System32" $x }; $exeOk = Test-Path -LiteralPath $x }
+    if (-not $exeOk) { $why += "화면보호기 프로그램 $(if($ssE){"'$ssE' 파일 없음"}else{'(없음)'})" }
+    $sum = "$nm($src$(if($pol.Count){', 사용자 정책키 있음'})) Active=$ssA Secure=$ssS Timeout=$ssT EXE=$(if($ssE){$ssE}else{'(없음)'})"
+    if ($why.Count -gt 0) { $bad47 += "$sum → 미흡: $($why -join ', ')" } else { $ok47 += $sum }
+}
+$ref47 = @()
+if ($ex47.Count) { $ref47 += "판정 제외 계정: $($ex47 -join ', ')" }
+if (Test-Path -LiteralPath "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop") { $ref47 += "참고: HKLM 화면보호기 정책값 존재(사용자 구성 전용 정책이라 Windows 미적용 → 판정 제외)" }
+if ($bad47.Count -gt 0) {
+    Rep "W-47" "화면보호기 설정" "VULN" (@($bad47) + @($unk47 | ForEach-Object { "확인 불가: $_" }) + @($ok47) + $ref47 + @("사용자별 화면 보호기 사용 + 대기 10분(600초) 이하 + '다시 시작할 때 로그온 화면 표시' 설정 필요"))
+} elseif ($unk47.Count -gt 0) {
+    Rep "W-47" "화면보호기 설정" "MAN" (@($unk47 | ForEach-Object { "확인 불가: $_" }) + @($ok47) + $ref47)
+} elseif ($ok47.Count -eq 0) {
+    Rep "W-47" "화면보호기 설정" "MAN" (@("점검 대상 사용자 프로필 없음 → 사용 계정의 화면보호기 설정 수동 확인") + $ref47)
 } else {
-    Rep "W-47" "화면보호기 설정" "VULN" @("화면 보호기 암호 보호/대기시간(<=600초) 미흡 (Active=$ssA Secure=$ssS Timeout=$ssT)")
+    Rep "W-47" "화면보호기 설정" "GOOD" (@($ok47) + $ref47)
 }
 
 # W-48 로그온하지 않고 시스템 종료 허용
@@ -3174,10 +3761,36 @@ if ($Target -eq "tomcat") {
         if ("$pp" -match "^(True|1)$") { Rep "WEB-06" "VULN" @("ASP enableParentPaths=True → 상위 경로(../) 접근 허용") }
         elseif ("$de" -match "^(True|1)$") { Rep "WEB-06" "VULN" @("allowDoubleEscaping=True → 이중 이스케이프 경로 조작 허용") }
         else { Rep "WEB-06" "GOOD" @("enableParentPaths=False, allowDoubleEscaping=False → 상위 디렉터리 접근 차단") } }
+    # WEB-07: 모든 사이트/앱/가상디렉터리 실제 경로(환경변수 확장) + 기본 wwwroot 를 깊이 5·경로당 5000개 상한으로 탐색 + 가이드 샘플 디렉터리 존재 확인
+    #   취약 - iisstart.*/welcome.png, 백업(*.bak/*.old/*.orig/*~/*.before-*/web.config.*), 샘플 디렉터리(iissamples·iishelp·IISADMPWD·msadc\sample)
+    #   수동확인 - 사이트 경로 확인 불가, 또는 탐색 미완료(UNC·드라이브 루트·접근 오류·개수 상한)인데 탐색 범위엔 없음 (test*/sample* 이름 패턴은 오탐 우려로 제외)
     if (-not $IIS_INSTALLED) { Rep "WEB-07" "NA" @("IIS 미설치") }
-    else { $junk=@(); foreach ($f in @("iisstart.htm","iisstart.png","welcome.png","web.config.bak")) { if (Test-Path (Join-Path $wwwroot $f)) { $junk += $f } }
-        if ($junk.Count -gt 0) { Rep "WEB-07" "VULN" @("$wwwroot 에 IIS 기본/불필요 파일 잔존: $($junk -join ', ') → 제거 필요") }
-        else { Rep "WEB-07" "GOOD" @("$wwwroot 에 IIS 기본 파일(iisstart.* 등) 없음") } }
+    else { $roots7=@(); $src7=""
+        if ($HAS_WEBADMIN) { try { $roots7 += @(Get-Website -ErrorAction Stop | ForEach-Object { "$($_.physicalPath)" })
+                $roots7 += @(Get-WebApplication -ErrorAction Stop | ForEach-Object { "$($_.PhysicalPath)" })
+                $roots7 += @(Get-WebVirtualDirectory -ErrorAction Stop | ForEach-Object { "$($_.physicalPath)" }); $src7="WebAdministration" } catch { $roots7=@() } }
+        if (-not $src7) { try { $ahc7 = [regex]::Replace([IO.File]::ReadAllText((Join-Path $env:windir "System32\inetsrv\config\applicationHost.config")),'(?s)<!--.*?-->','')
+                $roots7 = @([regex]::Matches($ahc7,'(?i)<virtualDirectory\b[^>]*\bphysicalPath\s*=\s*"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }); $src7="applicationHost.config" } catch {} }
+        $roots7 = @(@($roots7) + @($wwwroot) | ForEach-Object { $x7=[Environment]::ExpandEnvironmentVariables("$_".Trim()); if ($x7 -match '^[A-Za-z]:\\?$') { $x7.Substring(0,2)+'\' } else { $x7.TrimEnd('\') } } | Where-Object { $_ } | Sort-Object -Unique)
+        $rx7 = '(?i)(^iisstart\.|^welcome\.png$|\.(bak|old|orig)$|~$|\.before-|^web\.config\.(?!(install|uninstall)\.xdt$).+)'
+        $hit7=@(); $scan7=@(); $inc7=@()
+        foreach ($r7 in $roots7) {
+            if ($r7.StartsWith('\\')) { $scan7 += "$($r7)(UNC 미탐색)"; $inc7 += "$($r7)(UNC)"; continue }
+            if (-not (Test-Path -LiteralPath $r7)) { $scan7 += "$($r7)(없음)"; continue }
+            $dp7 = 5; $e7 = $null; if ($r7 -match '^[A-Za-z]:\\$') { $dp7 = 0; $inc7 += "$($r7)(드라이브 루트 1단계만)" }
+            $fs7 = @(Get-ChildItem -LiteralPath $r7 -Recurse -Depth $dp7 -Force -File -ErrorAction SilentlyContinue -ErrorVariable e7 | Select-Object -First 5001)
+            if ($fs7.Count -gt 5000) { $inc7 += "$($r7)(5000개 상한)" }; if ($e7) { $inc7 += "$($r7)(접근 오류 $(@($e7).Count)건)" }
+            $scan7 += "$($r7)($([Math]::Min($fs7.Count,5000))개)"
+            foreach ($f7 in $fs7) { if ($f7.Name -match $rx7) { $hit7 += $f7.FullName } } }
+        $smp7 = @((Join-Path $env:SystemDrive "inetpub\iissamples"), (Join-Path $env:windir "help\iishelp"), (Join-Path $env:windir "System32\inetsrv\IISADMPWD"))
+        foreach ($cp7 in @($env:CommonProgramFiles, ${env:CommonProgramFiles(x86)}, $env:CommonProgramW6432)) { if ($cp7) { $smp7 += (Join-Path $cp7 "System\msadc\sample") } }
+        foreach ($p7 in @($smp7 | Sort-Object -Unique)) { if (Test-Path -LiteralPath $p7) { $hit7 += "$($p7)(샘플 디렉터리)" } }
+        $hit7 = @($hit7 | Select-Object -Unique)
+        $sc7 = "검사 경로: $($scan7 -join ', ') (사이트 경로 출처: $(if ($src7) {$src7} else {'확인 불가'})) + 가이드 샘플 디렉터리 4종"
+        if ($hit7.Count -gt 0) { Rep "WEB-07" "VULN" @("웹 경로에 IIS 기본·샘플·백업 파일 잔존: $(($hit7 | Select-Object -First 8) -join ', ')$(if ($hit7.Count -gt 8) {" 외 $($hit7.Count-8)건"}) → 제거 필요", $sc7) }
+        elseif (-not $src7) { Rep "WEB-07" "MAN" @("사이트 실제 경로 확인 불가 → 기본 $($wwwroot)·샘플 경로에는 없음, 사이트 경로의 기본·백업 파일 수동 확인", $sc7) }
+        elseif ($inc7.Count -gt 0) { Rep "WEB-07" "MAN" @("탐색 범위에는 불필요 파일 없음, 탐색 미완료: $($inc7 -join ', ') → 나머지 경로 확인", $sc7) }
+        else { Rep "WEB-07" "GOOD" @("IIS 기본 파일(iisstart.* 등)·가이드 샘플 디렉터리·백업 파일(*.bak/*.old/*.orig/*~/web.config.*) 없음", $sc7) } }
     if (-not $IIS_INSTALLED) { Rep "WEB-08" "NA" @("IIS 미설치") }
     else { $mx = IISProp "/system.webServer/security/requestFiltering/requestLimits" "maxAllowedContentLength"
         if ($null -eq $mx) { Rep "WEB-08" "MAN" @("maxAllowedContentLength 확인 불가 → 업로드 용량 제한 설정 확인") }
@@ -3218,11 +3831,39 @@ if ($Target -eq "tomcat") {
         try { foreach ($h in (Get-WebConfiguration "/system.webServer/handlers/add" -ErrorAction Stop)) { foreach ($ve in $vulnExt) { if ("$($h.path)" -match [regex]::Escape($ve)+"$") { $found += "$($h.path)" } } } } catch {}
         if ($found.Count -gt 0) { Rep "WEB-15" "VULN" @("취약 스크립트 매핑: $($found -join ', ')") }
         else { Rep "WEB-15" "GOOD" @("취약 확장자(.htr/.idc/.stm 등) 매핑 없음") } }
+    # WEB-16: 실측 우선 — 바인딩별 '/'(IIS 파이프라인)·'/%'(HTTP.sys 직접 응답)를 curl.exe 로 요청, Server 값이 제품·버전(Microsoft-IIS·Microsoft-HTTPAPI·ASP.NET·ARR·'/숫자'·'(OS)')을
+    #   드러내거나 X-Powered-By/X-AspNet(Mvc)-Version 이 있으면 취약(임의 값·제품명만인 Server 는 양호). 실측 못 한 계층은 설정으로 판단:
+    #   '/' → removeServerHeader=True·X-Powered-By 미설정·arrResponseHeader 비활성(아니면 기존대로 취약), '/%' → HTTP.sys DisableServerHeader=1/2(아니면 수동확인, 재시작 후 적용이라 실측 우선)
     if (-not $IIS_INSTALLED) { Rep "WEB-16" "NA" @("IIS 미설치") }
     else { $rmSrv = IISProp "/system.webServer/security/requestFiltering" "removeServerHeader"
         $xpb=@(); try { foreach ($h in (Get-WebConfiguration "/system.webServer/httpProtocol/customHeaders/add" -ErrorAction Stop)) { $xpb += "$($h.name)" } } catch {}
-        if ("$rmSrv" -match "^(True|1)$" -and ($xpb -notcontains "X-Powered-By")) { Rep "WEB-16" "GOOD" @("Server 헤더 제거 + X-Powered-By 미설정 → 서버 정보 미노출") }
-        else { Rep "WEB-16" "VULN" @("서버 정보 노출 가능(removeServerHeader=$rmSrv, X-Powered-By/ARR 헤더) → 응답 헤더 제거 필요") } }
+        $arrH = IISProp "/system.webServer/proxy" "arrResponseHeader"
+        $dsh = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters" -ErrorAction SilentlyContinue).DisableServerHeader
+        $cfgOk16 = ("$rmSrv" -match "^(True|1)$" -and ($xpb -notcontains "X-Powered-By") -and ("$arrH" -notmatch "^(True|1)$"))
+        $cfg16 = "설정: removeServerHeader=$($rmSrv), customHeaders X-Powered-By $(if ($xpb -contains 'X-Powered-By') {'있음'} else {'없음'}), arrResponseHeader=$(if ($null -eq $arrH) {'-'} else {$arrH}), HTTP.sys DisableServerHeader=$(if ($null -eq $dsh) {'없음'} else {$dsh})"
+        $curl16 = (Get-Command curl.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        $tg16=@(); try { foreach ($b in (Get-WebBinding -ErrorAction Stop)) { $m16 = [regex]::Match("$($b.bindingInformation)", '^.*:(\d+):(.*)$')
+                if ("$($b.protocol)" -match '^https?$' -and $m16.Success) { $hh16 = $m16.Groups[2].Value; if ($hh16 -notmatch '^[A-Za-z0-9.-]+$') { $hh16 = "localhost" }
+                    $u16 = "{0}://{1}:{2}" -f "$($b.protocol)".ToLower(), $hh16, $m16.Groups[1].Value; if ($tg16 -notcontains $u16) { $tg16 += $u16 } } } } catch {}
+        if ($tg16.Count -eq 0) { $tg16 = @("http://localhost:80","https://localhost:443") }
+        $okRoot=0; $okSys=0; $exp16=@(); $fail16=@()
+        foreach ($t16 in @($tg16 | Select-Object -First 4)) { foreach ($p16 in @("/","/%")) {
+                if (-not $curl16) { $fail16 += "$($t16)$($p16)(curl.exe 없음)"; continue }
+                $h16 = ($t16 -split '[/:]')[3]; $ex16 = @(); if ($h16 -ne "localhost") { $ex16 = @("--resolve", ("{0}:{1}:127.0.0.1" -f $h16, ($t16 -split ':')[-1])) }
+                $mt16 = if ($p16 -eq "/") { 5 } else { 4 }
+                $o16 = @(& $curl16 -s -k -D - -o NUL --connect-timeout 3 --max-time $mt16 @ex16 "$($t16)$($p16)" 2>$null)
+                $sl16 = @($o16 | Where-Object { "$_" -match '^HTTP/[\d.]+\s+\d{3}' })
+                if ($sl16.Count -eq 0) { $fail16 += "$($t16)$($p16)(응답 없음/시간초과)"; continue }
+                if ($p16 -eq "/") { $okRoot++ } else { $okSys++ }
+                $c16 = ("$($sl16[-1])".Trim() -split '\s+')[1]
+                foreach ($l16 in $o16) { if ("$l16" -match '^([A-Za-z0-9-]+):\s*(.*)$') { $hn16 = $matches[1]; $hv16 = $matches[2].Trim(); $tag16 = "$($t16)$($p16)→$($c16) $($hn16): $($hv16)"
+                        if ($hn16 -eq "Server") { if ($hv16 -match 'Microsoft-HTTPAPI') { $exp16 += "$tag16 [HTTP.sys]" } elseif ($hv16 -match 'Microsoft-IIS') { $exp16 += "$tag16 [IIS]" } elseif ($hv16 -match 'ASP\.NET|^ARR|/\s*v?\d|\(') { $exp16 += "$tag16 [백엔드/프록시]" } }
+                        elseif ($hn16 -match '^(X-Powered-By|X-AspNet-Version|X-AspNetMvc-Version)$') { $exp16 += $tag16 } } } } }
+        $exp16 = @($exp16 | Select-Object -Unique); $fev16 = @(); if ($fail16.Count) { $fev16 += "실측 실패: $($fail16 -join ', ')" }
+        if ($exp16.Count -gt 0) { Rep "WEB-16" "VULN" (@("응답 헤더로 서버 정보 노출(실측): $(($exp16 | Select-Object -First 4) -join '; ') → removeServerHeader=True·HTTP.sys DisableServerHeader=1(HTTP 서비스 재시작)·X-Powered-By 제거", $cfg16) + $fev16) }
+        elseif ($okRoot -eq 0 -and -not $cfgOk16) { Rep "WEB-16" "VULN" (@("'/' 실측 실패 + 설정상 서버 정보 노출 가능(removeServerHeader=$($rmSrv), X-Powered-By/ARR 헤더) → 응답 헤더 제거 필요", $cfg16) + $fev16) }
+        elseif ($okSys -eq 0 -and "$dsh" -notmatch '^[12]$') { Rep "WEB-16" "MAN" (@("'/%'(HTTP.sys 직접 응답) 실측 실패 + DisableServerHeader 미설정 → 400/503 등 HTTP.sys 오류 응답의 Server: Microsoft-HTTPAPI 노출 여부 확인", $cfg16) + $fev16) }
+        else { Rep "WEB-16" "GOOD" (@("실측 응답('/' $($okRoot)건·'/%' $($okSys)건)에 Server 제품/버전·X-Powered-By·X-AspNet-Version 없음$(if ($okRoot -eq 0) {", '/' 는 설정 기준(Server 헤더 제거·X-Powered-By 미설정)"})$(if ($okSys -eq 0) {", '/%' 는 DisableServerHeader=$($dsh) 기준"}) → 서버 정보 미노출", $cfg16) + $fev16) } }
     Rep "WEB-17" "NA" @("가이드 점검대상(Apache/Tomcat/Nginx/WebtoB)에 IIS 미포함 → 점검대상 제외")
     if (-not $IIS_INSTALLED) { Rep "WEB-18" "NA" @("IIS 미설치") }
     else { $dav=$false; if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) { $wf=Get-WindowsFeature Web-DAV-Publishing -ErrorAction SilentlyContinue; if ($wf -and $wf.Installed) { $dav=$true } }

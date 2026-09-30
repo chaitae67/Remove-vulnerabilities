@@ -110,6 +110,42 @@ http_head() { have curl && curl -sk -m 5 -I "$1" 2>/dev/null; }
 http_get()  { have curl && curl -sk -m 5 "$1" 2>/dev/null; }
 other_readable() { local p; p=$(stat -c '%a' "$1" 2>/dev/null) || return 1; [ "$(( 8#$p & 8#004 ))" -ne 0 ]; }
 other_writable() { local p; p=$(stat -c '%a' "$1" 2>/dev/null) || return 1; [ "$(( 8#$p & 8#002 ))" -ne 0 ]; }
+tmo() { if have timeout; then timeout "$@"; else shift; "$@"; fi; }
+# jar 내부 파일 읽기(표준출력만, 읽기 전용): unzip → python(zipfile, 바이트 그대로 출력해 LANG=C 에서도 안전)
+#   ※ python 코드는 ASCII 만 사용(py3.6 은 C 로케일에서 -c 인자의 비 ASCII 로 실패)
+read_jar() {
+  local out="" p
+  have unzip && out=$(unzip -p "$1" "$2" 2>/dev/null)
+  if [ -z "$out" ]; then
+    for p in python3 /usr/libexec/platform-python python; do
+      have "$p" || continue
+      out=$(tmo 30 "$p" -c 'import sys, zipfile
+o = getattr(sys.stdout, "buffer", sys.stdout)
+try:
+    o.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))
+except Exception:
+    sys.exit(1)' "$1" "$2" 2>/dev/null)
+      break
+    done
+  fi
+  printf '%s' "$out"
+}
+# 관리자 권한 계정 여부(WEB-09): priv_chk 계정 → PRIV_ST(VULN/MAN/빈값=권한 없음) PRIV_EV(근거)
+#   UID 0 또는 sudo -l -U 에 (ALL|root) ... ALL 전권 → VULN, sudo 일부 명령 허용·확인 불가 → MAN (그룹명만으로 판정하지 않음)
+priv_chk() {
+  local u=$1 uid out full part
+  PRIV_ST=""; PRIV_EV=""
+  uid=$(id -u "$u" 2>/dev/null)
+  if [ "$uid" = 0 ]; then PRIV_ST=VULN; PRIV_EV="UID 0(관리자) 계정"; return; fi
+  have sudo || { PRIV_EV="sudo 미설치"; return; }
+  out=$(LC_ALL=C tmo 10 sudo -n -l -U "$u" 2>&1)
+  full=$(printf '%s\n' "$out" | grep -E '^[[:space:]]+\((ALL|root)([[:space:]]*:[[:space:]]*[^)]*)?\)[[:space:]]*([A-Z_]+:[[:space:]]*)*ALL\b' | head -2 | sed -E 's/^[[:space:]]+//' | tr '\n' ' ')
+  part=$(printf '%s\n' "$out" | grep -E '^[[:space:]]+\(' | head -3 | sed -E 's/^[[:space:]]+//' | tr '\n' ' ')
+  if [ -n "$full" ]; then PRIV_ST=VULN; PRIV_EV="sudo 전권 부여: ${full% }(관리자 권한 계정)"
+  elif [ -n "$part" ]; then PRIV_ST=MAN; PRIV_EV="sudo 일부 명령 허용: ${part% } → root 획득 가능한 명령(셸·편집기 등)인지 확인"
+  elif printf '%s' "$out" | grep -q 'not allowed to run sudo'; then PRIV_EV="sudo 권한 없음"
+  else PRIV_ST=MAN; PRIV_EV="sudo 권한(sudo -l -U) 확인 불가 → 관리자 권한 부여 여부 확인"; fi
+}
 
 echo -e "${W}=========================================================${N}"
 echo -e "${W} 웹서버(리눅스) 취약점 점검  —  $HOSTN${N}"
@@ -221,14 +257,36 @@ fi
 
 # WEB-07 불필요한 파일
 if [ "$TARGET" = nginx ]; then
-  root_dir=$(conf_grep '^[[:space:]]*root[[:space:]]' | head -1 | awk '{print $2}' | tr -d ';')
-  [ -z "$root_dir" ] && root_dir=/usr/share/nginx/html
-  junk=""
-  for f in index.nginx-debian.html index.html who.html info.php test.html phpinfo.php example_*; do
-    [ -e "$root_dir/$f" ] && junk="$junk $f"
+  # 검사 경로: 설정의 모든 root/alias(변수 경로 제외) + 가이드 예시 <Nginx 설치 디렉터리(--prefix)>/html + 배포판 기본 html 경로
+  ngx_prefix=""; [ -n "$NGX_BIN2" ] && ngx_prefix=$("$NGX_BIN2" -V 2>&1 | tr ' ' '\n' | sed -n 's/^--prefix=//p' | head -1)
+  roots7=$(conf_grep '^[[:space:]]*(root|alias)[[:space:]]' | awk '{print $2}' | tr -d ';"'"'" | grep -v '\$' | sort -u |
+    while IFS= read -r r; do case "$r" in /*) echo "$r";; *) [ -n "$ngx_prefix" ] && echo "${ngx_prefix%/}/$r";; esac; done)
+  rroots=$(printf '%s\n' "$roots7" | while IFS= read -r r; do [ -n "$r" ] && { readlink -f "$r" 2>/dev/null || echo "$r"; }; done)
+  errp=" $(conf_grep '^[[:space:]]*error_page[[:space:]]' | awk '{print $NF}' | tr -d ';' | sed 's#.*/##' | sort -u | tr '\n' ' ') "
+  junk=""; scanned=""
+  for d in $roots7 ${ngx_prefix:+${ngx_prefix%/}/html} /usr/share/nginx/html /var/www/html; do
+    rd=$(readlink -f "$d" 2>/dev/null); [ -n "$rd" ] && [ -d "$rd" ] || continue
+    case " $scanned " in *" $rd "*) continue;; esac; scanned="$scanned $rd"
+    expo="비노출"; printf '%s\n' "$rroots" | grep -qxF "$rd" && expo="노출"
+    # (1) nginx 기본 파일: 파일명이 아니라 기본 페이지 문구(html) 또는 nginx 패키지 소유(그 외)로 판별 → 서비스용 index.html 오탐 방지
+    for n in index.html index.htm index.nginx-debian.html 50x.html 404.html nginx-logo.png poweredby.png; do
+      f="$rd/$n"; [ -f "$f" ] || continue
+      [ "$expo" = 노출 ] && case "$errp" in *" $n "*) continue;; esac   # error_page 로 사용 중인 오류 페이지 제외
+      case "$n" in
+        *.htm|*.html) grep -qiE 'Welcome to nginx|Test Page for the Nginx|HTTP Server Test Page|nginx on Amazon Linux|Thank you for using nginx|Faithfully yours, nginx' "$f" 2>/dev/null || continue;;
+        *) po=""; if have dpkg-query && po=$(dpkg-query -S "$f" 2>/dev/null); then :; elif have rpm && po=$(rpm -qf "$f" 2>/dev/null); then :; else po=""; fi
+           printf '%s' "${po%%:*}" | grep -qi nginx || continue;;
+      esac
+      junk="$junk $f($expo)"
+    done
+    # (2) 백업·임시 파일: 확장자 등 정확한 패턴만(깊이 3), 시스템 최상위 경로는 재귀 탐색 안 함
+    case "$rd" in /|/bin|/boot|/dev|/etc|/home|/lib*|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/usr/bin|/usr/lib*|/usr/local|/usr/sbin|/usr/share|/var|/var/lib|/var/log) continue;; esac
+    bk=$(tmo 20 find "$rd" -xdev -maxdepth 3 -type f \( -name '*.bak' -o -name '*.old' -o -name '*.orig' -o -name '*~' -o -name '*.swp' \
+          -o -name who.html -o -name test.html -o -name info.php -o -name phpinfo.php \) 2>/dev/null | head -10 | tr '\n' ' ')
+    [ -n "$bk" ] && junk="$junk ${bk% }"
   done
-  if [ -n "$junk" ]; then rep WEB-07 VULN "웹 루트($root_dir)에 기본/테스트 파일 잔존:$junk → 제거 필요"
-  else rep WEB-07 GOOD "웹 루트($root_dir)에 기본/테스트 파일 없음"; fi
+  if [ -n "$junk" ]; then rep WEB-07 VULN "웹 루트·기본 html 경로에 기본/백업/테스트 파일 잔존:$junk → 제거 필요(비노출 경로도 가이드 예시 대상)"
+  else rep WEB-07 GOOD "웹 루트·기본 html 경로(${scanned# })에 기본/백업/테스트 파일 없음"; fi
 else
   jdir=$(dirname "${APP_JAR:-/opt/app.jar}")
   junk=$(ls -1 "$jdir" 2>/dev/null | grep -iE 'placeholder|readme|test|sample|\.bak$|\.old$' | head -5 | tr '\n' ' ')
@@ -241,9 +299,38 @@ if [ "$TARGET" = nginx ]; then
   if conf_grep 'client_max_body_size' >/dev/null; then rep WEB-08 GOOD "client_max_body_size 설정: $(conf_grep 'client_max_body_size' | head -1 | tr -s ' ' ' ')"
   else rep WEB-08 VULN "client_max_body_size 미설정 → 업로드 용량 제한 없음(자원 고갈 위험)"; fi
 else
-  if printf '%s' "$APP_YML_CONTENT" | grep -qiE 'max-file-size|max-request-size|maxFileSize'; then
-    rep WEB-08 GOOD "application.yml 에 multipart 업로드 용량 제한 설정: $(yml_get 'max-file-size|max-request-size')"
-  else rep WEB-08 VULN "application.yml 에 spring.servlet.multipart.max-file-size/max-request-size 미설정 → 업로드 용량 제한 없음"; fi
+  # 설정 출처 우선순위: 실행 인자(--/-D spring.servlet.multipart.*) > 환경변수(SPRING_SERVLET_MULTIPART_*) > 외부 application.* > jar 내부 application.*
+  #   yml/properties 는 기본 문서(첫 '---' 이전)만, 주석 행 제외. jar 는 unzip 없으면 python(zipfile)으로 읽음
+  pid8=$(printf '%s' "$JPROC" | awk '{print $1}')
+  jar8="$APP_JAR"; [ -f "$jar8" ] || jar8=$(printf '%s' "$JPROC" | grep -oE '/[^ ]+\.jar' | head -1)
+  env8=""; [ -n "$pid8" ] && [ -r "/proc/$pid8/environ" ] && env8=$(tr '\0' '\n' < "/proc/$pid8/environ" 2>/dev/null | grep -E '^SPRING_SERVLET_MULTIPART_')
+  cfg8=""; cread=0
+  if [ -n "$jar8" ]; then
+    jd8=$(dirname "$jar8")
+    for f in "$jd8"/config/application.yml "$jd8"/config/application.yaml "$jd8"/config/application.properties "$jd8"/application.yml "$jd8"/application.yaml "$jd8"/application.properties; do
+      [ -f "$f" ] && { cfg8="$cfg8"$'\n'"$(awk '/^---/{exit} {print}' "$f" 2>/dev/null)"; cread=1; }
+    done
+  fi
+  if [ -n "$APP_YML_CONTENT" ]; then cfg8="$cfg8"$'\n'"$(printf '%s\n' "$APP_YML_CONTENT" | awk '/^---/{exit} {print}')"; cread=1
+  elif [ -n "$jar8" ] && [ -f "$jar8" ]; then
+    for e in BOOT-INF/classes/application.yml BOOT-INF/classes/application.yaml BOOT-INF/classes/application.properties; do
+      c8=$(read_jar "$jar8" "$e"); [ -n "$c8" ] && { cfg8="$cfg8"$'\n'"$(printf '%s\n' "$c8" | awk '/^---/{exit} {print}')"; cread=1; }
+    done
+  fi
+  mf=""; mr=""; sf=""; sr=""
+  for k in file request; do
+    K=$(printf '%s' "$k" | tr 'a-z' 'A-Z'); s="실행인자"
+    v=$(printf '%s' "$JPROC" | grep -oE -- "-(-|D)spring\.servlet\.multipart\.max-$k-size=[^ ]+" | head -1 | sed 's/^[^=]*=//')
+    [ -z "$v" ] && { s="환경변수"; v=$(printf '%s\n' "$env8" | sed -n "s/^SPRING_SERVLET_MULTIPART_MAX${K}SIZE=//p; s/^SPRING_SERVLET_MULTIPART_MAX_${K}_SIZE=//p" | head -1); }
+    [ -z "$v" ] && { s="application 설정"; v=$(printf '%s\n' "$cfg8" | grep -vE '^[[:space:]]*#' | grep -iE "^[[:space:]]*([a-z.]*\.)?(max-$k-size|max${k}size)[[:space:]]*[:=]" | head -1 | sed -E 's/^[^:=]*[:=][[:space:]]*//; s/[[:space:]]+#.*$//' | tr -d '"'"'"' \r'); }
+    if [ "$k" = file ]; then mf="$v"; sf="$s"; else mr="$v"; sr="$s"; fi
+  done
+  case " $mf $mr " in
+    *" -1 "*|*":-1} "*) rep WEB-08 VULN "multipart 업로드 용량 무제한(-1): max-file-size=${mf:-미설정} max-request-size=${mr:-미설정} → 용량 제한 필요";;
+    *) if [ -n "$mf$mr" ]; then rep WEB-08 GOOD "multipart 업로드 용량 제한 설정: max-file-size=${mf:-미설정(기본 1MB)}${mf:+($sf)} max-request-size=${mr:-미설정(기본 10MB)}${mr:+($sr)}"
+       elif [ "$cread" != 1 ]; then rep WEB-08 MAN "애플리케이션 설정(application.yml/properties) 확인 불가(jar: ${jar8:-미상}) → spring.servlet.multipart.max-file-size/max-request-size 설정 확인 필요"
+       else rep WEB-08 VULN "application.yml 에 spring.servlet.multipart.max-file-size/max-request-size 미설정 → 업로드 용량 제한 없음"; fi;;
+  esac
 fi
 
 # WEB-09 프로세스 권한
@@ -251,12 +338,25 @@ if [ "$TARGET" = nginx ]; then
   run_user=$(conf_grep '^[[:space:]]*user[[:space:]]' | head -1 | awk '{print $2}' | tr -d ';')
   [ -z "$run_user" ] && run_user=$(ps -eo user,comm 2>/dev/null | awk '$2 ~ /nginx/ && $1!="root"{print $1; exit}')
   if echo "$run_user" | grep -qiE '^root$'; then rep WEB-09 VULN "worker 실행 계정=root → 최소권한 전용 계정으로 변경 필요"
-  elif [ -n "$run_user" ]; then rep WEB-09 GOOD "worker 실행 계정=$run_user (비 root 최소권한)"
+  elif [ -n "$run_user" ]; then
+    priv_chk "$run_user"
+    case "$PRIV_ST" in
+      VULN) rep WEB-09 VULN "worker 실행 계정=$run_user — $PRIV_EV → 관리자 권한 없는 최소권한 전용 계정으로 변경 필요";;
+      MAN)  rep WEB-09 MAN "worker 실행 계정=$run_user (비 root) — $PRIV_EV";;
+      *)    rep WEB-09 GOOD "worker 실행 계정=$run_user (비 root 최소권한${PRIV_EV:+, $PRIV_EV})";;
+    esac
   else rep WEB-09 MAN "worker 실행 계정 확인 필요(user 지시어/프로세스 소유자)"; fi
 else
   if [ -z "$APP_OWNER" ]; then rep WEB-09 MAN "java 프로세스 미탐지 → 서비스 실행 계정(비 root) 확인 필요"
   elif [ "$APP_OWNER" = root ]; then rep WEB-09 VULN "웹 서비스(java) 프로세스가 root 로 구동 → 최소권한 전용 계정으로 변경 필요"
-  else rep WEB-09 GOOD "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER (비 root)"; fi
+  else
+    priv_chk "$APP_OWNER"
+    case "$PRIV_ST" in
+      VULN) rep WEB-09 VULN "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER — $PRIV_EV → 관리자 권한 없는 최소권한 전용 계정으로 변경 필요";;
+      MAN)  rep WEB-09 MAN "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER (비 root) — $PRIV_EV";;
+      *)    rep WEB-09 GOOD "웹 서비스(java) 프로세스 실행 계정=$APP_OWNER (비 root${PRIV_EV:+, $PRIV_EV})";;
+    esac
+  fi
 fi
 
 # WEB-10 프록시
@@ -418,8 +518,51 @@ fi
 
 # WEB-25 보안 패치
 if [ "$TARGET" = nginx ]; then
+  # 배포판은 업스트림 버전 번호를 유지한 채 보안 수정을 백포트 → 실행 바이너리의 소유 패키지로 설치/후보 버전 비교(로컬 캐시만, 네트워크 없음)
   osrel=$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")
-  rep WEB-25 VULN "Nginx ${NGX_VER:-?} / $osrel — 최신 안정판·배포판 보안업데이트 적용 여부 확인 필요(구버전은 다수 CVE 대상)"
+  osid=$(. /etc/os-release 2>/dev/null; echo "${ID:-}"); oscode=$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")
+  npid=$(pgrep -o -x nginx 2>/dev/null); nexe=""; ndel=0
+  [ -n "$npid" ] && nexe=$(readlink "/proc/$npid/exe" 2>/dev/null)
+  case "$nexe" in *" (deleted)") ndel=1; nexe=${nexe% (deleted)};; esac
+  [ -z "$nexe" ] && [ -n "$NGX_BIN2" ] && nexe=$(readlink -f "$(command -v "$NGX_BIN2" 2>/dev/null)" 2>/dev/null)
+  npkg=""; nmgr=""
+  if [ -n "$nexe" ]; then
+    if have dpkg-query && o=$(tmo 15 dpkg-query -S "$nexe" 2>/dev/null); then npkg=$(printf '%s\n' "$o" | grep -v '^diversion' | head -1 | sed 's/:.*//; s/,.*//'); nmgr=dpkg
+    elif have rpm && o=$(tmo 15 rpm -qf "$nexe" 2>/dev/null); then npkg=$(printf '%s\n' "$o" | head -1); nmgr=rpm; fi
+  fi
+  if [ "$ndel" = 1 ]; then rep WEB-25 VULN "실행 중인 nginx(pid $npid) 바이너리가 교체 전 파일((deleted)) → 패치 후 재시작 누락, 재시작 필요"
+  elif [ "$nmgr" = dpkg ] && [ -n "$npkg" ]; then
+    inst=$(dpkg-query -W -f='${Version}' "$npkg" 2>/dev/null)
+    # apt 캐시가 오래됐으면 파일 기록 없이 메모리에서만 생성(가용 메모리 충분할 때만)
+    pc=/var/cache/apt/pkgcache.bin; aopt=""; pol=""
+    { [ -f "$pc" ] && [ "$pc" -nt /var/lib/dpkg/status ] && [ "$pc" -nt /var/lib/apt/lists ]; } || aopt="-o Dir::Cache::pkgcache= -o Dir::Cache::srcpkgcache="
+    mem=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)
+    if [ -z "$aopt" ] || [ "${mem:-0}" -gt 400000 ]; then pol=$(LC_ALL=C tmo 30 apt-cache $aopt policy "$npkg" 2>/dev/null); fi
+    cand=$(printf '%s\n' "$pol" | awk '/Candidate:/{print $2; exit}'); [ "$cand" = "(none)" ] && cand=""
+    csrc=$(printf '%s\n' "$pol" | awk -v c="$cand" '/^ (\*\*\*|   ) [^ ]+ [0-9]+$/ { f=($2==c); next } f && /^ +[0-9]+ / && $2 !~ /dpkg\/status$/ { print $2, $3 }' | tr '\n' ' ')
+    st=$(ls -t /var/lib/apt/periodic/update-success-stamp /var/lib/apt/lists/*Release 2>/dev/null | head -1)
+    age=999; t=""; [ -n "$st" ] && t=$(stat -c %Y "$st" 2>/dev/null); [ -n "$t" ] && age=$(( ($(date +%s) - t) / 86400 ))
+    # 배포판 지원 기간(distro-info-data) + Ubuntu Pro ESM(esm-infra)
+    eolv=""; di=/usr/share/distro-info/$osid.csv
+    [ -f "$di" ] && [ -n "$oscode" ] && eolv=$(awk -F, -v c="$oscode" 'NR==1 { for (i=1;i<=NF;i++) H[$i]=i; next }
+      $H["series"]==c { e=$H["eol"]; if (("eol-server" in H) && $H["eol-server"]!="") e=$H["eol-server"]; if (("eol-lts" in H) && $H["eol-lts"]!="") e=$H["eol-lts"]; print e; exit }' "$di")
+    sup=""; [ -n "$eolv" ] && { if [[ "$(date +%F)" > "$eolv" ]]; then sup=0; else sup=1; fi; }
+    esm=0; sj=/var/lib/ubuntu-advantage/status.json
+    [ -f "$sj" ] && tr -d '\n' < "$sj" 2>/dev/null | grep -oE '"name": *"esm-infra"[^}]*' | grep -qE '"status": *"enabled"' && esm=1
+    uu=$(tmo 10 apt-config dump 2>/dev/null | sed -n 's/^APT::Periodic::Unattended-Upgrade "\([^"]*\)";/\1/p' | tail -1)
+    ev25="Nginx ${NGX_VER:-?} / $osrel / 패키지 $npkg 설치 ${inst:-?} 후보 ${cand:-?}${csrc:+(${csrc% })} / 패키지 목록 ${age}일 전 갱신"
+    evs="배포판 지원 종료일 ${eolv:-미상}, ESM(esm-infra) $([ "$esm" = 1 ] && echo 사용 || echo 미사용), 자동 보안 업데이트(Unattended-Upgrade)=${uu:-미설정}"
+    if [ -n "$inst" ] && [ -n "$cand" ] && [ "$inst" != "$cand" ]; then
+      if printf '%s' "$csrc" | grep -qiE -- '-security|esm\.ubuntu\.com|debian-security'; then rep WEB-25 VULN "$ev25 → 보안 업데이트 미적용, 최신 보안 패치 적용 필요" "$evs"
+      else rep WEB-25 MAN "$ev25 → 비보안 업데이트 대기(보안 영향 확인 필요)" "$evs"; fi
+    elif [ "$sup" = 0 ] && [ "$esm" != 1 ]; then rep WEB-25 VULN "$ev25 → 배포판 지원 종료($eolv) 후 ESM 미사용 → 보안 업데이트 미수신" "$evs"
+    elif [ -z "$inst" ] || [ -z "$cand" ]; then rep WEB-25 MAN "$ev25 → 후보 버전 확인 불가(apt 캐시), 최신 보안 패치 적용 여부 수동 확인" "$evs"
+    elif [ "$age" -gt 7 ]; then rep WEB-25 MAN "$ev25 → 패키지 목록이 오래되어(7일 초과) 최신 여부 판단 불가" "$evs"
+    elif [ "$sup" = 1 ] || [ "$esm" = 1 ]; then rep WEB-25 GOOD "$ev25 → 후보(보안 업데이트 포함)와 동일, 최신 보안 패치 적용" "$evs (패치 적용 정책·주기는 인터뷰로 확인)"
+    else rep WEB-25 MAN "$ev25 → 배포판 보안 지원 기간 확인 불가, 보안 업데이트 수신 여부 수동 확인" "$evs"; fi
+  elif [ "$nmgr" = rpm ] && [ -n "$npkg" ]; then
+    rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel / 패키지 $npkg — rpm 계열은 저장소 메타데이터 조회(부하·네트워크) 생략 → 배포판 보안 공지와 수동 비교"
+  else rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel — 패키지 미소유(소스 빌드 등)·실행 바이너리 확인 불가 → nginx.org 최신 stable/mainline 및 보안 공지와 수동 비교"; fi
 else
   # 10.1.31 < 최신 10.1.x
   if [ -n "$TOMCAT_VER" ]; then

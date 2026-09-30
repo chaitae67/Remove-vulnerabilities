@@ -276,10 +276,36 @@ if ($Target -eq "tomcat") {
         if ("$pp" -match "^(True|1)$") { Rep "WEB-06" "VULN" @("ASP enableParentPaths=True → 상위 경로(../) 접근 허용") }
         elseif ("$de" -match "^(True|1)$") { Rep "WEB-06" "VULN" @("allowDoubleEscaping=True → 이중 이스케이프 경로 조작 허용") }
         else { Rep "WEB-06" "GOOD" @("enableParentPaths=False, allowDoubleEscaping=False → 상위 디렉터리 접근 차단") } }
+    # WEB-07: 모든 사이트/앱/가상디렉터리 실제 경로(환경변수 확장) + 기본 wwwroot 를 깊이 5·경로당 5000개 상한으로 탐색 + 가이드 샘플 디렉터리 존재 확인
+    #   취약 - iisstart.*/welcome.png, 백업(*.bak/*.old/*.orig/*~/*.before-*/web.config.*), 샘플 디렉터리(iissamples·iishelp·IISADMPWD·msadc\sample)
+    #   수동확인 - 사이트 경로 확인 불가, 또는 탐색 미완료(UNC·드라이브 루트·접근 오류·개수 상한)인데 탐색 범위엔 없음 (test*/sample* 이름 패턴은 오탐 우려로 제외)
     if (-not $IIS_INSTALLED) { Rep "WEB-07" "NA" @("IIS 미설치") }
-    else { $junk=@(); foreach ($f in @("iisstart.htm","iisstart.png","welcome.png","web.config.bak")) { if (Test-Path (Join-Path $wwwroot $f)) { $junk += $f } }
-        if ($junk.Count -gt 0) { Rep "WEB-07" "VULN" @("$wwwroot 에 IIS 기본/불필요 파일 잔존: $($junk -join ', ') → 제거 필요") }
-        else { Rep "WEB-07" "GOOD" @("$wwwroot 에 IIS 기본 파일(iisstart.* 등) 없음") } }
+    else { $roots7=@(); $src7=""
+        if ($HAS_WEBADMIN) { try { $roots7 += @(Get-Website -ErrorAction Stop | ForEach-Object { "$($_.physicalPath)" })
+                $roots7 += @(Get-WebApplication -ErrorAction Stop | ForEach-Object { "$($_.PhysicalPath)" })
+                $roots7 += @(Get-WebVirtualDirectory -ErrorAction Stop | ForEach-Object { "$($_.physicalPath)" }); $src7="WebAdministration" } catch { $roots7=@() } }
+        if (-not $src7) { try { $ahc7 = [regex]::Replace([IO.File]::ReadAllText((Join-Path $env:windir "System32\inetsrv\config\applicationHost.config")),'(?s)<!--.*?-->','')
+                $roots7 = @([regex]::Matches($ahc7,'(?i)<virtualDirectory\b[^>]*\bphysicalPath\s*=\s*"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }); $src7="applicationHost.config" } catch {} }
+        $roots7 = @(@($roots7) + @($wwwroot) | ForEach-Object { $x7=[Environment]::ExpandEnvironmentVariables("$_".Trim()); if ($x7 -match '^[A-Za-z]:\\?$') { $x7.Substring(0,2)+'\' } else { $x7.TrimEnd('\') } } | Where-Object { $_ } | Sort-Object -Unique)
+        $rx7 = '(?i)(^iisstart\.|^welcome\.png$|\.(bak|old|orig)$|~$|\.before-|^web\.config\.(?!(install|uninstall)\.xdt$).+)'
+        $hit7=@(); $scan7=@(); $inc7=@()
+        foreach ($r7 in $roots7) {
+            if ($r7.StartsWith('\\')) { $scan7 += "$($r7)(UNC 미탐색)"; $inc7 += "$($r7)(UNC)"; continue }
+            if (-not (Test-Path -LiteralPath $r7)) { $scan7 += "$($r7)(없음)"; continue }
+            $dp7 = 5; $e7 = $null; if ($r7 -match '^[A-Za-z]:\\$') { $dp7 = 0; $inc7 += "$($r7)(드라이브 루트 1단계만)" }
+            $fs7 = @(Get-ChildItem -LiteralPath $r7 -Recurse -Depth $dp7 -Force -File -ErrorAction SilentlyContinue -ErrorVariable e7 | Select-Object -First 5001)
+            if ($fs7.Count -gt 5000) { $inc7 += "$($r7)(5000개 상한)" }; if ($e7) { $inc7 += "$($r7)(접근 오류 $(@($e7).Count)건)" }
+            $scan7 += "$($r7)($([Math]::Min($fs7.Count,5000))개)"
+            foreach ($f7 in $fs7) { if ($f7.Name -match $rx7) { $hit7 += $f7.FullName } } }
+        $smp7 = @((Join-Path $env:SystemDrive "inetpub\iissamples"), (Join-Path $env:windir "help\iishelp"), (Join-Path $env:windir "System32\inetsrv\IISADMPWD"))
+        foreach ($cp7 in @($env:CommonProgramFiles, ${env:CommonProgramFiles(x86)}, $env:CommonProgramW6432)) { if ($cp7) { $smp7 += (Join-Path $cp7 "System\msadc\sample") } }
+        foreach ($p7 in @($smp7 | Sort-Object -Unique)) { if (Test-Path -LiteralPath $p7) { $hit7 += "$($p7)(샘플 디렉터리)" } }
+        $hit7 = @($hit7 | Select-Object -Unique)
+        $sc7 = "검사 경로: $($scan7 -join ', ') (사이트 경로 출처: $(if ($src7) {$src7} else {'확인 불가'})) + 가이드 샘플 디렉터리 4종"
+        if ($hit7.Count -gt 0) { Rep "WEB-07" "VULN" @("웹 경로에 IIS 기본·샘플·백업 파일 잔존: $(($hit7 | Select-Object -First 8) -join ', ')$(if ($hit7.Count -gt 8) {" 외 $($hit7.Count-8)건"}) → 제거 필요", $sc7) }
+        elseif (-not $src7) { Rep "WEB-07" "MAN" @("사이트 실제 경로 확인 불가 → 기본 $($wwwroot)·샘플 경로에는 없음, 사이트 경로의 기본·백업 파일 수동 확인", $sc7) }
+        elseif ($inc7.Count -gt 0) { Rep "WEB-07" "MAN" @("탐색 범위에는 불필요 파일 없음, 탐색 미완료: $($inc7 -join ', ') → 나머지 경로 확인", $sc7) }
+        else { Rep "WEB-07" "GOOD" @("IIS 기본 파일(iisstart.* 등)·가이드 샘플 디렉터리·백업 파일(*.bak/*.old/*.orig/*~/web.config.*) 없음", $sc7) } }
     if (-not $IIS_INSTALLED) { Rep "WEB-08" "NA" @("IIS 미설치") }
     else { $mx = IISProp "/system.webServer/security/requestFiltering/requestLimits" "maxAllowedContentLength"
         if ($null -eq $mx) { Rep "WEB-08" "MAN" @("maxAllowedContentLength 확인 불가 → 업로드 용량 제한 설정 확인") }
@@ -320,11 +346,39 @@ if ($Target -eq "tomcat") {
         try { foreach ($h in (Get-WebConfiguration "/system.webServer/handlers/add" -ErrorAction Stop)) { foreach ($ve in $vulnExt) { if ("$($h.path)" -match [regex]::Escape($ve)+"$") { $found += "$($h.path)" } } } } catch {}
         if ($found.Count -gt 0) { Rep "WEB-15" "VULN" @("취약 스크립트 매핑: $($found -join ', ')") }
         else { Rep "WEB-15" "GOOD" @("취약 확장자(.htr/.idc/.stm 등) 매핑 없음") } }
+    # WEB-16: 실측 우선 — 바인딩별 '/'(IIS 파이프라인)·'/%'(HTTP.sys 직접 응답)를 curl.exe 로 요청, Server 값이 제품·버전(Microsoft-IIS·Microsoft-HTTPAPI·ASP.NET·ARR·'/숫자'·'(OS)')을
+    #   드러내거나 X-Powered-By/X-AspNet(Mvc)-Version 이 있으면 취약(임의 값·제품명만인 Server 는 양호). 실측 못 한 계층은 설정으로 판단:
+    #   '/' → removeServerHeader=True·X-Powered-By 미설정·arrResponseHeader 비활성(아니면 기존대로 취약), '/%' → HTTP.sys DisableServerHeader=1/2(아니면 수동확인, 재시작 후 적용이라 실측 우선)
     if (-not $IIS_INSTALLED) { Rep "WEB-16" "NA" @("IIS 미설치") }
     else { $rmSrv = IISProp "/system.webServer/security/requestFiltering" "removeServerHeader"
         $xpb=@(); try { foreach ($h in (Get-WebConfiguration "/system.webServer/httpProtocol/customHeaders/add" -ErrorAction Stop)) { $xpb += "$($h.name)" } } catch {}
-        if ("$rmSrv" -match "^(True|1)$" -and ($xpb -notcontains "X-Powered-By")) { Rep "WEB-16" "GOOD" @("Server 헤더 제거 + X-Powered-By 미설정 → 서버 정보 미노출") }
-        else { Rep "WEB-16" "VULN" @("서버 정보 노출 가능(removeServerHeader=$rmSrv, X-Powered-By/ARR 헤더) → 응답 헤더 제거 필요") } }
+        $arrH = IISProp "/system.webServer/proxy" "arrResponseHeader"
+        $dsh = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters" -ErrorAction SilentlyContinue).DisableServerHeader
+        $cfgOk16 = ("$rmSrv" -match "^(True|1)$" -and ($xpb -notcontains "X-Powered-By") -and ("$arrH" -notmatch "^(True|1)$"))
+        $cfg16 = "설정: removeServerHeader=$($rmSrv), customHeaders X-Powered-By $(if ($xpb -contains 'X-Powered-By') {'있음'} else {'없음'}), arrResponseHeader=$(if ($null -eq $arrH) {'-'} else {$arrH}), HTTP.sys DisableServerHeader=$(if ($null -eq $dsh) {'없음'} else {$dsh})"
+        $curl16 = (Get-Command curl.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        $tg16=@(); try { foreach ($b in (Get-WebBinding -ErrorAction Stop)) { $m16 = [regex]::Match("$($b.bindingInformation)", '^.*:(\d+):(.*)$')
+                if ("$($b.protocol)" -match '^https?$' -and $m16.Success) { $hh16 = $m16.Groups[2].Value; if ($hh16 -notmatch '^[A-Za-z0-9.-]+$') { $hh16 = "localhost" }
+                    $u16 = "{0}://{1}:{2}" -f "$($b.protocol)".ToLower(), $hh16, $m16.Groups[1].Value; if ($tg16 -notcontains $u16) { $tg16 += $u16 } } } } catch {}
+        if ($tg16.Count -eq 0) { $tg16 = @("http://localhost:80","https://localhost:443") }
+        $okRoot=0; $okSys=0; $exp16=@(); $fail16=@()
+        foreach ($t16 in @($tg16 | Select-Object -First 4)) { foreach ($p16 in @("/","/%")) {
+                if (-not $curl16) { $fail16 += "$($t16)$($p16)(curl.exe 없음)"; continue }
+                $h16 = ($t16 -split '[/:]')[3]; $ex16 = @(); if ($h16 -ne "localhost") { $ex16 = @("--resolve", ("{0}:{1}:127.0.0.1" -f $h16, ($t16 -split ':')[-1])) }
+                $mt16 = if ($p16 -eq "/") { 5 } else { 4 }
+                $o16 = @(& $curl16 -s -k -D - -o NUL --connect-timeout 3 --max-time $mt16 @ex16 "$($t16)$($p16)" 2>$null)
+                $sl16 = @($o16 | Where-Object { "$_" -match '^HTTP/[\d.]+\s+\d{3}' })
+                if ($sl16.Count -eq 0) { $fail16 += "$($t16)$($p16)(응답 없음/시간초과)"; continue }
+                if ($p16 -eq "/") { $okRoot++ } else { $okSys++ }
+                $c16 = ("$($sl16[-1])".Trim() -split '\s+')[1]
+                foreach ($l16 in $o16) { if ("$l16" -match '^([A-Za-z0-9-]+):\s*(.*)$') { $hn16 = $matches[1]; $hv16 = $matches[2].Trim(); $tag16 = "$($t16)$($p16)→$($c16) $($hn16): $($hv16)"
+                        if ($hn16 -eq "Server") { if ($hv16 -match 'Microsoft-HTTPAPI') { $exp16 += "$tag16 [HTTP.sys]" } elseif ($hv16 -match 'Microsoft-IIS') { $exp16 += "$tag16 [IIS]" } elseif ($hv16 -match 'ASP\.NET|^ARR|/\s*v?\d|\(') { $exp16 += "$tag16 [백엔드/프록시]" } }
+                        elseif ($hn16 -match '^(X-Powered-By|X-AspNet-Version|X-AspNetMvc-Version)$') { $exp16 += $tag16 } } } } }
+        $exp16 = @($exp16 | Select-Object -Unique); $fev16 = @(); if ($fail16.Count) { $fev16 += "실측 실패: $($fail16 -join ', ')" }
+        if ($exp16.Count -gt 0) { Rep "WEB-16" "VULN" (@("응답 헤더로 서버 정보 노출(실측): $(($exp16 | Select-Object -First 4) -join '; ') → removeServerHeader=True·HTTP.sys DisableServerHeader=1(HTTP 서비스 재시작)·X-Powered-By 제거", $cfg16) + $fev16) }
+        elseif ($okRoot -eq 0 -and -not $cfgOk16) { Rep "WEB-16" "VULN" (@("'/' 실측 실패 + 설정상 서버 정보 노출 가능(removeServerHeader=$($rmSrv), X-Powered-By/ARR 헤더) → 응답 헤더 제거 필요", $cfg16) + $fev16) }
+        elseif ($okSys -eq 0 -and "$dsh" -notmatch '^[12]$') { Rep "WEB-16" "MAN" (@("'/%'(HTTP.sys 직접 응답) 실측 실패 + DisableServerHeader 미설정 → 400/503 등 HTTP.sys 오류 응답의 Server: Microsoft-HTTPAPI 노출 여부 확인", $cfg16) + $fev16) }
+        else { Rep "WEB-16" "GOOD" (@("실측 응답('/' $($okRoot)건·'/%' $($okSys)건)에 Server 제품/버전·X-Powered-By·X-AspNet-Version 없음$(if ($okRoot -eq 0) {", '/' 는 설정 기준(Server 헤더 제거·X-Powered-By 미설정)"})$(if ($okSys -eq 0) {", '/%' 는 DisableServerHeader=$($dsh) 기준"}) → 서버 정보 미노출", $cfg16) + $fev16) } }
     Rep "WEB-17" "NA" @("가이드 점검대상(Apache/Tomcat/Nginx/WebtoB)에 IIS 미포함 → 점검대상 제외")
     if (-not $IIS_INSTALLED) { Rep "WEB-18" "NA" @("IIS 미설치") }
     else { $dav=$false; if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) { $wf=Get-WindowsFeature Web-DAV-Publishing -ErrorAction SilentlyContinue; if ($wf -and $wf.Installed) { $dav=$true } }

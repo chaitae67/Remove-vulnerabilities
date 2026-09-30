@@ -325,11 +325,32 @@ if ($as -eq 0 -and $admShares.Count -eq 0) { Rep "W-17" "하드디스크 기본 
 else { Rep "W-17" "하드디스크 기본 공유 제거" "VULN" @("AutoShareServer=$as, 기본 공유: $(if($admShares.Count){$admShares -join ', '}else{'없음'}) → AutoShareServer=0 설정 및 공유 제거") }
 
 # W-18 불필요한 서비스 제거
-# [기준] 양호 - 불필요한 서비스 중지 / 취약 - 구동 중
-$risky = @("Alerter","Messenger","Browser","RemoteRegistry","SharedAccess","TlntSvr","Telnet","SNMPTRAP","simptcp","Fax","upnphost","SSDPSRV","RemoteAccess")
-$running = @($risky | Where-Object { SvcRunning $_ })
-if ($running.Count -eq 0) { Rep "W-18" "불필요한 서비스 제거" "GOOD" @("Alerter/Messenger/Browser/Telnet/SSDP 등 불필요 서비스 미실행") }
-else { Rep "W-18" "불필요한 서비스 제거" "VULN" @("실행 중인 불필요 서비스: $($running -join ', ') → 미사용 시 중지/사용 안 함") }
+# [기준] 양호 - 일반적으로 불필요한 서비스(가이드 목록)가 중지 / 취약 - 구동 중
+#   가이드 목록: Alerter, Clipbook(ClipSrv), Computer Browser(Browser), Distributed Link Tracking(TrkWks/TrkSvr),
+#     Error Reporting(WerSvc/ERSvc), HID(hidserv), IMAPI CD-Burning(ImapiService), Infrared Monitor(Irmon), Messenger,
+#     NetMeeting RDS(mnmsrvc), Portable Media Serial Number(WmdmPmSN), Print Spooler, Remote Registry, Simple TCP/IP(simptcp),
+#     UPnP Device Host(upnphost), Wireless Zero Configuration(WZCSVC/WlanSvc)  + 기존 점검 대상(SharedAccess/Telnet/SNMPTRAP/Fax/SSDPSRV/RemoteAccess)
+#   가이드 조건: TrkWks/TrkSvr 는 AD(도메인) 미구성 시, Print Spooler 는 연결된 프린터가 없을 때만 불필요 → 조건 밖이면 판정 제외(참고 표기)
+#   Automatic Updates·Cryptographic Services·DHCP/DNS Client 는 가이드도 조건부로 적은 OS 필수 구성요소라 판정 제외
+#   ※ 서비스명 정확 일치 + Win32 서비스만 인정 (Get-Service -Name Browser 는 표시 이름이 'Browser' 인 커널 드라이버 bowser 도 반환 → 제외)
+$risky = @("Alerter","ClipSrv","Browser","TrkWks","TrkSvr","WerSvc","ERSvc","hidserv","ImapiService","Irmon","Messenger","mnmsrvc","WmdmPmSN",
+           "Spooler","RemoteRegistry","simptcp","upnphost","WZCSVC","WlanSvc",
+           "SharedAccess","TlntSvr","Telnet","SNMPTRAP","Fax","SSDPSRV","RemoteAccess")
+$running = @(); $cond18 = @()
+foreach ($n in $risky) {
+    $s = @(Get-Service -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $n -and "$($_.ServiceType)" -notmatch 'Driver' }) | Select-Object -First 1
+    if (-not $s -or $s.Status -ne "Running") { continue }
+    if ($n -in @("TrkWks","TrkSvr") -and (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).PartOfDomain) { $cond18 += "$n(도메인 가입 - AD 사용 시 필요)"; continue }
+    if ($n -eq "Spooler") {
+        $prn18 = @(Get-CimInstance Win32_Printer -ErrorAction SilentlyContinue | Where-Object {
+                     "$($_.PortName)" -notmatch '^(PORTPROMPT:|nul:|XPSPort:|SHRFAX:|FILE:)$' -and "$($_.Name)" -notmatch 'Microsoft (Print to PDF|XPS Document Writer)|^Fax$|OneNote' })
+        if ($prn18.Count -gt 0) { $cond18 += "Spooler(연결된 프린터 $($prn18.Count)개 - 필요 서비스)"; continue }
+    }
+    $running += $n
+}
+$cond18Ev = @($cond18 | ForEach-Object { "판정 제외(가이드 조건상 필요): $_" })
+if ($running.Count -eq 0) { Rep "W-18" "불필요한 서비스 제거" "GOOD" (@("가이드 목록의 불필요 서비스(Alerter/Browser/Spooler/RemoteRegistry/TrkWks/upnphost/WerSvc 등) 미실행") + $cond18Ev) }
+else { Rep "W-18" "불필요한 서비스 제거" "VULN" (@("실행 중인 불필요 서비스: $($running -join ', ') → 미사용 시 중지/사용 안 함") + $cond18Ev) }
 
 # W-19 불필요한 IIS 서비스 구동 점검
 # [기준] 양호 - IIS 미사용 또는 필요에 의해 사용 / 취약 - 불필요하게 사용
@@ -522,18 +543,62 @@ Write-Host "[ 4. 로그 관리 ]" -ForegroundColor White
 #==============================================================================
 
 # W-40 정책에 따른 시스템 로깅 설정
-# [기준] 양호 - 감사 정책 권고 기준대로 설정 / 취약 - 아님
+# [기준] 양호 - 감사 정책 권고 기준에 따라 감사 설정 / 취약 - 권고 기준대로 설정되지 않음
+#   <감사 정책 권고 기준>(가이드 2000~2022): 계정 관리 실패 / 계정 로그온 이벤트 성공·실패 / 권한 사용 성공·실패 /
+#                                          디렉터리 서비스 액세스 실패 / 로그온 이벤트 성공·실패 / 정책 변경 성공·실패
+#   auditpol /get /category:* /r (CSV) 의 하위 범주 GUID 로 정확히 매칭해 범주별 대표 하위 범주의 요구 수준을 비교
+#     계정 관리    → User Account Management{0CCE9235}, Security Group Management{0CCE9237}: 실패 포함
+#     계정 로그온  → Credential Validation{0CCE923F}: 성공 및 실패 (DC 는 Kerberos 인증 서비스{0CCE9242}·서비스 티켓 작업{0CCE9240} 추가)
+#     권한 사용    → Sensitive Privilege Use{0CCE9228}: 성공 및 실패
+#     DS 액세스    → Directory Service Access{0CCE923B}: 실패 포함
+#     로그온 이벤트 → Logon{0CCE9215}: 성공 및 실패, Logoff{0CCE9216}: 성공 포함(성공 이벤트만 발생), Account Lockout{0CCE9217}: 실패 포함(실패 이벤트만 발생)
+#     정책 변경    → Audit Policy Change{0CCE922F}: 성공 및 실패
+#   '실패 포함'은 '실패' 또는 '성공 및 실패' 인정. 가이드 밖 범주(System 등)는 판정 제외
+#   CSV 헤더·값이 OS 언어로 지역화될 수 있어 열 위치(4번째=GUID, 5번째=포함 설정)로 읽고,
+#   값은 영문/한글(Success|성공, Failure|실패, No Auditing|감사 안 함|감사 없음) 모두 해석. 행 없음·해석 불가 → 수동확인
 if ($IS_ADMIN) {
-    $ap = auditpol /get /category:* 2>$null
-    $need = @("Logon","Logoff","Account Lockout","User Account Management","Security Group Management",
-              "Audit Policy Change","Sensitive Privilege Use","Security State Change","Other System Events")
-    $missAudit = @()
-    foreach ($n in $need) {
-        $l = $ap | Select-String -SimpleMatch $n | Select-Object -First 1
-        if (-not $l -or $l -match "No Auditing|감사 안 함") { $missAudit += $n }
+    function AuditBits { param([string]$S)
+        if ($S -match 'No Auditing|감사 안 함|감사 없음') { return 0 }
+        $b = 0; if ($S -match 'Success|성공') { $b = $b -bor 1 }; if ($S -match 'Failure|실패') { $b = $b -bor 2 }
+        if ($b -eq 0) { return -1 }; return $b }
+    $ap40 = @{}
+    $apRaw = @(auditpol /get /category:* /r 2>$null | Where-Object { "$_".Trim() })
+    foreach ($row in @($apRaw | ConvertFrom-Csv -Header 'c0','c1','c2','c3','c4','c5')) {
+        if ("$($row.c3)" -match '^\s*\{?([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\}?\s*$') {
+            $ap40[$Matches[1].ToUpper()] = "$($row.c4)".Trim()
+        }
     }
-    if ($missAudit.Count -eq 0) { Rep "W-40" "정책에 따른 시스템 로깅 설정" "GOOD" @("주요 감사 범주(로그온/계정 관리/정책 변경/권한 사용/시스템) 성공·실패 감사 설정") }
-    else { Rep "W-40" "정책에 따른 시스템 로깅 설정" "VULN" @("감사 미설정: $($missAudit -join ', ') → 권고 기준대로 성공/실패 감사 설정") }
+    $sfx40 = "-69AE-11D9-BED3-505054503030"
+    $req40 = @(
+        @("계정 관리","User Account Management","0CCE9235",2), @("계정 관리","Security Group Management","0CCE9237",2),
+        @("계정 로그온","Credential Validation","0CCE923F",3), @("권한 사용","Sensitive Privilege Use","0CCE9228",3),
+        @("DS 액세스","Directory Service Access","0CCE923B",2), @("로그온 이벤트","Logon","0CCE9215",3),
+        @("로그온 이벤트","Logoff","0CCE9216",1), @("로그온 이벤트","Account Lockout","0CCE9217",2),
+        @("정책 변경","Audit Policy Change","0CCE922F",3))
+    $cs40 = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $dc40 = [bool]($cs40 -and $cs40.DomainRole -ge 4)
+    if ($dc40) { $req40 += ,@("계정 로그온","Kerberos Authentication Service","0CCE9242",3); $req40 += ,@("계정 로그온","Kerberos Service Ticket Operations","0CCE9240",3) }
+    $need40 = @{ 1 = "성공 포함"; 2 = "실패 포함"; 3 = "성공 및 실패" }
+    $miss40 = @(); $unk40 = @(); $ok40 = @()
+    foreach ($r in $req40) {
+        $set = $ap40["$($r[2])$sfx40"]
+        if ($null -eq $set) { $unk40 += "$($r[0])/$($r[1])(행 없음)"; continue }
+        $bits = AuditBits $set
+        if ($bits -lt 0) { $unk40 += "$($r[0])/$($r[1])='$set'(해석 불가)" }
+        elseif (($bits -band $r[3]) -ne $r[3]) { $miss40 += "$($r[0])/$($r[1])=$set (요구: $($need40[$r[3]]))" }
+        else { $ok40 += "$($r[1])=$set" }
+    }
+    $dsNote40 = if (-not $dc40 -and ($miss40 -match 'Directory Service Access')) { @("※ DS 액세스 실패 감사는 DC 가 아니면 이벤트가 거의 발생하지 않으나 가이드 권고 기준 문구대로 적용") } else { @() }
+    if ($ap40.Count -eq 0) {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "MAN" @("auditpol /r 결과를 읽지 못함 → 로컬 보안 정책 > 감사 정책 수동 확인")
+    } elseif ($miss40.Count -gt 0) {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "VULN" (@("감사 정책 권고 기준 미충족: $($miss40 -join ' / ') → 권고 기준대로 성공/실패 감사 설정") + $dsNote40 +
+            @($unk40 | ForEach-Object { "확인 불가: $_" }) + @("충족: $(if($ok40.Count){$ok40 -join ', '}else{'없음'})"))
+    } elseif ($unk40.Count -gt 0) {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "MAN" @("감사 설정 확인 불가: $($unk40 -join ', ')", "충족: $(if($ok40.Count){$ok40 -join ', '}else{'없음'})")
+    } else {
+        Rep "W-40" "정책에 따른 시스템 로깅 설정" "GOOD" @("감사 정책 권고 기준(계정 관리/계정 로그온/권한 사용/DS 액세스/로그온 이벤트/정책 변경) 충족: $($ok40 -join ', ')")
+    }
 } else {
     Rep "W-40" "정책에 따른 시스템 로깅 설정" "MAN" @("감사 정책(auditpol)은 관리자 권한 필요 → 관리자로 재점검")
 }
@@ -567,11 +632,41 @@ if ($cfgOk -or $srcOk) {
 }
 
 # W-42 이벤트 로그 관리 설정
-# [기준] 양호 - 최대 로그 크기 10,240KB 이상 AND 이벤트 덮어씀 기간 "90일 이후"(또는 덮어쓰지 않음/가득 차면 보관)
-#        취약 - 크기 미달 이거나, "필요에 따라 덮어씀"(=90일 이하)
+# [기준] 양호 - 최대 로그 크기 "10,240KB 이상" + "90일 이후 이벤트 덮어씀" 설정
+#        취약 - 최대 로그 크기 10,240KB 미만 이거나 이벤트 덮어씀 기간 90일 이하
+#   ※ 가이드: 2008 이상은 덮어쓰기 날짜 지정 불가 → '가득 차면 보관(AutoBackup)'·'덮어쓰지 않음(Retain)'을 양호,
+#     '필요한 경우 덮어씀(Circular)'을 취약으로 판정 (크기가 커도 Circular 면 취약)
+#   2008 이상(OS major>=6): 실효값(Get-WinEvent -ListLog 의 LogMode·MaximumSizeInBytes, GPO 포함)으로 판정.
+#     레지스트리 Retention(초)·AutoBackupLogFiles 는 2008 이상 이벤트 로그 서비스가 쓰지 않으므로 판정에 쓰지 않음
+#     (예: Retention=7776000 이어도 실제는 Circular). Get-WinEvent 실패 시 wevtutil gl 로 대체, 둘 다 실패 → 수동확인
+#   2003 이하(OS major<6): 레지스트리 MaxSize·Retention(초, 0xFFFFFFFF=덮어쓰지 않음)·AutoBackupLogFiles 로 판정
 $logbad = @()
 $logunk = @()
+$logev  = @()
+$osMaj42 = if ($os -and "$($os.Version)" -match '^(\d+)\.') { [int]$Matches[1] } else { [Environment]::OSVersion.Version.Major }
 foreach ($lg in @("Security","Application","System")) {
+    if ($osMaj42 -ge 6) {
+        $mode = $null; $max = $null; $fsz = $null
+        $wl = $null; try { $wl = Get-WinEvent -ListLog $lg -ErrorAction Stop } catch {}
+        if ($wl) { $mode = "$($wl.LogMode)"; $max = $wl.MaximumSizeInBytes; $fsz = $wl.FileSize }
+        else {
+            $gl = @(wevtutil gl $lg 2>$null)
+            $gRet = ($gl | Where-Object { $_ -match '^\s*retention:\s*(\S+)' } | Select-Object -First 1) -replace '^\s*retention:\s*', ''
+            $gBak = ($gl | Where-Object { $_ -match '^\s*autoBackup:\s*(\S+)' } | Select-Object -First 1) -replace '^\s*autoBackup:\s*', ''
+            $gMax = ($gl | Where-Object { $_ -match '^\s*maxSize:\s*(\d+)' } | Select-Object -First 1) -replace '^\s*maxSize:\s*', ''
+            if ($gRet -match '^(true|false)$') { $mode = if ($gRet -eq 'true') { if ($gBak -eq 'true') { "AutoBackup" } else { "Retain" } } else { "Circular" } }
+            if ($gMax -match '^\d+$') { $max = [int64]$gMax }
+        }
+        if (-not $mode -or $null -eq $max) { $logunk += $lg; continue }
+        $szKB = [math]::Round($max / 1KB)
+        $old = $null; try { $old = (Get-WinEvent -LogName $lg -Oldest -MaxEvents 1 -ErrorAction Stop).TimeCreated } catch {}
+        $logev += "$lg : LogMode=$mode, 최대 $('{0:N0}' -f $szKB)KB$(if($null -ne $fsz){", 현재 $('{0:N0}' -f [math]::Round($fsz / 1KB))KB"})$(if($old){", 가장 오래된 이벤트 $($old.ToString('yyyy-MM-dd HH:mm'))"})"
+        if ($szKB -lt 10240) { $logbad += "$lg 크기 ${szKB}KB(<10,240)" }
+        if ($mode -eq "Circular") { $logbad += "$lg 필요한 경우 덮어씀(Circular)" }
+        elseif ($mode -eq "Retain") { $logev += "$lg 덮어쓰지 않음(Retain) - 가득 차면 새 이벤트가 기록되지 않으므로 용량 관리 필요" }
+        elseif ($mode -ne "AutoBackup") { $logunk += "$lg(LogMode=$mode)" }
+        continue
+    }
     $base = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\" + $lg
     $sz = RegVal $base "MaxSize"
     if ($null -eq $sz) { $sz = (Get-WinEvent -ListLog $lg -ErrorAction SilentlyContinue).MaximumSizeInBytes }
@@ -593,11 +688,11 @@ foreach ($lg in @("Security","Application","System")) {
     }
 }
 if ($logbad.Count -gt 0) {
-    Rep "W-42" "이벤트 로그 관리 설정" "VULN" @(($logbad -join " / "), "최대 로그 크기 10,240KB 이상 및 '90일 이후 이벤트 덮어씀' 설정 필요")
+    Rep "W-42" "이벤트 로그 관리 설정" "VULN" (@(($logbad -join " / ")) + $logev + @("최대 로그 크기 10,240KB 이상 및 '90일 이후 이벤트 덮어씀'(2008 이상: '가득 차면 보관'/'덮어쓰지 않음') 설정 필요"))
 } elseif ($logunk.Count -gt 0) {
-    Rep "W-42" "이벤트 로그 관리 설정" "MAN" @("로그 설정 확인 불가(관리자 권한 필요): $($logunk -join ', ')")
+    Rep "W-42" "이벤트 로그 관리 설정" "MAN" (@("로그 설정 확인 불가(관리자 권한 필요): $($logunk -join ', ')") + $logev)
 } else {
-    Rep "W-42" "이벤트 로그 관리 설정" "GOOD" @("보안/응용/시스템 로그 최대 크기 10,240KB 이상 + 90일 이후 덮어씀(또는 덮어쓰지 않음/보관) 설정")
+    Rep "W-42" "이벤트 로그 관리 설정" "GOOD" (@("보안/응용/시스템 로그 최대 크기 10,240KB 이상 + 90일 이후 덮어씀(또는 덮어쓰지 않음/보관) 설정") + $logev)
 }
 
 # W-43 이벤트 로그 파일 접근 통제 설정
@@ -645,14 +740,162 @@ else {
 
 # W-47 화면보호기 설정
 # [기준] 양호 - 화면 보호기 설정 + 대기 10분(600초) 이하 + 해제 암호 사용 / 취약 - 아님
-$ssA = RegVal "HKCU:\Control Panel\Desktop" "ScreenSaveActive"
-$ssS = RegVal "HKCU:\Control Panel\Desktop" "ScreenSaverIsSecure"
-$ssT = [int](RegVal "HKCU:\Control Panel\Desktop" "ScreenSaveTimeOut")
-$ssPol = RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" "ScreenSaverIsSecure"
-if ((($ssA -eq "1") -and ($ssS -eq "1") -and ($ssT -gt 0) -and ($ssT -le 600)) -or ($ssPol -eq "1")) {
-    Rep "W-47" "화면보호기 설정" "GOOD" @("화면 보호기 활성 + 암호 보호 + 대기 $ssT 초")
+#   화면보호기는 사용자별 설정 → 실제 사용자 프로필(ProfileList 의 S-1-5-21-*)마다 판정한다.
+#   (SYSTEM 실행 시 HKCU = S-1-5-18 이고, HKLM\SOFTWARE\Policies\...\Control Panel\Desktop 은 Windows 가 적용하지 않는
+#    키(화면보호기 정책은 사용자 구성 전용)이므로 둘 다 판정에서 제외)
+#   사용자별 값 단위 병합: HKU\<SID>\Software\Policies\Microsoft\Windows\Control Panel\Desktop 값 우선, 없으면 HKU\<SID>\Control Panel\Desktop
+#   네 조건 모두 충족해야 양호: ScreenSaveActive=1, ScreenSaverIsSecure=1, 1<=ScreenSaveTimeOut<=600(없으면 기본 900초), SCRNSAVE.EXE 지정 + 파일 존재
+#   로그오프 사용자(하이브 미로드)는 reg load(하이브 마운트 = 상태 변경) 대신 NTUSER.DAT 를 읽기 전용·공유 모드로 한 번 읽고
+#   regf 구조를 직접 해석(64MB 초과·읽기 실패·dirty(트랜잭션 로그 미반영)·해석 실패 → 해당 사용자 수동확인, 최대 20명)
+#   판정 제외(참고 표기): 비활성 로컬 계정, 삭제된 로컬 계정의 잔여 프로필, ssm-user(SSM Agent 비대화형),
+#     서비스 실행 계정 중 Administrators/Remote Desktop Users 비구성원(비대화형 전용 추정), NTUSER.DAT 없는 프로필
+#   한 명이라도 미흡 → 취약 / 미흡 없이 확인 불가 사용자 존재 또는 점검 대상 없음 → 수동확인
+function RegfLoad { param([string]$Path)      # NTUSER.DAT 읽기 전용 로드(쓰기/마운트 없음)
+    try {
+        $fi = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($fi.Length -lt 8192 -or $fi.Length -gt 64MB) { return $null }
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]'ReadWrite, Delete')
+        try {
+            $buf = New-Object byte[] ([int]$fs.Length); $off = 0
+            while ($off -lt $buf.Length) { $n = $fs.Read($buf, $off, $buf.Length - $off); if ($n -le 0) { break }; $off += $n }
+        } finally { $fs.Close() }
+        if ($off -lt $buf.Length -or [Text.Encoding]::ASCII.GetString($buf, 0, 4) -ne 'regf') { return $null }
+        return ,$buf
+    } catch { return $null }
+}
+function RegfStr { param([byte[]]$B, [int]$Pos, [int]$Len, [bool]$Ascii)
+    if ($Len -le 0) { return "" }
+    if ($Ascii) { return [Text.Encoding]::GetEncoding(28591).GetString($B, $Pos, $Len) }
+    return [Text.Encoding]::Unicode.GetString($B, $Pos, $Len)
+}
+# 하위 키 목록 셀(lf/lh/li/ri) → nk 셀 데이터 절대 오프셋 목록 (셀 데이터 = 0x1000 + 오프셋 + 4)
+function RegfList { param([byte[]]$B, [int]$P, [int]$Depth = 0)
+    $r = New-Object System.Collections.Generic.List[int]
+    if ($Depth -gt 4 -or $P + 4 -gt $B.Length) { return ,$r }
+    $sig = [Text.Encoding]::ASCII.GetString($B, $P, 2); $n = [BitConverter]::ToUInt16($B, $P + 2)
+    if ($sig -eq 'lf' -or $sig -eq 'lh') { for ($i = 0; $i -lt $n; $i++) { $r.Add([int](4100 + [BitConverter]::ToUInt32($B, $P + 4 + 8 * $i))) } }
+    elseif ($sig -eq 'li') { for ($i = 0; $i -lt $n; $i++) { $r.Add([int](4100 + [BitConverter]::ToUInt32($B, $P + 4 + 4 * $i))) } }
+    elseif ($sig -eq 'ri') { for ($i = 0; $i -lt $n; $i++) { foreach ($x in (RegfList $B ([int](4100 + [BitConverter]::ToUInt32($B, $P + 4 + 4 * $i))) ($Depth + 1))) { $r.Add($x) } } }
+    return ,$r
+}
+# 루트 nk 에서 경로(대소문자 무시)를 따라 내려가 nk 오프셋 반환, 없으면 -1
+function RegfKey { param([byte[]]$B, [string[]]$Parts)
+    $k = [int](4100 + [BitConverter]::ToUInt32($B, 0x24))
+    foreach ($part in $Parts) {
+        if ([BitConverter]::ToUInt32($B, $k + 20) -eq 0) { return -1 }
+        $lst = [BitConverter]::ToUInt32($B, $k + 28); if ($lst -ge 2147483648) { return -1 }
+        $next = -1
+        foreach ($c in (RegfList $B ([int](4100 + $lst)))) {
+            if ($c + 76 -ge $B.Length -or $B[$c] -ne 0x6E -or $B[$c + 1] -ne 0x6B) { continue }   # 'nk'
+            $nm = RegfStr $B ($c + 76) ([BitConverter]::ToUInt16($B, $c + 72)) ((([BitConverter]::ToUInt16($B, $c + 2)) -band 0x20) -ne 0)
+            if ($nm -ieq $part) { $next = $c; break }
+        }
+        if ($next -lt 0) { return -1 }
+        $k = $next
+    }
+    return $k
+}
+# nk 의 값들 → @{ 이름 = 값 } (REG_SZ/EXPAND_SZ = 문자열, REG_DWORD = 정수, 그 외 형식은 생략)
+function RegfValues { param([byte[]]$B, [int]$K)
+    $h = @{}
+    $cnt = [BitConverter]::ToUInt32($B, $K + 36); $vl = [BitConverter]::ToUInt32($B, $K + 40)
+    if ($cnt -eq 0 -or $cnt -gt 4096 -or $vl -ge 2147483648) { return $h }
+    for ($i = 0; $i -lt $cnt; $i++) {
+        $v = [int](4100 + [BitConverter]::ToUInt32($B, [int](4100 + $vl + 4 * $i)))
+        if ($v + 20 -ge $B.Length -or $B[$v] -ne 0x76 -or $B[$v + 1] -ne 0x6B) { continue }   # 'vk'
+        $nl = [BitConverter]::ToUInt16($B, $v + 2); $ds = [BitConverter]::ToUInt32($B, $v + 4)
+        $do = [BitConverter]::ToUInt32($B, $v + 8); $ty = [BitConverter]::ToUInt32($B, $v + 12)
+        $vn = RegfStr $B ($v + 20) $nl ((([BitConverter]::ToUInt16($B, $v + 16)) -band 1) -ne 0)
+        $inl = ($ds -ge 2147483648); $len = if ($inl) { [int]($ds - 2147483648) } else { [int]$ds }
+        $dp = if ($inl) { $v + 8 } else { [int](4100 + $do) }
+        if ($len -gt 16344 -or $dp + $len -gt $B.Length) { continue }
+        if ($ty -eq 1 -or $ty -eq 2) { $h[$vn] = (RegfStr $B $dp $len $false).TrimEnd([char]0) }
+        elseif ($ty -eq 4 -and $len -ge 4) { $h[$vn] = [BitConverter]::ToUInt32($B, $dp) }
+    }
+    return $h
+}
+function KeyVals47 { param([string]$P)    # 로드된 하이브의 키 값 → @{ 이름 = 값 }
+    $h = @{}
+    if (Test-Path -LiteralPath $P) {
+        $ip = Get-ItemProperty -LiteralPath $P -ErrorAction SilentlyContinue
+        if ($ip) { foreach ($pp in $ip.PSObject.Properties) { if ($pp.Name -notin @("PSPath","PSParentPath","PSChildName","PSDrive","PSProvider")) { $h[$pp.Name] = $pp.Value } } }
+    }
+    return $h
+}
+function Pick47 { param($Pol, $Usr, [string]$N) if ($Pol.ContainsKey($N)) { return $Pol[$N] } if ($Usr.ContainsKey($N)) { return $Usr[$N] } return $null }
+
+$lu47 = @{}
+foreach ($u in @(LocalUsers)) { $sid = if ($u.SID -is [string]) { $u.SID } else { "$($u.SID.Value)" }; if ($sid) { $lu47[$sid] = $u } }
+$pfx47 = ""; foreach ($k in @($lu47.Keys)) { if ("$k" -match '^(S-1-5-21-\d+-\d+-\d+)-\d+$') { $pfx47 = $Matches[1]; break } }   # 로컬 머신 SID
+$svc47 = @{}                                   # 서비스 실행 계정 SID → 서비스 이름
+foreach ($s in @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { $_.StartName -and "$($_.StartName)" -notmatch '^(LocalSystem|NT AUTHORITY\\|NT SERVICE\\)' })) {
+    try { $sid = (New-Object System.Security.Principal.NTAccount ("$($s.StartName)" -replace '^\.\\', "$env:COMPUTERNAME\")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          if (-not $svc47.ContainsKey($sid)) { $svc47[$sid] = $s.Name } } catch {}
+}
+$ia47 = @{}; $grp47 = $true                    # Administrators / Remote Desktop Users 직접 구성원 SID
+foreach ($g in @("S-1-5-32-544","S-1-5-32-555")) {
+    try { foreach ($m in @(Get-LocalGroupMember -SID $g -ErrorAction Stop)) { $ia47["$($m.SID)"] = 1 } } catch { $grp47 = $false }
+}
+$bad47 = @(); $ok47 = @(); $unk47 = @(); $ex47 = @(); $off47 = 0
+foreach ($pk in @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue)) {
+    $sid = $pk.PSChildName
+    if ($sid -notmatch '^S-1-5-21-[\d-]+$') { continue }                 # 시스템 계정·.bak 제외
+    $img = [Environment]::ExpandEnvironmentVariables([string](RegVal $pk.PSPath "ProfileImagePath"))
+    if (-not $img) { continue }
+    $u = $lu47[$sid]; $trOk = $true
+    $nm = if ($u) { "$($u.Name)" } else { try { (New-Object System.Security.Principal.SecurityIdentifier $sid).Translate([System.Security.Principal.NTAccount]).Value } catch { $trOk = $false; Split-Path $img -Leaf } }
+    $dat = Join-Path $img "NTUSER.DAT"
+    $loaded = Test-Path -LiteralPath "Registry::HKEY_USERS\$sid"
+    if ($u -and -not (UserEnabled $u)) { $ex47 += "$nm(비활성)"; continue }
+    if (-not $u -and $pfx47 -and $sid.StartsWith("$pfx47-")) { $ex47 += "$nm(삭제된 로컬 계정의 잔여 프로필)"; continue }
+    if (-not $u -and -not $trOk) { $unk47 += "$nm($sid 계정명 확인 불가 → 수동 확인)"; continue }
+    if ("$nm" -match '(^|\\)ssm-user$') { $ex47 += "$nm(SSM Agent 비대화형)"; continue }
+    if ($svc47.ContainsKey($sid) -and -not $ia47.ContainsKey($sid)) {
+        if ($grp47) { $ex47 += "$nm(서비스 $($svc47[$sid]) 실행 계정, 관리자·RDP 그룹 비구성원 → 비대화형 추정)" }
+        else { $unk47 += "$nm(서비스 $($svc47[$sid]) 실행 계정, 그룹 조회 실패로 대화형 여부 미확인 → 수동 확인)" }
+        continue
+    }
+    if ($loaded) {
+        $pol = KeyVals47 "Registry::HKEY_USERS\$sid\Software\Policies\Microsoft\Windows\Control Panel\Desktop"
+        $usr = KeyVals47 "Registry::HKEY_USERS\$sid\Control Panel\Desktop"
+        $src = "로드된 하이브"
+    } else {
+        if (-not (Test-Path -LiteralPath $dat)) { $ex47 += "$nm(NTUSER.DAT 없음)"; continue }
+        if ($off47 -ge 20) { $unk47 += "$nm(오프라인 하이브 읽기 상한 20명 초과 → 수동 확인)"; continue }
+        $off47++
+        $b = RegfLoad $dat
+        if ($null -eq $b) { $unk47 += "$nm(NTUSER.DAT 읽기 실패/64MB 초과 → 수동 확인)"; continue }
+        if ([BitConverter]::ToUInt32($b, 4) -ne [BitConverter]::ToUInt32($b, 8)) { $unk47 += "$nm(하이브 dirty - 트랜잭션 로그 미반영 → 수동 확인)"; $b = $null; continue }
+        try {
+            $pol = @{}; $k = RegfKey $b @("Software","Policies","Microsoft","Windows","Control Panel","Desktop"); if ($k -ge 0) { $pol = RegfValues $b $k }
+            $usr = @{}; $k = RegfKey $b @("Control Panel","Desktop"); if ($k -ge 0) { $usr = RegfValues $b $k }
+        } catch { $unk47 += "$nm(하이브 해석 실패 → 수동 확인)"; $b = $null; continue }
+        $b = $null
+        $src = "오프라인 하이브"
+    }
+    $ssA = "$(Pick47 $pol $usr 'ScreenSaveActive')"; $ssS = "$(Pick47 $pol $usr 'ScreenSaverIsSecure')"
+    $ssT = "$(Pick47 $pol $usr 'ScreenSaveTimeOut')"; $ssE = "$(Pick47 $pol $usr 'SCRNSAVE.EXE')".Trim()
+    $why = @()
+    if ($ssA -ne "1") { $why += "화면보호기 미사용" }
+    if ($ssS -ne "1") { $why += "암호 보호 미사용" }
+    $ti = 0; if (-not [int]::TryParse($ssT, [ref]$ti) -or $ti -lt 1 -or $ti -gt 600) { $why += "대기 $(if($ssT){"${ssT}초"}else{'미설정(기본 900초)'})(기준 1~600초)" }
+    $exeOk = $false
+    if ($ssE) { $x = [Environment]::ExpandEnvironmentVariables($ssE); if (-not [IO.Path]::IsPathRooted($x)) { $x = Join-Path "$env:SystemRoot\System32" $x }; $exeOk = Test-Path -LiteralPath $x }
+    if (-not $exeOk) { $why += "화면보호기 프로그램 $(if($ssE){"'$ssE' 파일 없음"}else{'(없음)'})" }
+    $sum = "$nm($src$(if($pol.Count){', 사용자 정책키 있음'})) Active=$ssA Secure=$ssS Timeout=$ssT EXE=$(if($ssE){$ssE}else{'(없음)'})"
+    if ($why.Count -gt 0) { $bad47 += "$sum → 미흡: $($why -join ', ')" } else { $ok47 += $sum }
+}
+$ref47 = @()
+if ($ex47.Count) { $ref47 += "판정 제외 계정: $($ex47 -join ', ')" }
+if (Test-Path -LiteralPath "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop") { $ref47 += "참고: HKLM 화면보호기 정책값 존재(사용자 구성 전용 정책이라 Windows 미적용 → 판정 제외)" }
+if ($bad47.Count -gt 0) {
+    Rep "W-47" "화면보호기 설정" "VULN" (@($bad47) + @($unk47 | ForEach-Object { "확인 불가: $_" }) + @($ok47) + $ref47 + @("사용자별 화면 보호기 사용 + 대기 10분(600초) 이하 + '다시 시작할 때 로그온 화면 표시' 설정 필요"))
+} elseif ($unk47.Count -gt 0) {
+    Rep "W-47" "화면보호기 설정" "MAN" (@($unk47 | ForEach-Object { "확인 불가: $_" }) + @($ok47) + $ref47)
+} elseif ($ok47.Count -eq 0) {
+    Rep "W-47" "화면보호기 설정" "MAN" (@("점검 대상 사용자 프로필 없음 → 사용 계정의 화면보호기 설정 수동 확인") + $ref47)
 } else {
-    Rep "W-47" "화면보호기 설정" "VULN" @("화면 보호기 암호 보호/대기시간(<=600초) 미흡 (Active=$ssA Secure=$ssS Timeout=$ssT)")
+    Rep "W-47" "화면보호기 설정" "GOOD" (@($ok47) + $ref47)
 }
 
 # W-48 로그온하지 않고 시스템 종료 허용
