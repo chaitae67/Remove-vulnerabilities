@@ -66,6 +66,14 @@ python make_report.py dbms --result db.json  --host db
 python make_report.py aws  --result aws.json                     # 클라우드(cloud_scan --json 결과)
 python make_report.py aws  --result cloud_AWS_...csv             # CSV 로도 변환(계정/리전은 CSV 에 자동 기록)
 
+# CSV/JSON 을 한 폴더에 모아놓고 한 번에 변환(종류는 파일명으로 자동 구분 → 결과보고서_출력/ 에 저장)
+python make_reports.py <입력폴더>                                # 예: 리눅스 4대·웹 3종·클라우드 각각 보고서로
+```
+> `make_reports.py` 는 파일명 규칙(`server_linux_*`, `server_windows_*`, `web_{iis,nginx,tomcat}_*`,
+> `db_oracle_*`, `cloud_{AWS,AZURE,GCP,NAVER}_*`)으로 종류를 구분해, 리눅스 4대·윈도우 2대·웹 3종은
+> 각각 한 보고서로 합치고 클라우드는 계정마다 하나씩 만든다. 파일명이 다르면 `--kind` 로 지정.
+```bash
+
 # 표지 문서정보(선택)
 python make_report.py linux --result a.json --project 제로데이클리닉 --docno XXXXX-VA-2026001 --date 2026-09-29
 ```
@@ -221,7 +229,8 @@ kisa_win_check.ps1   Windows 서버 점검 (W-01~W-64, UTF-8 BOM 필수)
 web_linux_check.sh   웹서버(Nginx/리눅스 Tomcat) 점검 (WEB-01~26, 자동감지, CSV/JSON/HTML)
 web_windows_check.ps1 웹서버(IIS/윈도우 Tomcat) 점검 (WEB-01~26, 자동감지, UTF-8 BOM 필수)
 db_oracle_check.sh   DBMS(Oracle) 점검 (D-01~26, sqlplus, CSV/JSON/HTML)
-make_report.py       진단 JSON → 공식 양식 보고서 xlsx (linux/windows/dbms/web/aws/azure/gcp/naver)
+make_report.py       진단 결과(JSON/CSV) → 공식 양식 보고서 xlsx (linux/windows/dbms/web/aws/azure/gcp/naver)
+make_reports.py      폴더 안 CSV/JSON 을 종류별로 묶어 일괄 보고서 생성(결과보고서_출력/)
 server_report.py     보고서 양식 채우기 코어(모든 종류 공통, lxml)
 infra_report.py      간이 보고서 생성(lxml 없을 때 클라우드 폴백)
 보고서_양식_*.xlsx    공식 결과보고서 양식 (Linux/Windows/DBMS/Webserver/AWS/Azure/GCP/Naver)
