@@ -13,6 +13,16 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
   web_linux_<nginx|tomcat>_ / web_windows_<iis|tomcat>_<host>_*.csv  → 〃 (통합 점검 kisa_all_check.ps1 출력)
   db_oracle_<host>_*.csv                                          → DBMS
 
+출력 파일명(공식 양식 형식은 그대로, 종류별 고정 이름 + 버전):
+  (자동화진단)리눅스_서버_취약점진단_결과보고서_v<N>.xlsx      (리눅스 최대 4대 누적)
+  (자동화진단)윈도우_서버_취약점진단_결과보고서_v<N>.xlsx      (윈도우 최대 2대 누적)
+  (자동화진단)Webserver_서버_취약점진단_결과보고서_v<N>.xlsx    (웹 여러 대 누적)
+  (자동화진단)DBMS_서버_취약점진단_결과보고서_v<N>.xlsx        (DB 마다 1개)
+  (자동화진단)클라우드_서버_취약점진단_결과보고서_<CSP>_<계정>_v<N>.xlsx  (계정마다 1개)
+  · 같은 호스트(클라우드는 계정)를 다시 스캔하면 최신 스캔으로 교체(누적).
+  · 내용이 바뀌면 _v 번호가 올라가고(옛 버전 파일은 남겨 비교 가능), 같으면 버전 유지(덮어씀).
+    버전은 출력 폴더의 .보고서_버전.json 에 종류별로 기록된다(지우면 v1 부터 다시).
+
 사용:
   python make_reports.py                        # 현재 폴더(하위 폴더 포함) → ./결과보고서_출력/
   python make_reports.py <입력폴더> -o <출력폴더>
@@ -27,9 +37,12 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
 """
 import argparse
 import glob
+import hashlib
+import json
 import os
 import re
 import sys
+import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 for _s in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
@@ -76,6 +89,92 @@ import server_report           # noqa: E402
 CLOUD = {"aws": "aws", "azure": "azure", "gcp": "gcp", "naver": "naver", "ncp": "naver"}
 CAP = {"linux": 4, "windows": 2, "web": 4, "dbms": 1}
 
+# 종류별 결과보고서 파일명(뒤에 _v<버전> 이 붙는다). 원래 공식 양식 형식은 그대로 유지.
+REPORT_NAME = {
+    "linux":   "(자동화진단)리눅스_서버_취약점진단_결과보고서",
+    "windows": "(자동화진단)윈도우_서버_취약점진단_결과보고서",
+    "web":     "(자동화진단)Webserver_서버_취약점진단_결과보고서",
+    "dbms":    "(자동화진단)DBMS_서버_취약점진단_결과보고서",
+    "cloud":   "(자동화진단)클라우드_서버_취약점진단_결과보고서",
+}
+MANIFEST = ".보고서_버전.json"          # 출력 폴더에 저장: 종류별 최신 버전·내용 서명 기록
+
+
+def _safe(s):
+    return "".join(c for c in str(s) if c.isalnum() or c in "-_.")[:40]
+
+
+def _cap(fill_kind):
+    """양식이 담을 수 있는 대상 수(초과하면 여러 파일로 나눔). 웹은 여러 대를 한 보고서에."""
+    if fill_kind == "web":
+        return 99
+    try:
+        return server_report.SPECS[fill_kind].get("servers", 99) or 99
+    except Exception:
+        return CAP.get(fill_kind, 99)
+
+
+def _ts_key(path):
+    """스캔 시각(파일명의 YYYYMMDD_HHMM, 없으면 수정시각)을 12자리 문자열로 → 최신 판별용."""
+    m = re.search(r"(\d{8})_?(\d{4,6})?", os.path.basename(path))
+    if m:
+        return (m.group(1) + (m.group(2) or "0000"))[:12].ljust(12, "0")
+    try:
+        return time.strftime("%Y%m%d%H%M", time.localtime(os.path.getmtime(path)))
+    except OSError:
+        return "0" * 12
+
+
+def _identity(fill_kind, sv):
+    """같은 대상인지 판별하는 키. 겹치면 최신 스캔으로 교체한다."""
+    if fill_kind == "cloud":
+        return str(sv.get("account") or sv.get("host") or "-").lower()
+    if fill_kind == "web":
+        return f"{sv.get('host', '')}|{sv.get('sw', '')}".lower()
+    return str(sv.get("host") or "-").lower()
+
+
+def _sig(servers):
+    """보고서에 들어가는 내용(대상·항목 결과)의 서명. 내용이 바뀌면 달라진다 → 버전 증가 판단."""
+    norm = []
+    for sv in sorted(servers, key=lambda s: (str(s.get("host", "")), str(s.get("sw", "")),
+                                             str(s.get("account", "")))):
+        items = sorted(({"c": r.get("code"),
+                         "s": r.get("final") or r.get("status"),
+                         "e": r.get("evidence")} for r in sv.get("results", [])),
+                       key=lambda x: str(x["c"]))
+        norm.append({"h": sv.get("host"), "ip": sv.get("ip"), "os": sv.get("osver"),
+                     "acc": sv.get("account"), "reg": sv.get("region"), "sw": sv.get("sw"),
+                     "items": items})
+    blob = json.dumps(norm, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:10]
+
+
+def _bump(manifest, mkey, sig):
+    """내용 서명으로 버전 결정. 같으면 같은 버전(덮어씀), 바뀌면 +1. (버전, 바뀜여부) 반환."""
+    ent = manifest.get(mkey) or {}
+    if ent.get("sig") == sig and ent.get("version"):
+        return ent["version"], False
+    version = int(ent.get("version", 0)) + 1
+    manifest[mkey] = {"version": version, "sig": sig}
+    return version, True
+
+
+def _load_manifest(out_dir):
+    try:
+        with open(os.path.join(out_dir, MANIFEST), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_manifest(out_dir, manifest):
+    try:
+        with open(os.path.join(out_dir, MANIFEST), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 
 def classify(path):
     """파일명·내용으로 (fill_kind, tpl_key, 그룹키, sw힌트, host) 판별. 못하면 None."""
@@ -85,7 +184,7 @@ def classify(path):
     m = re.match(r"cloud_([a-z]+)", name)
     if m and m.group(1) in CLOUD:
         csp = CLOUD[m.group(1)]
-        return "cloud", csp, path, None, host      # 클라우드는 파일마다 따로(그룹키=경로)
+        return "cloud", csp, csp, None, host       # 같은 CSP 는 한 그룹(계정별로 파일 분리·교체)
     if name.startswith("server_linux"):
         return "linux", "linux", "linux", None, host
     if name.startswith("server_windows"):
@@ -102,7 +201,7 @@ def classify(path):
         return None
     prov = str(d.get("provider") or "").lower()
     if prov in CLOUD:
-        return "cloud", CLOUD[prov], path, None, host
+        return "cloud", CLOUD[prov], CLOUD[prov], None, host
     return None
 
 
@@ -114,9 +213,14 @@ def _host_from(stem):
     return s or ""
 
 
-def _one_report(fill_kind, tpl_key, files, out_dir, meta, seq=None):
-    """files(같은 그룹) → 보고서 1개(또는 대상 초과 시 여러 개)."""
-    servers = []
+def _one_report(fill_kind, tpl_key, files, out_dir, meta, manifest):
+    """files(같은 그룹) → 결과보고서. 같은 호스트는 최신 스캔으로 교체(누적), 내용 바뀌면 _v 버전 증가.
+
+    · 리눅스 4대·윈도우 2대·웹 여러 대를 한 보고서에 누적(양식 수용량 초과 시 파일 분리).
+    · 클라우드·DBMS 양식은 대상 1개짜리 → 계정/DB 마다 파일이 나뉜다.
+    """
+    # 1) 파일 로드(+ 스캔 시각)
+    loaded = []
     for path, sw, host in files:
         try:
             d = MR._load_scan(path)
@@ -134,32 +238,56 @@ def _one_report(fill_kind, tpl_key, files, out_dir, meta, seq=None):
         for k in ("account", "region", "kind"):
             if d.get(k):
                 sv[k] = d[k]
-        servers.append(sv)
-    if not servers:
+        loaded.append((sv, _ts_key(path)))
+    if not loaded:
         return []
+
+    # 2) 같은 대상(호스트/계정) 중복 → 최신 스캔만 남김(교체)
+    best = {}
+    for sv, ts in loaded:
+        idk = _identity(fill_kind, sv)
+        if idk in best and ts < best[idk][1]:
+            continue
+        if idk in best:
+            print(f"  [=] {sv.get('host') or sv.get('account')} 중복 → 최신 스캔으로 교체")
+        best[idk] = (sv, ts)
+    servers = [v[0] for v in sorted(best.values(),
+                                    key=lambda x: (str(x[0].get("host", "")),
+                                                   str(x[0].get("sw", "")),
+                                                   str(x[0].get("account", ""))))]
+
     tpl = MR._find_template(tpl_key, None)
     if not tpl:
         print(f"  [!] 양식 없음({MR.TEMPLATE_SUFFIX[tpl_key]}) — {fill_kind} 건너뜀")
         return []
-    cap = CAP.get(fill_kind, 99) if fill_kind != "web" else 99
-    chunks = [servers[i:i + cap] for i in range(0, len(servers), cap)]
-    outs = []
+    cap = _cap(fill_kind)
+
+    # 3) 클라우드는 계정마다 별도 보고서(양식이 대상 1개), 그 외는 종류별 한 보고서에 누적
     if fill_kind == "cloud":
-        label = re.sub(r"^cloud[_-]?", "", str(seq or servers[0]["host"]), flags=re.I)
+        units = [(f"{tpl_key.upper()}_{_safe(sv.get('account') or sv.get('host') or tpl_key)}",
+                  f"cloud:{tpl_key}:{_identity('cloud', sv)}", [sv]) for sv in servers]
     else:
-        label = fill_kind
-    label = "".join(c for c in label if c.isalnum() or c in "-_")[:40] or fill_kind
-    for n, chunk in enumerate(chunks, 1):
-        suffix = "" if len(chunks) == 1 else f"_{n}"
-        prefix = "보고서_클라우드" if fill_kind == "cloud" else f"보고서_{fill_kind}"
-        out = os.path.join(out_dir, f"{prefix}_{label}{suffix}.xlsx")
+        chunks = [servers[i:i + cap] for i in range(0, len(servers), cap)]
+        units = []
+        for n, chunk in enumerate(chunks, 1):
+            part = "" if len(chunks) == 1 else f"_({n})"
+            units.append((part, fill_kind, chunk))
+
+    base = REPORT_NAME.get(fill_kind, f"보고서_{fill_kind}")
+    outs = []
+    for tail, mkey, chunk in units:
+        sig = _sig(chunk)
+        version, changed = _bump(manifest, mkey, sig)
+        name = f"{base}_{tail}" if (fill_kind == "cloud") else base
+        out = os.path.join(out_dir, f"{name}_v{version}{'' if fill_kind == 'cloud' else tail}.xlsx")
         try:
             server_report.fill_report(fill_kind, chunk, tpl, out, meta=meta)
         except Exception as e:  # noqa: BLE001
-            print(f"  [!] 생성 실패({fill_kind}/{label}): {type(e).__name__}: {e}")
+            print(f"  [!] 생성 실패({fill_kind}/{mkey}): {type(e).__name__}: {e}")
             continue
         outs.append(out)
-        print(f"  [+] {os.path.basename(out)}  ({len(chunk)}대/개)")
+        print(f"  [+] {os.path.basename(out)}  ({len(chunk)}대/개, "
+              f"{'새 내용→버전 갱신' if changed else '내용 동일→버전 유지'})")
     return outs
 
 
@@ -199,7 +327,7 @@ def main():
             fk = {"aws": "cloud", "azure": "cloud", "gcp": "cloud", "naver": "cloud"}.get(args.kind, args.kind)
             tk = args.kind if args.kind in CLOUD or args.kind in ("aws", "azure", "gcp", "naver") else fk
             sw = args.kind if args.kind in ("iis", "nginx", "tomcat") else None
-            gk = f if fk == "cloud" else fk
+            gk = tk if fk == "cloud" else fk
             info = (fk, tk, gk, sw, _host_from(os.path.splitext(os.path.basename(f))[0]))
         else:
             info = classify(f)
@@ -210,10 +338,11 @@ def main():
         groups.setdefault((fk, tk, gk), []).append((f, sw, host))
 
     print(f"[*] 입력 {len(files)}개 → 출력 폴더: {args.output}")
+    manifest = _load_manifest(args.output)          # 종류별 최신 버전·내용 서명(재실행 시 이어감)
     made = []
     for (fk, tk, gk), items in sorted(groups.items()):
-        seq = os.path.splitext(os.path.basename(gk))[0] if fk == "cloud" else None
-        made += _one_report(fk, tk, items, args.output, meta, seq)
+        made += _one_report(fk, tk, items, args.output, meta, manifest)
+    _save_manifest(args.output, manifest)
     for u in unknown:
         print(f"  [?] 종류 모름(건너뜀): {os.path.basename(u)}  — --kind 로 지정하세요")
     print(f"[*] 완료: 보고서 {len(made)}개 생성")
