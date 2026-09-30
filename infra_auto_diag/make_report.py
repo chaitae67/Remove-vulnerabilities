@@ -86,6 +86,9 @@ def main():
             sys.exit(f"[!] JSON 을 읽을 수 없습니다: {path} ({type(e).__name__}: {e})")
         if not d.get("results"):
             sys.exit(f"[!] {path} 에 results 가 없습니다. 점검 스크립트를 --json 으로 먼저 실행하세요.")
+        prov = str(d.get("provider") or "").lower()
+        if args.kind in CLOUD_KINDS and prov and prov != args.kind:
+            sys.exit(f"[!] {path} 는 {prov} 스캔 결과입니다 — 'make_report.py {prov} --result {path}' 로 실행하세요.")
         sv = {
             "host": (args.host if (len(args.result) == 1 and args.host) else None) or d.get("host", "")
                     or f"server{i+1}",

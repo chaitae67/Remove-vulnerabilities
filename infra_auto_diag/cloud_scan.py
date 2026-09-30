@@ -46,11 +46,6 @@ REPORT_STATUS = {
     "수동확인": MANUAL_LABEL, MANUAL_LABEL: MANUAL_LABEL,
 }
 
-# CSP(run 이 돌려주는 os 라벨) → 양식파일 ASCII 접미사(한글 파일명 인코딩에 의존하지 않음)
-TEMPLATES = {"AWS": "_AWS.xlsx", "AZURE": "_Azure.xlsx",
-             "GCP": "_GCP.xlsx", "NAVER": "_Naver.xlsx"}
-FIRST_ROW, CODE_COL, RESULT_COL, DETAIL_COL, RES_COL = 4, 2, 7, 8, 9
-
 
 # ------------------------------------------------------------------ 자격증명
 def _ask(label, secret=False, default=""):
@@ -217,63 +212,6 @@ def _fill_cloud_template(provider, host, os_label, results, out_path, target=Non
     except Exception as e:  # noqa: BLE001
         print(f"    (양식 채우기 실패: {type(e).__name__}: {e} → 코드 생성으로 폴백)")
         return False
-
-
-def _find_template(key):
-    """SCRIPT_DIR 에서 ASCII 접미사(_AWS.xlsx 등)로 양식 파일을 찾는다(한글 프리픽스 무관)."""
-    suffix = TEMPLATES.get(key)
-    if not suffix:
-        return None
-    try:
-        for name in os.listdir(SCRIPT_DIR):
-            if name.endswith(suffix):
-                return os.path.join(SCRIPT_DIR, name)
-    except OSError:
-        pass
-    return None
-
-
-def _pick_sheet(wb):
-    """항목코드가 B열에 있는 시트를 고른다(없으면 첫 시트)."""
-    for ws in wb.worksheets:
-        for row in range(FIRST_ROW, min(ws.max_row, FIRST_ROW + 4) + 1):
-            if ws.cell(row=row, column=CODE_COL).value:
-                return ws
-    return wb.worksheets[0]
-
-
-def _write_xlsx(os_label, results, out_path):
-    try:
-        import openpyxl
-        from openpyxl.styles import Font
-    except ImportError:
-        return None
-    tpl_path = _find_template((os_label or "").upper())
-    if not tpl_path:
-        return None
-
-    wb = openpyxl.load_workbook(tpl_path)
-    ws = _pick_sheet(wb)
-    row_of = {}
-    for row in range(FIRST_ROW, ws.max_row + 1):
-        code = ws.cell(row=row, column=CODE_COL).value
-        if code is not None:
-            row_of[str(code).strip()] = row
-
-    red = Font(color="FFFF0000", bold=True)
-    blue = Font(color="FF0070C0", bold=True)
-    black = Font(color="FF000000")
-    for r in results:
-        row = row_of.get(str(r.get("code", "")))
-        if not row:
-            continue
-        verdict = REPORT_STATUS.get(r.get("status", ""), r.get("status", ""))
-        cell = ws.cell(row=row, column=RESULT_COL, value=verdict)
-        cell.font = red if verdict == "취약" else blue if verdict == MANUAL_LABEL else black
-        ws.cell(row=row, column=DETAIL_COL, value=" / ".join(r.get("evidence", []))[:32000])
-        ws.cell(row=row, column=RES_COL, value=" / ".join(r.get("resources", []))[:32000])
-    wb.save(out_path)
-    return out_path
 
 
 # ------------------------------------------------------------------ 메인

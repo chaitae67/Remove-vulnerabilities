@@ -142,10 +142,13 @@ COVER = {"title": "B11", "docno": "L3", "author": "L4", "grade": "L5", "ver": "L
 def detect_software(sv):
     """웹 소프트웨어 판별(iis/nginx/tomcat). 명시값(sw) → 대상 표기 '(iis)' → 버전 문자열 → 호스트명 순."""
     hint = (sv.get("sw") or "").lower()
-    if hint in ("iis", "nginx", "tomcat"):
-        return hint
     tgt = str(sv.get("target") or "")
     m = re.search(r"\((iis|nginx|tomcat)\)", tgt, re.I)
+    if hint in ("iis", "nginx", "tomcat"):
+        if m and m.group(1).lower() != hint:     # 명령에서 지정한 종류와 스캔 결과가 다르면 알린다
+            sys.stderr.write(f"[!] {sv.get('host') or '?'}: 지정한 종류 '{hint}' 와 스캔 결과 "
+                             f"'{m.group(1).lower()}' 가 다릅니다 — 지정한 '{hint}' 시트에 채웁니다.\n")
+        return hint
     if m:
         return m.group(1).lower()
     text = f"{sv.get('osver', '')} {tgt}".lower()
@@ -167,11 +170,15 @@ _detect_sw = detect_software   # 예전 이름
 
 # ---------------- 행 높이 ----------------
 def _text_units(s):
-    """열 너비 단위(숫자 '0' 한 글자 폭) 기준 문자열 폭. 한글·전각 1.9, 영문 대문자 1.1, 소문자 0.95, 공백 0.7."""
+    """열 너비 단위(숫자 '0' 한 글자 폭) 기준 문자열 폭. 한글·전각 1.9, 영문 대문자 1.1, 소문자 0.95, 공백 0.7.
+    공백 없는 한 단어(IP·버전 번호)는 구두점을 좁게 친다 — 문장은 줄바꿈 손실이 있어 그대로 둔다."""
+    narrow = ".,:;|!'" if " " not in s.strip() else ""
     u = 0.0
     for ch in s:
         if unicodedata.east_asian_width(ch) in ("W", "F"):
             u += 1.9
+        elif ch in narrow:                      # 13.124.134.131 이 두 줄 높이로 잡히던 문제
+            u += 0.55
         elif ch.isupper():
             u += 1.1
         elif ch.islower():
@@ -385,6 +392,42 @@ class Book:
             if d.get("name") == "_xlnm.Print_Area" and d.get("localSheetId") == str(names.index(real)):
                 d.text = ",".join(f"'{real}'!{a}" for a in areas)
 
+    def align(self, sheet, ref, **attrs):
+        """셀 스타일을 복제해 정렬 속성만 바꾼다(같은 조합은 재사용)."""
+        c = self._cell(sheet, ref)
+        s = int(c.get("s", "0"))
+        key = (s, tuple(sorted(attrs.items())))
+        cache = self.__dict__.setdefault("_align_cache", {})
+        if key not in cache:
+            xfs = self._root("xl/styles.xml").find(q("cellXfs"))
+            xf = copy.deepcopy(xfs[s])
+            al = xf.find(q("alignment"))
+            if al is None:
+                al = etree.Element(q("alignment"))
+                xf.insert(0, al)
+            for k, v in attrs.items():
+                al.set(k, v)
+            xf.set("applyAlignment", "1")
+            xfs.append(xf)
+            xfs.set("count", str(len(xfs)))
+            cache[key] = len(xfs) - 1
+        c.set("s", str(cache[key]))
+
+    def top_align_tall_merges(self, sheet, first, max_pt=400):
+        """세로로 긴 병합칸(영역명·영역별점수)이 여러 쪽에 걸치면 엑셀은 전체 높이의 가운데 쪽에만
+        글자를 찍어 나머지 쪽은 빈칸이 된다 → 위쪽 정렬로 영역이 시작하는 쪽에 찍히게."""
+        mc = sheet.find(q("mergeCells"))
+        if mc is None:
+            return
+        fmt = sheet.find(q("sheetFormatPr"))
+        dflt = float(fmt.get("defaultRowHeight", "15")) if fmt is not None else 15.0
+        hts = {int(r.get("r")): float(r.get("ht") or dflt) for r in sheet.find(q("sheetData"))}
+        for m in mc:
+            a, b = m.get("ref").split(":")
+            (c1, r1), (c2, r2) = _split_ref(a), _split_ref(b)
+            if c1 == c2 and r1 >= first and r2 > r1 and sum(hts.get(r, dflt) for r in range(r1, r2 + 1)) > max_pt:
+                self.align(sheet, a, vertical="top")
+
     def hide_sheet(self, name):
         """시트 숨기기(진단하지 않은 웹 소프트웨어의 2-x/3-x 시트)."""
         real = self.resolve(name)
@@ -484,7 +527,9 @@ def _cloud_target(sv, label):
         if m and "," not in m.group(1):
             account = m.group(1).strip()
         else:
-            account = h.split()[-1] if h.split() else label
+            last = h.split()[-1] if h.split() else ""
+            # 'NCP 계정'처럼 식별자가 없으면 '계정'을 ID 로 쓰지 않는다
+            account = last if last and re.search(r"[0-9\-_.@]", last) else "-"
     kind = sv.get("kind")
     if not kind:
         kind = next((f"{label} {w}" for w in ("구독", "프로젝트") if w in host), f"{label} 계정")
@@ -529,19 +574,25 @@ def _fill_detail(bk, dw, row_of, rc, ec, results, cloud=False):
         raise ValueError(f"항목코드가 양식과 하나도 맞지 않습니다(양식 {sorted(row_of)[:3]}… / 결과 "
                          f"{sorted(by_code)[:3]}…). 보고서 종류(linux/windows/…)를 확인하세요.")
     missing = [c for c in by_code if c not in row_of]
+    no_result = []
     for code, r in row_of.items():
         x = by_code.get(code)
-        if x is None:
-            bk.put(dw, f"{rc}{r}", "N/A")
-            bk.put(dw, f"{ec}{r}", "점검 결과 없음")
+        if x is None:     # 스캔 결과에 없는 항목 — N/A(해당 없음)로 두면 점수에서 조용히 빠지므로 확인 필요로 표시
+            no_result.append(code)
+            bk.put(dw, f"{rc}{r}", MANUAL_LABEL)
+            bk.put(dw, f"{ec}{r}", "점검 결과 없음(스캔 결과에 이 항목이 없음) — 재점검 또는 담당자 확인 필요")
             continue
         bk.put(dw, f"{rc}{r}", normalize_status(x.get("final") or x.get("status", "")))
         bk.put(dw, f"{ec}{r}", evidence_text(x, cloud))
+    if no_result:
+        more = " …" if len(no_result) > 10 else ""
+        sys.stderr.write(f"[!] 스캔 결과에 없는 항목 {len(no_result)}개 → '{MANUAL_LABEL}'로 표시: "
+                         f"{', '.join(no_result[:10])}{more}\n")
     if missing:
         sys.stderr.write(f"[!] 양식에 없는 항목코드 {len(missing)}개는 보고서에서 빠짐: {', '.join(missing[:10])}\n")
 
 
-def _hide_unused_slots(bk, spec_sheets, n):
+def _hide_unused_slots(bk, spec_sheets, n, first=6):
     """대상 칸이 남으면(리눅스 4칸에 2대 등) 그 칸의 열을 숨긴다. 수식은 양식에서 빈칸 처리됨."""
     det, summ, rcols, ecols, scols = spec_sheets
     if n >= len(rcols):
@@ -565,8 +616,29 @@ def _hide_unused_slots(bk, spec_sheets, n):
     names = [s.get("name") for s in bk.wb_root.find(q("sheets"))]
     dn = bk.wb_root.find(q("definedNames"))
     for d in dn if dn is not None else []:
-        if d.get("name") == "_xlnm.Print_Area" and d.get("localSheetId") == str(names.index(real)):
+        if d.get("localSheetId") != str(names.index(real)):
+            continue
+        if d.get("name") == "_xlnm.Print_Area":
             d.text = re.sub(r"(:\$)[A-Z]+(\$\d+)$", lambda m: f"{m.group(1)}{ecols[n - 1]}{m.group(2)}", d.text)
+            if n == 1:        # 대상 1개: 진단항목~근거(B~G)를 한 장 폭에
+                d.text = re.sub(r"!\$[A-Z]+\$\d+:", f"!$B${first}:", d.text)
+        elif d.get("name") == "_xlnm.Print_Titles" and n == 1:
+            d.text = f"'{real}'!$2:$5"
+    if n == 1:            # 다중 서버용 고정 배율·반복 열 대신 가로 한 장 맞춤
+        pg = dws.find(q("pageSetup"))
+        if pg is not None:
+            if "scale" in pg.attrib:
+                del pg.attrib["scale"]
+            pg.set("fitToWidth", "1")
+            pg.set("fitToHeight", "0")
+        sp = dws.find(q("sheetPr"))
+        if sp is None:
+            sp = etree.Element(q("sheetPr"))
+            dws.insert(0, sp)
+        ps = sp.find(q("pageSetUpPr"))
+        if ps is None:
+            ps = etree.SubElement(sp, q("pageSetUpPr"))
+        ps.set("fitToPage", "1")
 
 
 def _warn_dropped(kind, dropped, cap):
@@ -609,7 +681,10 @@ def _fill_web(bk, spec, servers, meta):
         for i, sv in enumerate(svs):
             _fill_detail(bk, dw, row_of, sc["cols"][i], sc["evid"][i], sv.get("results", []))
         bk.fit_rows(dw, sorted(row_of.values()), ["D", "E"] + sc["evid"][: len(svs)])
-        _hide_unused_slots(bk, (sc["detail"], sc["summary"], sc["cols"], sc["evid"], sc["sum_cols"]), len(svs))
+        _hide_unused_slots(bk, (sc["detail"], sc["summary"], sc["cols"], sc["evid"], sc["sum_cols"]), len(svs),
+                           first)
+        for name in (sc["detail"], sc["summary"]):
+            bk.top_align_tall_merges(bk.sheet(name), first)
 
     # 2-1 인쇄: 진단한 소프트웨어의 레이더만
     bk.set_print_area("2-1. 요약결과(그래프)", [spec["graph_area"]] + [sc["radar"] for k, sc in
@@ -661,7 +736,9 @@ def fill_report(os_kind, servers, template_path, out_path, meta=None, fix_templa
                          sv.get("results", []), cloud=bool(spec.get("cloud")))
         bk.fit_rows(dw, sorted(row_of.values()), ["D", "E"] + spec["evid_cols"][: len(servers)])
         _hide_unused_slots(bk, (spec["detail"], spec["summary"], spec["result_cols"], spec["evid_cols"],
-                                spec["sum_cols"]), len(servers))
+                                spec["sum_cols"]), len(servers), spec["detail_first"])
+        for name in (spec["detail"], spec["summary"]):
+            bk.top_align_tall_merges(bk.sheet(name), spec["detail_first"])
     bk.strip_external_links()
     bk.set_properties(meta.get("author") or "취약점진단팀")
     bk.save(out_path)

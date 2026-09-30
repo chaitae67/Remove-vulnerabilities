@@ -183,6 +183,17 @@ def style_tables(pkg, t):
     summ = pkg.sheet(t["summ"])
     sc = scols(t)
     X.add_verdict_cf(pkg, summ, f"{sc[0]}{first}:{sc[-1]}{last}")
+    # 요약 대상 열 글꼴을 첫 대상 열에 맞춤(공식 윈도우 G열은 'Noto Sans CJK SC' 라 다른 글꼴로 대체됨)
+    X.restyle_range(pkg, summ, sc, rows, font_from=X.get_cell(summ, f"{sc[0]}{first}").get("s", "0"))
+    # 취약항목 개수는 정수로(공식 웹 3-x 는 '9.0' 처럼 소수점)
+    X.restyle_numfmt(pkg, det, [f"{c}{last + 1}" for c in vcols(t)], 1)
+    X.restyle_numfmt(pkg, summ, [f"{c}{last + 1}" for c in sc], 1)
+    if t["slots"] > 1:
+        # 다중 대상 상세는 서버별 쪽에 B:D 만 반복 → 제목·결과행 라벨이 E 까지 병합돼 있으면 잘린다
+        X.narrow_merge(det, "B2:E2", "B2:D2")
+        for r in (last + 1, last + 2):
+            X.narrow_merge(det, f"C{r}:E{r}", f"C{r}:D{r}")
+            X.restyle_range(pkg, det, ["C"], [r], shrinkToFit="1", wrapText="0")
 
 
 # ---------------- 2-1 그래프 ----------------
@@ -198,6 +209,7 @@ def graph_common(pkg):
             X.pie_hide_zero_labels(pkg, ch)
         if list(root.iter(f"{{{X.CNS}}}radarChart")):
             X.radar_scale_0_1(pkg, ch)
+    X.radar_na_gaps(pkg, GRAPH)                 # 'N/A' 영역이 레이더 중심(0%)에 찍히지 않게
     X.remove_grade_legend_picture(pkg, drawing)
     g = pkg.sheet(GRAPH)
     for r in (18, 19, 20):
@@ -227,6 +239,7 @@ def graph_multi(pkg, cfg, t, area_rows, domain_col):
         X.set_formula(g, f"B{r}", f"SUBSTITUTE('{summ}'!B{src},CHAR(10),\"\")")   # '2. 파일 및 \n디렉토리'
         X.set_formula(g, f"C{r}", f"'{summ}'!{domain_col}{src}")
         X.set_formula(g, f"D{r}", "$C$6")
+    X.restyle_range(pkg, g, ["B"], range(72, 72 + len(area_rows)), shrinkToFit="1", wrapText="0")  # '2. 파일 및 디렉토' 잘림
     rows = X.rows_of(g)
     for r in (4, 5, 6, 17, 18, 19, 20):                          # 9.6pt 라 글자가 겹치던 표 행
         if r in rows:
@@ -252,6 +265,8 @@ def graph_web(pkg):
                               (52, "2-4. 요약 진단결과(Tomcat)", "G"), (53, "2-4. 요약 진단결과(Tomcat)", "G")):
         X.set_formula(g, f"X{r}", f"IFERROR(T(HLOOKUP($W{r},'{summ}'!$F$3:${last_col}$31,2,0)),\"\")")
         X.set_formula(g, f"Y{r}", f"IFERROR(HLOOKUP($W{r},'{summ}'!$F$3:${last_col}$33,31,0),\"\")")
+    for col in ("B", "U"):                                        # 영역명 '4. 패치 및 로그 관리' 잘림
+        X.restyle_range(pkg, g, [col], range(67, 71), shrinkToFit="1", wrapText="0")
     pct = X.get_cell(g, "Y37").get("s")
     for r, src in ((37, 37), (38, 46), (39, 52), (40, 53)):
         X.set_formula(g, f"AE{r}", f'IF(X{src}="","",X{src})')
@@ -326,7 +341,9 @@ def build(kind):
     first_rows = {}
     for t in cfg["tables"]:
         fit_detail_rows(pkg, t)
-        X.set_page_fit_width(pkg.sheet(t["summ"]))
+        # 요약: 리눅스·윈도우는 서버 열이 많아 가로 방향, 짧은 표(DBMS·웹 26행)는 한 쪽에(영역명 잘림 방지)
+        X.set_page_fit_width(pkg.sheet(t["summ"]), orientation="landscape",
+                             one_page=(t["last"] - t["first"] + 1) <= 35)
         X.set_print_titles(pkg, t["summ"], "$2:$5")
         groups = [(c, C(X.col_idx(c) + 1)) for c in vcols(t)]
         X.detail_page_setup(pkg, t["det"], groups, t["last"] + 2, first_row=t["first"])
@@ -339,6 +356,7 @@ def build(kind):
     X.set_page_fit_width(pkg.sheet(TARGET))                      # 진단대상 표가 2장으로 갈리던 문제
     X.set_print_area(pkg, TARGET, f"$A$1:$G${max(cfg['targets'])}")
     page_footer(pkg)
+    X.prune_cell_styles(pkg)                                     # 안 쓰는 셀 스타일(윈도우 공식 파일 4만여 개)
     X.reset_all_views(pkg)
     X.open_on_first_sheet(pkg, first_rows)
     pkg.clean()

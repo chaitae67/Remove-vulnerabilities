@@ -178,6 +178,7 @@ def rebuild_table(pkg, ws, kind, items, codes, areas, det_name):
                      {"type": "containsText", "text": "인터뷰", "dxfId": 45},
                      {"type": "containsText", "text": "확인", "dxfId": 44}]),
             (f"I{FIRST}:I{last}", [{"type": "cellIs", "formula": '"N/A"', "dxfId": 49}]),
+            (f"F{t2}", [{"type": "cellIs", "formula": '"N/A"', "dxfId": 49}]),
         ])
     else:
         X.set_conditional_formats(ws, [
@@ -185,10 +186,15 @@ def rebuild_table(pkg, ws, kind, items, codes, areas, det_name):
                      {"type": "cellIs", "formula": '"N/A"', "dxfId": 10},
                      {"type": "containsText", "text": "인터뷰", "dxfId": 27},
                      {"type": "containsText", "text": "확인", "dxfId": 33}]),
+            (f"F{t2}", [{"type": "cellIs", "formula": '"N/A"', "dxfId": 10}]),
         ])
+    w = X.col_widths(ws)
+    if w.get(2, 0) < 16.5:
+        X.set_col_width(ws, "D", round(w.get(4, 40) - (16.5 - w.get(2, 0)), 2))
+        X.set_col_width(ws, "B", 16.5)
     X.set_dimension(ws)
     if kind == "summary":
-        X.set_page_fit_width(ws)
+        X.set_page_fit_width(ws, orientation="landscape")
     else:                                   # 가로 방향, 항목 열(B~E)·제목행 반복
         X.detail_page_setup(pkg, det_name, [("F", "G")], t2)
     return last, t1, t2
@@ -209,7 +215,6 @@ def fix_graph(pkg, label, sum_name, areas_rows, t2):
     X.set_col_width(g, "X", 20.66)
     X.restyle_range(pkg, g, ["X"], range(37, 43), shrinkToFit="1", wrapText="0")
     X.restyle_range(pkg, g, ["B"], range(HELPER_ROW, HELPER_ROW + 7), shrinkToFit="1", wrapText="0")
-    X.graph_page_setup(pkg, GRAPH, [31, 64], extra_cells_to=(25, 42))   # X 열을 넓혔으니 배율 다시 계산
     # 영역별 평균 헬퍼(B67~B73 은 원본에 서식이 있는 7칸)
     for i in range(7):
         r = HELPER_ROW + i
@@ -220,13 +225,25 @@ def fix_graph(pkg, label, sum_name, areas_rows, t2):
             X.set_str(g, f"B{r}", None)
             X.set_str(g, f"C{r}", None)
     last = HELPER_ROW + len(areas_rows) - 1
+    rows = X.rows_of(g)
+    for r in range(last + 1, HELPER_ROW + 7):          # 영역이 7개보다 적으면 남는 빈 노란 행 숨김
+        if r in rows:
+            rows[r].set("hidden", "1")
+    for r in range(HELPER_ROW, HELPER_ROW + 7):        # 레이더용 보조 열(점수 없는 영역 = #N/A → 빈칸)
+        if r <= last:
+            X.set_formula(g, f"BA{r}", f"IF(ISNUMBER(C{r}),C{r},NA())", style=X.get_cell(g, f"C{r}").get("s"))
+        else:
+            X.set_str(g, f"BA{r}", None)
+    # X 열을 넓히고 행을 숨겼으니 인쇄 영역·배율을 다시 계산
+    X.graph_page_setup(pkg, GRAPH, [31, 64], extra_cells_to=(25, 42))
     # 레이더(영역 평균) 범위 + 모든 차트 캐시 제거(열 때 셀 값으로 다시 그림)
     drawing = pkg.drawing_of(GRAPH)
     for ch in pkg.charts_of(drawing):
         root = pkg.part(ch)
         for f in root.iter(f"{{{X.CNS}}}f"):
             f.text = (f.text.replace("$B$67:$B$70", f"$B${HELPER_ROW}:$B${last}")
-                            .replace("$C$67:$C$70", f"$C${HELPER_ROW}:$C${last}"))
+                            .replace("$C$67:$C$70", f"$BA${HELPER_ROW}:$BA${last}")
+                            .replace("$BA$67:$BA$70", f"$BA${HELPER_ROW}:$BA${last}"))
         for tag in ("strCache", "numCache"):
             for e in list(root.iter(f"{{{X.CNS}}}{tag}")):
                 e.getparent().remove(e)

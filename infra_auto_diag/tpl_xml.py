@@ -523,8 +523,9 @@ def col_widths(ws):
     return out
 
 
-def set_page_fit_width(ws):
-    """가로 1페이지에 맞추고 세로는 여러 페이지(긴 표가 깨알같이 인쇄되는 것 방지)."""
+def set_page_fit_width(ws, orientation=None, one_page=False):
+    """가로 1페이지에 맞추고 세로는 여러 페이지(긴 표가 깨알같이 인쇄되는 것 방지).
+    one_page=True 면 세로도 1페이지(짧은 요약표 — 병합된 영역명이 쪽 경계에서 잘리지 않게)."""
     sp = ws.find(q("sheetPr"))
     if sp is None:
         sp = etree.Element(q("sheetPr"))
@@ -536,8 +537,12 @@ def set_page_fit_width(ws):
     pg = ensure_child(ws, "pageSetup")
     if not pg.get("paperSize"):
         pg.set("paperSize", "9")
+    if orientation:
+        pg.set("orientation", orientation)
+    if "scale" in pg.attrib:
+        del pg.attrib["scale"]
     pg.set("fitToWidth", "1")
-    pg.set("fitToHeight", "0")
+    pg.set("fitToHeight", "1" if one_page else "0")
 
 
 # ---------------- 양식 공통 손질 ----------------
@@ -686,6 +691,9 @@ def _row_heights(ws):
     fmt = ws.find(q("sheetFormatPr"))
     dflt = float(fmt.get("defaultRowHeight", "15")) if fmt is not None else 15.0
     hts = {int(r.get("r")): float(r.get("ht")) for r in ws.find(q("sheetData")) if r.get("ht")}
+    for r in ws.find(q("sheetData")):          # 숨긴 행은 인쇄 높이 0(고정 크기 차트가 그만큼 아래로 걸침)
+        if r.get("hidden") == "1":
+            hts[int(r.get("r"))] = 0.0
     return hts, dflt
 
 
@@ -1085,10 +1093,115 @@ def radar_scale_0_1(pkg, chart_part):
 def remove_grade_legend_picture(pkg, drawing_part):
     """막대그래프 옆 '안전(A)/양호(B)/보통이하(C~E)' 고정 그림 범례 제거(3단계 기준과 안 맞음)."""
     d = pkg.part(drawing_part)
-    removed = 0
+    removed, rids = 0, set()
     for pic in list(d.iter(f"{{{XDR}}}pic")):
         parent = pic.getparent()
         if parent.tag == f"{{{XDR}}}grpSp":
+            for blip in pic.iter(f"{{{ANS}}}blip"):
+                rids.add(blip.get(f"{{{RNS}}}embed"))
             parent.remove(pic)
             removed += 1
+    # 그림이 쓰던 관계·이미지 파일도 제거(다른 곳에서 안 쓰면)
+    still = {b.get(f"{{{RNS}}}embed") for b in d.iter(f"{{{ANS}}}blip")}
+    rels = pkg.rels_of(drawing_part)
+    for r in list(rels) if rels is not None else []:
+        if r.get("Id") in rids and r.get("Id") not in still:
+            target = pkg.target_of(drawing_part, r.get("Id"))
+            rels.remove(r)
+            others = [n for n in pkg.names() if n.endswith(".rels") and "/" in n.replace("_rels/", "", 1)
+                      and n != drawing_part.rsplit("/", 1)[0] + "/_rels/" + drawing_part.rsplit("/", 1)[1] + ".rels"]
+            if not any(pkg.target_of(n.replace("_rels/", "")[: -len(".rels")], x.get("Id")) == target
+                       for n in others for x in pkg.part(n) if x.get("TargetMode") != "External"):
+                pkg.drop.add(target)
     return removed
+
+
+# ---------------- 레이더 N/A / 셀 스타일 정리 ----------------
+_REF_RE = re.compile(r"^(?P<sheet>'[^']+'|[^!]+)!\$(?P<col>[A-Z]+)\$(?P<r1>\d+):\$(?P=col)\$(?P<r2>\d+)$")
+
+
+def radar_na_gaps(pkg, sheet_name, helper_start="BA"):
+    """레이더 값 범위를 '숫자면 그대로, 아니면 #N/A' 보조 열로 바꾼다.
+    값이 'N/A' 글자면 엑셀은 0% 로 그리지만 #N/A 는 건너뛴다(점수 없는 영역이 0 으로 보이던 문제).
+    보조 열은 인쇄 영역 밖 오른쪽(BA~)에 둔다. 이미 보조 열을 가리키면 그대로 둔다."""
+    ws = pkg.sheet(sheet_name)
+    drawing = pkg.drawing_of(sheet_name)
+    if not drawing:
+        return {}
+    next_col = col_idx(helper_start)
+    made = {}
+    for ch in pkg.charts_of(drawing):
+        root = pkg.part(ch)
+        for radar in root.iter(f"{{{CNS}}}radarChart"):
+            for val in radar.iter(f"{{{CNS}}}val"):
+                f = val.find(f".//{{{CNS}}}f")
+                m = _REF_RE.match(f.text or "") if f is not None else None
+                if not m or col_idx(m.group("col")) >= col_idx(helper_start):
+                    continue
+                src, r1, r2 = m.group("col"), int(m.group("r1")), int(m.group("r2"))
+                key = (src, r1, r2)
+                if key not in made:
+                    hc = col_letter(next_col)
+                    next_col += 1
+                    for r in range(r1, r2 + 1):       # 원본 셀 서식(0.0%)을 그대로 — 축 눈금이 원본 형식을 따름
+                        set_formula(ws, f"{hc}{r}", f"IF(ISNUMBER({src}{r}),{src}{r},NA())",
+                                    style=get_cell(ws, f"{src}{r}").get("s"))
+                    made[key] = hc
+                f.text = f"{m.group('sheet')}!${made[key]}${r1}:${made[key]}${r2}"
+    return made
+
+
+def prune_cell_styles(pkg):
+    """어떤 셀 서식도 쓰지 않는 '셀 스타일'(이름 있는 스타일) 제거 — 공식 윈도우 파일에 4만 개 넘게 쌓여
+    styles.xml 이 9MB(파일 열기가 느림)였다."""
+    st = pkg.part("xl/styles.xml")
+    csx, cs, xfs = st.find(q("cellStyleXfs")), st.find(q("cellStyles")), st.find(q("cellXfs"))
+    if csx is None or xfs is None:
+        return 0
+    used = {int(x.get("xfId", "0")) for x in xfs} | {0}
+    if cs is not None:            # 기본 제공 스타일(Normal 등) 중 쓰이는 것만 남는다
+        used |= {int(c.get("xfId", "0")) for c in cs if c.get("builtinId") == "0"}
+    keep = sorted(i for i in used if i < len(csx))
+    remap = {old: new for new, old in enumerate(keep)}
+    old_list = list(csx)
+    for e in old_list:
+        csx.remove(e)
+    for old in keep:
+        csx.append(old_list[old])
+    csx.set("count", str(len(keep)))
+    for x in xfs:
+        x.set("xfId", str(remap.get(int(x.get("xfId", "0")), 0)))
+    if cs is not None:
+        for c in list(cs):
+            xid = int(c.get("xfId", "0"))
+            if xid in remap:
+                c.set("xfId", str(remap[xid]))
+            else:
+                cs.remove(c)
+        cs.set("count", str(len(cs)))
+    return len(old_list) - len(keep)
+
+
+def restyle_numfmt(pkg, ws, refs, num_fmt_id):
+    """셀 표시 형식만 바꾼다(예: 1 = '0' 정수)."""
+    cache = pkg.__dict__.setdefault("_xf_cache", {})
+    xfs = pkg.part("xl/styles.xml").find(q("cellXfs"))
+    for ref in refs:
+        cell = get_cell(ws, ref)
+        s = int(cell.get("s", "0"))
+        key = ("numfmt", s, num_fmt_id)
+        if key not in cache:
+            xf = copy.deepcopy(xfs[s])
+            xf.set("numFmtId", str(num_fmt_id))
+            xf.set("applyNumberFormat", "1")
+            xfs.append(xf)
+            xfs.set("count", str(len(xfs)))
+            cache[key] = len(xfs) - 1
+        cell.set("s", str(cache[key]))
+
+
+def narrow_merge(ws, old, new):
+    """병합 범위 하나를 바꾼다(예: 'B2:E2' → 'B2:D2')."""
+    ms = merges(ws)
+    if old in ms:
+        set_merges(ws, [new if m == old else m for m in ms])
