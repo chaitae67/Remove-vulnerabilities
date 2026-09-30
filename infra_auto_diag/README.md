@@ -231,6 +231,7 @@ web_windows_check.ps1 웹서버(IIS/윈도우 Tomcat) 점검 (WEB-01~26, 자동�
 db_oracle_check.sh   DBMS(Oracle) 점검 (D-01~26, sqlplus, CSV/JSON/HTML)
 make_report.py       진단 결과(JSON/CSV) → 공식 양식 보고서 xlsx (linux/windows/dbms/web/aws/azure/gcp/naver)
 make_reports.py      폴더 안 CSV/JSON 을 종류별로 묶어 일괄 보고서 생성(결과보고서_출력/)
+makereport_all.py    양식·변환코드 내장 단일 파일 — 서버/PC 어디서든 CSV→xlsx (파이썬3+lxml)
 server_report.py     보고서 양식 채우기 코어(모든 종류 공통, lxml)
 infra_report.py      간이 보고서 생성(lxml 없을 때 클라우드 폴백)
 보고서_양식_*.xlsx    공식 결과보고서 양식 (Linux/Windows/DBMS/Webserver/AWS/Azure/GCP/Naver)
