@@ -1,16 +1,16 @@
 {
   "schemaVersion": "2.2",
-  "description": "DB server scan: Oracle DBMS only (infra excluded - the DB host's large filesystem makes the infra file-walk too heavy). Oracle connect string from SSM Parameter Store (SecureString), never echoed. Uploads CSV to S3 results/.",
+  "description": "DB server scan: Oracle DBMS only, run INSIDE the Oracle container via docker exec (host has no sqlplus). Uses in-container OS auth (/ as sysdba) so no password is needed. Uploads CSV to S3 results/. Infra is excluded (the DB host's file-walk is too heavy).",
   "parameters": {
     "S3Base": {
       "type": "String",
       "description": "S3 base prefix (tools/ and results/ live under it).",
       "default": "s3://vuln-lab-backup/infra-auto-diag"
     },
-    "OracleConnParam": {
+    "Container": {
       "type": "String",
-      "description": "SSM Parameter Store name (SecureString) holding the Oracle connect string, e.g. oraadmin/PW@//localhost:1521/FREEPDB1 as sysdba",
-      "default": "/autodiag/oracle_conn"
+      "description": "Name of the running Oracle Docker container on the DB host.",
+      "default": "oracle-xe"
     }
   },
   "mainSteps": [
@@ -18,18 +18,21 @@
       "action": "aws:runShellScript",
       "name": "scan",
       "inputs": {
-        "timeoutSeconds": "1200",
+        "timeoutSeconds": "900",
         "runCommand": [
           "if ! command -v aws >/dev/null 2>&1; then echo '[!] aws CLI not available on this host'; exit 1; fi",
+          "if ! command -v docker >/dev/null 2>&1; then echo '[!] docker not found on this host'; exit 1; fi",
+          "if [ -z \"$(docker ps -q -f name={{Container}})\" ]; then echo '[!] container {{Container}} is not running'; exit 1; fi",
           "WORK=/tmp/autodiag; mkdir -p \"$WORK/scan\"; cd \"$WORK\"",
-          "rm -f scan/*.csv scan/*.html 2>/dev/null || true",
-          "echo '[*] oracle scan (infra excluded on DB host)...'",
+          "rm -f scan/*.csv 2>/dev/null || true",
           "aws s3 cp {{S3Base}}/tools/db_oracle_check.sh db_oracle_check.sh || { echo '[!] download db_oracle_check failed'; exit 1; }",
-          "export ORACLE_CONN=\"$(aws ssm get-parameter --name {{OracleConnParam}} --with-decryption --query Parameter.Value --output text 2>/dev/null)\"",
-          "if [ -z \"$ORACLE_CONN\" ] || [ \"$ORACLE_CONN\" = 'None' ]; then echo '[!] Oracle conn param empty - create SecureString {{OracleConnParam}} first (skipping oracle scan)'; else ( cd scan && timeout 300 bash ../db_oracle_check.sh ); echo \"[*] oracle rc=$? (124=timeout, else ignore)\"; fi",
-          "ls scan/*.csv >/dev/null 2>&1 || { echo '[!] no CSV produced'; exit 1; }",
-          "aws s3 cp scan/ {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv' || { echo '[!] S3 upload failed - check this instance IAM role has s3:PutObject'; exit 1; }",
-          "echo '[*] uploaded CSV to {{S3Base}}/results/'"
+          "echo '[*] oracle scan inside container {{Container}} (OS auth / as sysdba)...'",
+          "timeout 300 docker exec -i {{Container}} bash -s -- --csv /tmp/dbout.csv < db_oracle_check.sh; echo \"[*] oracle rc=$? (124=timeout, else ignore)\"",
+          "TS=$(date +%Y%m%d_%H%M); OUT=\"scan/db_oracle_db_${TS}.csv\"",
+          "docker cp {{Container}}:/tmp/dbout.csv \"$OUT\" || { echo '[!] no CSV produced inside container (scan failed - check container/Oracle)'; exit 1; }",
+          "docker exec {{Container}} rm -f /tmp/dbout.csv 2>/dev/null || true",
+          "aws s3 cp scan/ {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv' || { echo '[!] S3 upload failed - check IAM s3:PutObject'; exit 1; }",
+          "echo '[*] uploaded db_oracle CSV to {{S3Base}}/results/'"
         ]
       }
     }

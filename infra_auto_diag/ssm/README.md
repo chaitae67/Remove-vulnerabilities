@@ -56,34 +56,31 @@ cd C:\Users\EZ\repo-remove-vuln\infra_auto_diag
 powershell -ExecutionPolicy Bypass -File merge_local.ps1        # S3 results/ → 보고서 (-Upload 로 S3 reports/ 공유)
 ```
 
-## db(Oracle) — 인프라 + Oracle 한 번에 (`AutoDiag-DBMS`)
+## db(Oracle) — 컨테이너 안에서 자동 점검 (`AutoDiag-DBMS`)
 
-db 서버는 리눅스 인프라 점검 + Oracle 점검을 **한 문서**로 돌린다. Oracle 접속정보는
-**SSM Parameter Store(SecureString)** 에 넣고 문서가 런타임에 읽어 `ORACLE_CONN` 으로만 쓴다(명령/로그에 평문 노출 없음).
+이 환경의 Oracle 은 **도커 컨테이너(`oracle-xe`, Oracle XE 21c)** 안에서 돌고 **호스트엔 sqlplus 가 없다.**
+그래서 문서가 호스트에서 **`docker exec` 로 컨테이너 안에 들어가** `db_oracle_check.sh` 를 실행한다.
+컨테이너 안 **OS 인증(`/ as sysdba`)** 을 쓰므로 **비밀번호가 필요 없다**(Parameter Store 불필요). 인프라 점검은
+DB 호스트의 파일순회가 무거워 제외한다(그래서 db 는 Oracle 점검만 → DBMS 보고서).
 
 준비(1회):
 ```powershell
-# 1) db 가 SSM 관리대상인지 확인(Online 으로 떠야 함)
+# 1) db 가 SSM 관리대상(Online)인지 확인
 aws ssm describe-instance-information --query "InstanceInformationList[].[InstanceId,IPAddress,PlatformName]" --output table
-
-# 2) Oracle 접속정보를 SecureString 으로 저장 (콘솔에서 넣으면 히스토리에 안 남아 더 안전)
-aws ssm put-parameter --name /autodiag/oracle_conn --type SecureString --value "oraadmin/<비번>@//localhost:1521/FREEPDB1 as sysdba"
-
-# 3) db 인스턴스에 태그
+# 2) db 인스턴스에 태그
 aws ec2 create-tags --resources <db-instance-id> --tags Key=AutoDiag,Value=db
-
-# 4) 문서 등록
+# 3) 문서 등록(이미 있으면 update-document)
 aws ssm create-document --name AutoDiag-DBMS --document-type Command --document-format JSON --content file://ssm/AutoDiag-DBMS.json
 ```
 
-실행:
+실행(다른 서버와 똑같이 명령 한 번, SSH 불필요):
 ```powershell
 aws ssm send-command --document-name AutoDiag-DBMS --targets Key=tag:AutoDiag,Values=db --comment "KISA db scan"
 ```
 
-db 인스턴스 IAM 역할에 필요한 권한: `s3:GetObject/PutObject`(tools/·results/), `ssm:GetParameter`
-(+ SecureString 이 고객관리 KMS 키면 `kms:Decrypt`). → `server_linux_db_*.csv`(리눅스 보고서로) +
-`db_oracle_db_*.csv`(DBMS 보고서로) 두 CSV 가 올라간다.
+- 컨테이너 이름이 다르면 `--parameters Container=<이름>` 로 지정.
+- db IAM 역할 권한: `s3:GetObject/PutObject`(tools/·results/). → `db_oracle_db_*.csv` 가 올라가 DBMS 보고서가 된다.
+- Oracle 점검은 시스템 뷰 쿼리라 가벼워 DB 를 위협하지 않는다(파일순회 없음, timeout 300).
 
 ## 참고
 
