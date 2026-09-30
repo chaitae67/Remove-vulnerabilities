@@ -18,18 +18,18 @@
       "action": "aws:runShellScript",
       "name": "scan",
       "inputs": {
-        "timeoutSeconds": "3600",
+        "timeoutSeconds": "1200",
         "runCommand": [
           "if ! command -v aws >/dev/null 2>&1; then echo '[!] aws CLI not available on this host'; exit 1; fi",
           "WORK=/tmp/autodiag; mkdir -p \"$WORK/scan\"; cd \"$WORK\"",
           "rm -f scan/*.csv scan/*.html 2>/dev/null || true",
           "echo '[*] (1/2) infra scan...'",
           "aws s3 cp {{S3Base}}/tools/kisa_all_check.ps1 kisa_all_check.ps1 || { echo '[!] download kisa_all_check failed'; exit 1; }",
-          "bash kisa_all_check.ps1 --only infra -o scan; echo \"[*] infra done (exit $?, not a failure)\"",
+          "timeout 600 bash kisa_all_check.ps1 --only infra -o scan; rc=$?; echo \"[*] infra rc=$rc (124=timeout, else ignore)\"",
           "echo '[*] (2/2) oracle scan...'",
           "aws s3 cp {{S3Base}}/tools/db_oracle_check.sh db_oracle_check.sh || { echo '[!] download db_oracle_check failed'; exit 1; }",
           "export ORACLE_CONN=\"$(aws ssm get-parameter --name {{OracleConnParam}} --with-decryption --query Parameter.Value --output text 2>/dev/null)\"",
-          "if [ -z \"$ORACLE_CONN\" ] || [ \"$ORACLE_CONN\" = 'None' ]; then echo '[!] Oracle conn param empty - create SecureString {{OracleConnParam}} first (skipping oracle scan)'; else ( cd scan && bash ../db_oracle_check.sh ); echo \"[*] oracle done (exit $?, not a failure)\"; fi",
+          "if [ -z \"$ORACLE_CONN\" ] || [ \"$ORACLE_CONN\" = 'None' ]; then echo '[!] Oracle conn param empty - create SecureString {{OracleConnParam}} first (skipping oracle scan)'; else ( cd scan && timeout 300 bash ../db_oracle_check.sh ); echo \"[*] oracle rc=$? (124=timeout, else ignore)\"; fi",
           "ls scan/*.csv >/dev/null 2>&1 || { echo '[!] no CSV produced'; exit 1; }",
           "aws s3 cp scan/ {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv' || { echo '[!] S3 upload failed - check this instance IAM role has s3:PutObject'; exit 1; }",
           "echo '[*] uploaded CSV to {{S3Base}}/results/'"
