@@ -10,6 +10,7 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
   server_linux_<host>_*.csv                                       → 리눅스(최대 4대 한 보고서)
   server_windows_<host>_*.csv                                     → 윈도우(최대 2대 한 보고서)
   web_iis_/web_nginx_/web_tomcat_<host>_*.csv                     → 웹서버(IIS/Nginx/Tomcat 합쳐 1개)
+  web_linux_<nginx|tomcat>_ / web_windows_<iis|tomcat>_<host>_*.csv  → 〃 (통합 점검 kisa_all_check.ps1 출력)
   db_oracle_<host>_*.csv                                          → DBMS
 
 사용:
@@ -89,7 +90,7 @@ def classify(path):
         return "linux", "linux", "linux", None, host
     if name.startswith("server_windows"):
         return "windows", "windows", "windows", None, host
-    m = re.match(r"web_(iis|nginx|tomcat)", name)
+    m = re.match(r"web_(?:(?:linux|windows)_)?(iis|nginx|tomcat)", name)   # web_nginx_ / web_linux_nginx_
     if m:
         return "web", "web", "web", m.group(1), host
     if name.startswith(("db_oracle", "dbms", "oracle")):
@@ -107,7 +108,8 @@ def classify(path):
 
 def _host_from(stem):
     """server_linux_<host>_20260930_0224 → <host> (뒤의 날짜/시각 토큰 제거)."""
-    s = re.sub(r"^(server_linux|server_windows|web_[a-z]+|db_oracle|cloud_[a-z]+)_", "", stem, flags=re.I)
+    s = re.sub(r"^(server_linux|server_windows|web_(?:(?:linux|windows)_)?[a-z]+|db_oracle|cloud_[a-z]+)_", "",
+               stem, flags=re.I)
     s = re.sub(r"_?\d{6,8}(_\d{3,6})?$", "", s)      # _YYYYMMDD(_HHMM)
     return s or ""
 
