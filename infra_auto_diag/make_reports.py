@@ -13,9 +13,16 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
   db_oracle_<host>_*.csv                                          → DBMS
 
 사용:
-  python make_reports.py                        # 현재 폴더 → ./결과보고서_출력/
+  python make_reports.py                        # 현재 폴더(하위 폴더 포함) → ./결과보고서_출력/
   python make_reports.py <입력폴더> -o <출력폴더>
   python make_reports.py --kind linux a.csv b.csv   # 종류를 직접 지정(파일명이 규칙과 다를 때)
+
+이 스크립트는 make_report.py·server_report.py·양식(보고서_양식_*.xlsx)이 필요하다. 따라서:
+  · infra_auto_diag 안이나 그 상위/근처(같은 저장소 안 어디든)에 두면 알아서 찾는다.
+  · 완전히 무관한 폴더에 둘 거면 INFRA_DIR 환경변수로 infra_auto_diag 경로를 지정한다.
+    (Windows)  set INFRA_DIR=C:\...\infra_auto_diag & python make_reports.py 입력csv
+    (bash)     INFRA_DIR=/path/infra_auto_diag python make_reports.py 입력csv
+입력 폴더는 하위 폴더까지 재귀로 훑는다.
 """
 import argparse
 import glob
@@ -24,12 +31,42 @@ import re
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, SCRIPT_DIR)
 for _s in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+
+def _find_tools():
+    """make_report.py·server_report.py·양식 파일이 있는 폴더(보통 infra_auto_diag)를 찾는다.
+    이 스크립트를 아무 폴더에 둬도 동작하도록: 옆 폴더 → 상위 폴더들 → 환경변수(INFRA_DIR) 순으로 탐색."""
+    seen = []
+    here = SCRIPT_DIR
+    cands = [here, os.path.join(here, "infra_auto_diag")]
+    d = here
+    for _ in range(6):                       # 상위 폴더로 올라가며 infra_auto_diag 찾기
+        cands += [d, os.path.join(d, "infra_auto_diag")]
+        d = os.path.dirname(d)
+    env = os.environ.get("INFRA_DIR")
+    if env:
+        cands.insert(0, env)
+    for c in cands:
+        c = os.path.abspath(c)
+        if c in seen:
+            continue
+        seen.append(c)
+        if os.path.exists(os.path.join(c, "make_report.py")) and \
+           os.path.exists(os.path.join(c, "server_report.py")):
+            return c
+    return None
+
+
+_TOOLS = _find_tools()
+if not _TOOLS:
+    sys.exit("[!] make_report.py·server_report.py 를 찾지 못했습니다. 이 스크립트를 infra_auto_diag 안이나 그 근처에 두거나, "
+             "INFRA_DIR 환경변수로 그 폴더를 지정하세요.")
+sys.path.insert(0, _TOOLS)
 
 import make_report as MR       # noqa: E402  (_load_scan, _find_template, TEMPLATE_SUFFIX)
 import server_report           # noqa: E402
@@ -141,6 +178,7 @@ def main():
         if os.path.isdir(p):
             for pat in ("*.csv", "*.json"):
                 files += glob.glob(os.path.join(p, pat))
+                files += glob.glob(os.path.join(p, "**", pat), recursive=True)   # 하위 폴더까지
         elif os.path.isfile(p):
             files.append(p)
     files = sorted(set(os.path.abspath(f) for f in files
