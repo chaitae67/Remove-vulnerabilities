@@ -13,15 +13,15 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
   web_linux_<nginx|tomcat>_ / web_windows_<iis|tomcat>_<host>_*.csv  → 〃 (통합 점검 kisa_all_check.ps1 출력)
   db_oracle_<host>_*.csv                                          → DBMS
 
-출력 파일명(공식 양식 형식은 그대로, 종류별 고정 이름 + 버전):
-  (자동화진단)리눅스_서버_취약점진단_결과보고서_v<N>.xlsx      (리눅스 최대 4대 누적)
-  (자동화진단)윈도우_서버_취약점진단_결과보고서_v<N>.xlsx      (윈도우 최대 2대 누적)
-  (자동화진단)Webserver_서버_취약점진단_결과보고서_v<N>.xlsx    (웹 여러 대 누적)
-  (자동화진단)DBMS_서버_취약점진단_결과보고서_v<N>.xlsx        (DB 마다 1개)
-  (자동화진단)클라우드_서버_취약점진단_결과보고서_<CSP>_<계정>_v<N>.xlsx  (계정마다 1개)
+출력 파일명(공식 양식 형식은 그대로, 종류별 고정 이름 + 생성 시각 YYMMDDHHMM):
+  (자동화진단)리눅스_서버_취약점진단_결과보고서_<YYMMDDHHMM>.xlsx      (리눅스 최대 4대 누적)
+  (자동화진단)윈도우_서버_취약점진단_결과보고서_<YYMMDDHHMM>.xlsx      (윈도우 최대 2대 누적)
+  (자동화진단)Webserver_서버_취약점진단_결과보고서_<YYMMDDHHMM>.xlsx    (웹 여러 대 누적)
+  (자동화진단)DBMS_서버_취약점진단_결과보고서_<YYMMDDHHMM>.xlsx        (DB 마다 1개)
+  (자동화진단)클라우드_서버_취약점진단_결과보고서_<CSP>_<계정>_<YYMMDDHHMM>.xlsx  (계정마다 1개)
   · 같은 호스트(클라우드는 계정)를 다시 스캔하면 최신 스캔으로 교체(누적).
-  · 내용이 바뀌면 _v 번호가 올라가고 옛 버전 파일은 지운다(한 종류 = 항상 최신 1개). 같으면 버전 유지.
-    버전은 출력 폴더의 .report_version.json 에 종류별로 기록된다(지우면 v1 부터 다시).
+  · 내용이 바뀌면 그 시각의 새 파일이 생기고 옛 파일은 그대로 남는다(이력 보존). 내용이 같으면 새로 안 만든다.
+    최신본 기록은 출력 폴더의 .report_version.json 에 종류별로 남는다(터미널엔 이번 최신 파일만 표시).
 
 사용:
   python make_reports.py                        # 현재 폴더(하위 폴더 포함) → ./결과보고서_출력/
@@ -150,16 +150,6 @@ def _sig(servers):
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:10]
 
 
-def _bump(manifest, mkey, sig):
-    """내용 서명으로 버전 결정. 같으면 같은 버전(덮어씀), 바뀌면 +1. (버전, 바뀜여부) 반환."""
-    ent = manifest.get(mkey) or {}
-    if ent.get("sig") == sig and ent.get("version"):
-        return ent["version"], False
-    version = int(ent.get("version", 0)) + 1
-    manifest[mkey] = {"version": version, "sig": sig}
-    return version, True
-
-
 def _load_manifest(out_dir):
     try:
         with open(os.path.join(out_dir, MANIFEST), encoding="utf-8") as f:
@@ -274,35 +264,31 @@ def _one_report(fill_kind, tpl_key, files, out_dir, meta, manifest):
             units.append((part, fill_kind, chunk))
 
     base = REPORT_NAME.get(fill_kind, f"보고서_{fill_kind}")
+    now = time.strftime("%y%m%d%H%M")                    # 생성 시각 YYMMDDHHMM
     outs = []
-    written_by_name = {}
     for tail, mkey, chunk in units:
         sig = _sig(chunk)
-        version, changed = _bump(manifest, mkey, sig)
+        part = "" if fill_kind == "cloud" else tail       # 초과분 파트 접미사 _(2) 등
+        mkey_full = f"{mkey}|{part}"
         name = f"{base}_{tail}" if (fill_kind == "cloud") else base
-        out = os.path.join(out_dir, f"{name}_v{version}{'' if fill_kind == 'cloud' else tail}.xlsx")
+        ent = manifest.get(mkey_full) or {}
+        # 내용이 이전과 같고 그 파일이 아직 있으면 새로 안 만들고 기존 최신본 유지
+        if ent.get("sig") == sig and ent.get("file") and \
+           os.path.exists(os.path.join(out_dir, ent["file"])):
+            outs.append(os.path.join(out_dir, ent["file"]))
+            print(f"  [=] {ent['file']}  ({len(chunk)}대/개, 변경 없음 → 기존 유지)")
+            continue
+        out = os.path.join(out_dir, f"{name}_{now}{part}.xlsx")
+        if os.path.exists(out):                            # 같은 분에 이미 있으면 겹침 방지
+            out = os.path.join(out_dir, f"{name}_{now}{part}_2.xlsx")
         try:
             server_report.fill_report(fill_kind, chunk, tpl, out, meta=meta)
         except Exception as e:  # noqa: BLE001
             print(f"  [!] 생성 실패({fill_kind}/{mkey}): {type(e).__name__}: {e}")
             continue
+        manifest[mkey_full] = {"sig": sig, "file": os.path.basename(out)}
         outs.append(out)
-        written_by_name.setdefault(name, set()).add(os.path.basename(out))
-        print(f"  [+] {os.path.basename(out)}  ({len(chunk)}대/개, "
-              f"{'새 내용→버전 갱신' if changed else '내용 동일→버전 유지'})")
-    # 같은 종류(같은 이름)의 옛 버전 파일은 지우고 최신 버전만 남긴다(한 종류 = 한 파일).
-    try:
-        existing = os.listdir(out_dir)
-    except OSError:
-        existing = []
-    for name, keep in written_by_name.items():
-        for old in existing:
-            if old.endswith(".xlsx") and old.startswith(name + "_v") and old not in keep:
-                try:
-                    os.remove(os.path.join(out_dir, old))
-                    print(f"  [-] 옛 버전 삭제: {old}")
-                except OSError:
-                    pass
+        print(f"  [+] {os.path.basename(out)}  ({len(chunk)}대/개, 새로 생성)")
     return outs
 
 
