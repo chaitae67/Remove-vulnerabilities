@@ -65,7 +65,7 @@ fi
 
 # 4) 전 서버 CSV + 현재 버전기록 취합
 aws s3 sync "$S3/results/" allcsv --exclude "*" --include "*.csv" --quiet
-aws s3 cp "$S3/reports/.보고서_버전.json" "out/.보고서_버전.json" --quiet 2>/dev/null || true
+aws s3 cp "$S3/reports/.report_version.json" "out/.report_version.json" --quiet 2>/dev/null || true
 
 # 5) 병합 보고서 생성(python3 + lxml)
 if ! python3 -c 'import lxml.etree' 2>/dev/null; then
@@ -79,5 +79,5 @@ python3 makereport_all.py allcsv -o out || { echo "[!] 보고서 생성 실패";
 
 # 6) 병합 결과(xlsx + 버전기록)를 S3 보고서에
 aws s3 cp out/ "$S3/reports/" --recursive --exclude "*" --include "*.xlsx"
-aws s3 cp "out/.보고서_버전.json" "$S3/reports/.보고서_버전.json" --quiet
+aws s3 cp "out/.report_version.json" "$S3/reports/.report_version.json" --quiet
 echo "[*] 완료 → $S3/reports/ 에 병합 결과보고서 갱신됨"
