@@ -28,6 +28,10 @@ _ANY4, _ANY6 = "0.0.0.0/0", "::/0"
 # 1.3 사용자 식별 태그로 인정하는 키(부분 일치, 소문자 비교)
 _ID_TAG_HINTS = ("name", "mail", "dept", "department", "team", "owner", "employee",
                  "이름", "성명", "이메일", "메일", "부서", "소속", "사번")
+# 1.3 식별 태그 중 '이름' 계열 키. 사용자 정보가 이름 태그뿐인데 그 값이 계정 용도 설명이면 인터뷰로 넘긴다
+_NAME_TAG_HINTS = ("name", "이름", "성명")
+_NON_PERSON_RE = re.compile(r"계정|용도|테스트|자동화|(?<![a-z])(?:cli|test|bot|automation|account)(?![a-z])",
+                            re.I)
 
 # 2.x — 서비스 역할의 신뢰 주체(서비스)로 분류, 액션 접두어로 서비스 전체권한 근거 수집
 _INSTANCE_TRUST = {"ec2", "ecs", "ecs-tasks", "eks", "eks-fargate-pods", "eks-nodegroup",
@@ -298,6 +302,49 @@ def _listeners(ctx, cli, arn):
     if arn not in c:
         c[arn] = _pages(cli, "describe_listeners", "Listeners", LoadBalancerArn=arn)
     return c[arn]
+
+
+def _instance_azs(ctx, r):
+    """리전의 인스턴스 ID -> 가용영역 — 3.10 ELB.13 근거용. 조회 실패 시 None 을 캐시해 LB 마다 재조회하지 않는다."""
+    c = ctx["cache"].setdefault("inst_az", {})
+    if r not in c:
+        try:
+            ec2 = ctx["sess"].client("ec2", region_name=r)
+            c[r] = {i["InstanceId"]: (i.get("Placement") or {}).get("AvailabilityZone")
+                    for resv in _pages(ec2, "describe_instances", "Reservations") for i in resv["Instances"]}
+        except Exception:
+            c[r] = None
+    return c[r]
+
+
+def _target_azs(ctx, cli, arn, r):
+    """LB 에 등록된 대상의 가용영역 — 3.10 ELB.13 근거용.
+
+    instance 대상은 인스턴스 배치 AZ, ip 대상은 등록 시 지정한 AZ, alb 대상은 그 ALB 의 AZ 로 본다.
+    lambda 대상과 VPC 밖 ip 대상(AZ=all)은 AZ 를 따질 수 없어 집계에서 뺀다.
+    반환: (대상 수, AZ 집합, AZ 해당 없는 대상 수, AZ 미확인 대상 수, 인스턴스 조회 실패 여부)
+    """
+    targets = {}
+    for tg in _pages(cli, "describe_target_groups", "TargetGroups", LoadBalancerArn=arn):
+        typ = tg.get("TargetType", "instance")
+        for d in cli.describe_target_health(TargetGroupArn=tg["TargetGroupArn"])["TargetHealthDescriptions"]:
+            targets.setdefault(d["Target"]["Id"], (typ, d["Target"].get("AvailabilityZone")))
+    inst = _instance_azs(ctx, r) if any(t == "instance" for t, _ in targets.values()) else {}
+    alb_az = {lb["LoadBalancerArn"]: [z["ZoneName"] for z in lb.get("AvailabilityZones", [])]
+              for lb in _elbv2(ctx, r)[1]}
+    azs, skip, unknown = set(), 0, 0
+    for tid, (typ, az) in targets.items():
+        if typ == "lambda" or az == "all":
+            skip += 1
+            continue
+        got = ([(inst or {}).get(tid)] if typ == "instance"
+               else alb_az.get(tid, []) if typ == "alb" else [az])
+        got = [z for z in got if z]
+        if got:
+            azs.update(got)
+        else:
+            unknown += 1
+    return len(targets), azs, skip, unknown, inst is None
 
 
 def _ssl_protocols(ctx, cli, policy):
@@ -598,17 +645,40 @@ def _account_mgmt(rep, ctx):
         if not users:
             rep.na("1.3", "IAM 사용자 없음")
             return
-        bad = []
+        def is_id(k):
+            return any(h in k.lower() for h in _ID_TAG_HINTS)
+
+        def is_name(k):                       # 'TeamName' 처럼 다른 식별 키와 겹치면 이름 키로 보지 않는다
+            k = k.lower()
+            return (any(h in k for h in _NAME_TAG_HINTS)
+                    and not any(h in k for h in _ID_TAG_HINTS if h not in _NAME_TAG_HINTS))
+
+        bad, odd, ok = [], [], []
         for u in users:
-            keys = [t["Key"] for t in _pages(iam, "list_user_tags", "Tags", UserName=u["UserName"])]
-            if not any(h in k.lower() for k in keys for h in _ID_TAG_HINTS):
-                bad.append((u["UserName"], f"{u['UserName']}(태그: {', '.join(keys) if keys else '없음'})"))
+            name = u["UserName"]
+            tags = _pages(iam, "list_user_tags", "Tags", UserName=name)
+            ids = [t for t in tags if is_id(t["Key"]) and t.get("Value", "").strip()]
+            if not ids:
+                keys = [t["Key"] + ("(값 비어 있음)" if is_id(t["Key"]) else "") for t in tags]
+                bad.append((name, f"{name}(태그: {', '.join(keys) if keys else '없음'})"))
+            elif all(is_name(t["Key"]) and "@" not in t["Value"] and _NON_PERSON_RE.search(t["Value"])
+                     for t in ids):
+                # 사용자 정보가 이름 태그뿐인데 그 값이 계정 용도 설명이면 사람 정보인지 알 수 없다 — 값을 보여 주고 인터뷰로
+                odd.append((name, f"{name}({', '.join(t['Key'] + '=' + t['Value'] for t in ids)})"))
+            else:
+                ok.append(f"{name}({'·'.join(t['Key'] for t in ids)})")
         note = "※ AWS Organizations·AD 연동으로 사용자를 관리하면 태그가 없어도 양호로 볼 수 있음(가이드 비고)"
+        odd_ev = (["사용자 정보가 이름 태그뿐인데 그 값이 사람 이름이 아닌 계정 용도 설명으로 보이는 IAM 사용자 "
+                   "— 담당자 정보(이름/이메일/부서)가 태그에 있는지 확인:"] + [o[1] for o in odd]) if odd else []
         if bad:
             rep.vuln("1.3", ["사용자 식별 태그(이름/이메일/부서 등)가 없는 IAM 사용자:"]
-                     + [b[1] for b in bad] + [note], [b[0] for b in bad])
+                     + [b[1] for b in bad] + odd_ev + [note], [b[0] for b in bad])
+        elif odd:
+            rep.man("1.3", odd_ev + [f"그 외 {len(ok)}명은 식별 태그 설정됨: {', '.join(ok)}", note],
+                    [o[0] for o in odd])
         else:
-            rep.good("1.3", f"IAM 사용자 {len(users)}명 모두 식별 태그(이름/이메일/부서 등) 설정됨")
+            rep.good("1.3", [f"IAM 사용자 {len(users)}명 모두 식별 태그(이름/이메일/부서 등) 설정됨",
+                             "사용자별 식별 태그 키: " + ", ".join(ok)])
     safe(rep, "1.3", c13)
 
     # 1.4 IAM 그룹 구성원 관리 — 인터뷰
@@ -635,21 +705,27 @@ def _account_mgmt(rep, ctx):
                                          "Values": ["running", "stopped"]}]):
                 for i in resv["Instances"]:
                     total += 1
+                    rid = f"{i['InstanceId']}({r})"
                     if not i.get("KeyName"):
-                        no_key.append(f"{i['InstanceId']}({r})")
+                        no_key.append(rid)
                     if i.get("Platform") == "windows" or "windows" in (i.get("PlatformDetails") or "").lower():
-                        windows.append(i["InstanceId"])
-        # Windows 는 RDP 가 암호 인증 구조(Key Pair 는 초기 Administrator 암호 복호화용)라 근거에 구분해 둔다
-        win_note = ([f"참고: Windows {len(windows)}대({', '.join(windows)})는 RDP 암호 인증 구조 — Key Pair 는 "
-                     "초기 Administrator 암호 복호화용이므로 별도 로컬 계정 암호로 접속하는지 인터뷰 확인"]
-                    if windows else [])
+                        nm = next((t["Value"] for t in i.get("Tags", []) if t["Key"] == "Name"), "")
+                        windows.append((rid, f"{i['InstanceId']}({nm}, {r})" if nm else rid))
+        # Windows 는 RDP 로그온이 계정 암호 인증이다(Key Pair 는 초기 Administrator 암호 복호화용).
+        # Key Pair 가 등록돼 있어도 실제로 일반 패스워드로 접속하는지는 API 로 알 수 없어 양호로 확정하지 않는다.
+        win_ev = ([f"Windows {len(windows)}대: {', '.join(w[1] for w in windows)} — RDP 로그온이 계정 암호 인증이고 "
+                   "Key Pair 는 초기 Administrator 암호 복호화용이므로, 별도 로컬 계정 암호(일반 패스워드)로 "
+                   "접속하는지 인터뷰 확인"] if windows else [])
         if total == 0:
             rep.na("1.5", "EC2 인스턴스 없음")
         elif no_key:
             rep.man("1.5", [f"EC2 {total}대 중 Key Pair 미지정 {len(no_key)}대: {', '.join(no_key)}",
-                            "SSM/패스워드 등 대체 접속 수단 여부 인터뷰 확인"] + win_note, no_key)
+                            "SSM/패스워드 등 대체 접속 수단 여부 인터뷰 확인"] + win_ev,
+                    list(dict.fromkeys(no_key + [w[0] for w in windows])))
+        elif windows:
+            rep.man("1.5", [f"EC2 {total}대 모두 생성 시 Key Pair(PEM) 등록됨"] + win_ev, [w[0] for w in windows])
         else:
-            rep.good("1.5", [f"EC2 {total}대 모두 생성 시 Key Pair(PEM) 등록됨"] + win_note)
+            rep.good("1.5", f"EC2 {total}대 모두 생성 시 Key Pair(PEM) 등록됨")
     safe(rep, "1.5", c15)
 
     # 1.6 Key Pair 보관 관리 — PC·공유폴더·EC2 내부 보관 위치는 API 로 알 수 없어 인터뷰.
@@ -1144,6 +1220,29 @@ def _virtual_resource(rep, ctx):
                 azs = len(lb.get("AvailabilityZones", []))
                 if azs < 2:
                     probs.append(f"ELB.13 가용영역 {azs}개(2개 이상 필요)")
+                # ELB.13 제어 문구는 '등록된 인스턴스'의 AZ 수 — 판정은 LB AZ 로 하되 등록 대상 AZ 를 근거에 남긴다
+                try:
+                    n_t, t_azs, skip, unknown, inst_fail = _target_azs(ctx, cli, arn, r)
+                except Exception as e:
+                    notes.append(f"{name}: 대상 그룹 조회 {'권한 없음' if _is_denied(e) else '실패'}"
+                                 " — ELB.13 등록 대상 AZ 미확인")
+                else:
+                    lb_az = sorted(z["ZoneName"] for z in lb.get("AvailabilityZones", []))
+                    line = f"ELB.13 참고 — {name}: LB 가용영역 {len(lb_az)}개({', '.join(lb_az)})"
+                    if not n_t:
+                        line += " / 등록 대상 없음"
+                    else:
+                        line += f" / 등록 대상 {n_t}개"
+                        if t_azs:
+                            line += f"의 가용영역 {len(t_azs)}개({', '.join(sorted(t_azs))})"
+                        extra = ([f"AZ 해당 없음 {skip}개(lambda·VPC 외부 대상)"] if skip else []) + (
+                            [f"AZ 미확인 {unknown}개" + ("(인스턴스 조회 불가)" if inst_fail else "")]
+                            if unknown else [])
+                        if extra:
+                            line += " — " + ", ".join(extra)
+                        if len(t_azs) == 1 and not unknown:
+                            line += " — 등록 대상이 1개 AZ 에만 있음(판정은 LB 가용영역 기준)"
+                    notes.append(line)
                 label = f"{name}({typ},{r})"
                 (viol if probs else passed).append(f"{label}: {', '.join(probs)}" if probs else label)
             # Classic Load Balancer
