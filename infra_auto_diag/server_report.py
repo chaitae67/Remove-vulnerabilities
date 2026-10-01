@@ -552,6 +552,7 @@ def _fill_targets(bk, os_kind, servers, spec):
                     (sv.get("osver") or "").strip(), (sv.get("role") or "-").strip())
         for col, v in zip("CDEF", vals):
             bk.put(tw, f"{col}{r}", v)
+            bk.align(tw, f"{col}{r}", vertical="center")      # 행 높이 커져도 세로 가운데(IP 등 아래쏠림 방지)
     b1 = spec["b1"].format(n=len(servers), label=label)
     bk.put(tw, "B1", b1)
     bk.fit_rows(tw, rows, list("CDEF"), min_ht=16.5)
@@ -675,6 +676,7 @@ def _fill_web(bk, spec, servers, meta):
             for col, v in zip("CDEF", ((sv.get("host") or "").strip(), (sv.get("ip") or "-").strip(),
                                        (sv.get("osver") or "").strip(), (sv.get("role") or "-").strip())):
                 bk.put(tw, f"{col}{row}", v)
+                bk.align(tw, f"{col}{row}", vertical="center")
         bk.fit_rows(tw, sc["rows"][: len(svs)], list("CDEF"), min_ht=16.5)
         dw = bk.sheet(sc["detail"])
         row_of = _code_rows(bk, dw, first, last)
