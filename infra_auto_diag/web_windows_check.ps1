@@ -319,10 +319,47 @@ if ($Target -eq "tomcat") {
 
     Write-Host "[ 1. 계정 관리 ]" -ForegroundColor White
     Rep "WEB-01" "NA" @("가이드 점검대상(Tomcat/JEUS)에 IIS 미포함 → IIS 관리자 계정은 서버 계정 항목(W-01)에서 점검")
+    # WEB-02 가이드: 관리자 비밀번호가 암호화되어 있거나 유추하기 어려우면 양호(웹 전용 관리자 계정·WMSVC 유무는 기준 아님)
+    #   IIS 관리자 = 로컬 Administrators(SAM 해시) + IIS 관리자 사용자(administration.config credentials, SHA-256 해시)
+    #   (1) IIS 구성(administration/applicationHost/redirection.config)의 password 속성을 XML 로 읽음(주석·connectionString 내부 제외)
+    #       [enc:]·해시가 아닌 평문은 강도 평가(p.277): 2종 10자·3종 8자 미만, 계정명 포함(같은 요소 userName·administration.config <add> name,
+    #       도메인 제외 3자 이상), admin/root 포함, 영문만, 1111·1234·abcd 식 4자 연속이면 약함 → 취약(값·계정명은 출력 안 함, 길이·종류 수·사유만)
+    #       기준 충족 평문은 취약에서 빼고 아래 정책 분기로 넘김([enc:] 재설정 권고만 근거에 남김), 빈 값은 내장 계정(IUSR 등)이라 제외
+    #   (2) SAM 쪽 secedit: ClearTextPassword=1(해독 가능 저장) + 복잡도 미적용 → 취약, 1 + 복잡도 적용 → 수동확인
+    #       0 + 복잡도 사용·최소 8자(3종 8자) → 양호, 0 + 복잡도 미흡 → 수동확인(실제 비밀번호 확인), 확인 불가 → 수동확인
     $wmsvc = Get-Service WMSVC -ErrorAction SilentlyContinue
     if (-not $IIS_INSTALLED) { Rep "WEB-02" "NA" @("IIS 미설치") }
-    elseif ($null -eq $wmsvc) { Rep "WEB-02" "VULN" @("WMSVC/IIS 관리자 사용자 미사용 → 웹 전용 관리자 계정 부재, 자격증명 정책 미비(전용 관리 계정·강한 비밀번호 권장)") }
-    else { Rep "WEB-02" "MAN" @("IIS 관리자 사용자 존재 → 비밀번호 복잡도/암호화 정책 확인(WMSVC=$($wmsvc.Status))") }
+    else { $sd02 = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { "Sysnative" } else { "System32" }
+        $cfg02 = Join-Path $env:windir "$sd02\inetsrv\config"; $cr02 = 0; $wk02 = @(); $st02 = @(); $nr02 = @(); $sec02 = @{}
+        foreach ($f02 in @("administration.config","applicationHost.config","redirection.config")) { $p02 = Join-Path $cfg02 $f02
+            if (-not (Test-Path -LiteralPath $p02)) { if ($f02 -eq "applicationHost.config") { $nr02 += "$f02(없음)" }; continue }
+            try { $x02 = New-Object Xml.XmlDocument; $x02.XmlResolver = $null; $x02.Load($p02); $a02 = @($x02.SelectNodes("//@password")) } catch { $nr02 += "$f02(읽기 실패)"; continue }
+            foreach ($n02 in $a02) { $v02 = "$($n02.Value)"; if ($v02 -eq "") { continue }; $cr02++
+                if ($v02 -match '^\[enc:.+:enc\]$' -or ($f02 -eq "administration.config" -and $v02 -match '^[0-9A-Fa-f]{64,}$')) { continue }
+                $k02 = 0; foreach ($r02 in @('[A-Z]','[a-z]','[0-9]','[^A-Za-z0-9]')) { if ($v02 -cmatch $r02) { $k02++ } }
+                $e02 = $n02.OwnerElement; $u02 = $e02.GetAttribute("userName"); if ($u02 -eq "" -and $f02 -eq "administration.config" -and $e02.LocalName -eq "add") { $u02 = $e02.GetAttribute("name") }
+                $u02 = (($u02 -split '\\')[-1] -split '@')[0].ToLowerInvariant(); $q02 = $v02.ToLowerInvariant(); $h02 = @()
+                if ($u02.Length -ge 3 -and $q02.Contains($u02)) { $h02 += "계정명 포함" }
+                if ($q02 -match 'admin|root') { $h02 += "admin/root 포함" }
+                if ($v02 -match '^[A-Za-z]+$') { $h02 += "영문만" }
+                for ($i02 = 0; $i02 -le $q02.Length - 4; $i02++) { $s02 = $q02.Substring($i02, 4)
+                    if ($s02 -match '^(.)\1{3}$' -or @(@('0123456789','abcdefghijklmnopqrstuvwxyz','9876543210','zyxwvutsrqponmlkjihgfedcba') | Where-Object { $_.Contains($s02) }).Count) { $h02 += "4자 연속"; break } }
+                $d02 = "$f02 <$($e02.LocalName)> password(평문 $($v02.Length)자·$($k02)종$(if ($h02.Count) { '·' + ($h02 -join '·') }))"
+                if ($h02.Count -eq 0 -and (($k02 -ge 3 -and $v02.Length -ge 8) -or ($k02 -ge 2 -and $v02.Length -ge 10))) { $st02 += $d02 } else { $wk02 += $d02 } } }
+        if ($IS_ADMIN) { $inf02 = Join-Path $env:TEMP ("web02_secpol_{0}.inf" -f $PID)
+            secedit /export /cfg $inf02 /areas SECURITYPOLICY /quiet 2>$null | Out-Null
+            foreach ($l02 in @(Get-Content $inf02 -Encoding Unicode -ErrorAction SilentlyContinue)) { if ($l02 -match '^\s*(ClearTextPassword|PasswordComplexity|MinimumPasswordLength)\s*=\s*(\d+)') { $sec02[$matches[1]] = [int]$matches[2] } }
+            Remove-Item $inf02 -Force -ErrorAction SilentlyContinue }
+        $ct02 = $sec02["ClearTextPassword"]; $pc02 = $sec02["PasswordComplexity"]; $ml02 = $sec02["MinimumPasswordLength"]; $cx02 = ($pc02 -eq 1 -and $ml02 -ge 8)
+        $pol02 = "로컬 정책: ClearTextPassword=$(if ($null -eq $ct02) {'확인 불가'} else {$ct02}), PasswordComplexity=$(if ($null -eq $pc02) {'확인 불가'} else {$pc02}), MinimumPasswordLength=$(if ($null -eq $ml02) {'확인 불가'} else {$ml02})"
+        $iis02 = "IIS 구성 password 속성 $($cr02)건(평문 약함 $($wk02.Count)건·기준 충족 $($st02.Count)건, 나머지 [enc:]/해시), WMSVC=$(if ($wmsvc) {$wmsvc.Status} else {'미설치'})"
+        $ev02 = @($iis02, $pol02); if ($st02.Count -gt 0) { $ev02 += "평문 저장(강도 기준 충족): $(($st02 | Select-Object -First 5) -join ', ') → IIS 관리자/appcmd 로 다시 설정해 [enc:] 암호화 저장 권고" }
+        if ($wk02.Count -gt 0) { Rep "WEB-02" "VULN" (@("IIS 구성 파일에 유추하기 쉬운 비밀번호 평문 저장(2종 10자·3종 8자 미만 또는 계정명·admin/root 포함·영문만·4자 연속): $(($wk02 | Select-Object -First 5) -join ', ') → 복잡도 기준 비밀번호로 바꾸고 IIS 관리자/appcmd 로 다시 설정해 [enc:] 암호화 저장") + $ev02) }
+        elseif ($nr02.Count -gt 0 -or $null -eq $ct02 -or $null -eq $pc02 -or $null -eq $ml02) { Rep "WEB-02" "MAN" (@("IIS 구성/로컬 보안 정책 확인 불가$(if ($nr02.Count) {": $($nr02 -join ', ')"}) → 관리자 권한으로 재실행해 관리자 비밀번호 암호화 저장·복잡도 확인") + $ev02) }
+        elseif ($ct02 -eq 1 -and -not $cx02) { Rep "WEB-02" "VULN" (@("ClearTextPassword=1(해독 가능한 암호화 저장) + 복잡도 정책 미흡(PasswordComplexity=$pc02, 최소 $($ml02)자) → 관리자 비밀번호가 암호화·복잡도 어느 쪽도 보장되지 않음, '사용 안 함'·복잡도 적용 후 비밀번호 재설정") + $ev02) }
+        elseif ($ct02 -eq 1) { Rep "WEB-02" "MAN" (@("ClearTextPassword=1(해독 가능한 암호화 저장), 복잡도 정책은 적용 → 실제 관리자 비밀번호가 3종 8자/2종 10자 이상인지 확인, '사용 안 함' 설정 후 비밀번호 재설정 권고") + $ev02) }
+        elseif ($cx02) { Rep "WEB-02" "GOOD" (@("관리자 비밀번호가 SAM 에 해시로 저장(해독 가능 암호화 없음) + 복잡도 정책(3종 이상·$($ml02)자 이상) 적용, IIS 구성에 유추하기 쉬운 평문 없음 → 암호화·유추 어려움 충족") + $ev02) }
+        else { Rep "WEB-02" "MAN" (@("비밀번호는 해시로 저장되나 복잡도 정책 미흡(PasswordComplexity=$pc02, 최소 $($ml02)자) → 관리자 비밀번호가 3종 8자/2종 10자 이상인지 확인") + $ev02) } }
     $sam = Join-Path $env:windir "System32\config\SAM"; $samUsers = AclHasUsers $sam
     if ($null -eq $samUsers) { Rep "WEB-03" "MAN" @("SAM ACL 확인 불가 → System/Administrators 로만 제한 확인") }
     elseif ($samUsers) { Rep "WEB-03" "VULN" @("$sam 에 Users/Everyone 접근 권한 → System/Administrators 로 제한 필요") }

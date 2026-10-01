@@ -17,7 +17,7 @@
 #     윈도우 웹서비스   web_windows_<iis|tomcat>_<호스트>_<YYYYMMDD_HHMM>.csv/.html
 #   → python make_reports.py <폴더> 로 바로 보고서 변환 가능
 #
-#   내장 원본: kisa_unix_check.sh(974bb402), kisa_win_check.ps1(e6956d73), web_linux_check.sh(243a6c2a), web_windows_check.ps1(db4a08d3)
+#   내장 원본: kisa_unix_check.sh(767de226), kisa_win_check.ps1(e6956d73), web_linux_check.sh(243a6c2a), web_windows_check.ps1(c7713331)
 #==============================================================================
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 
@@ -315,19 +315,22 @@ sec_update_count() {
   fi
 }
 
-# 8진수 권한 비교 : perm <= max ?  (stat -c %a 출력 그대로 사용)
+# 권한 'max 이하' 판정 (stat -c %a 출력 그대로 사용)
+#   숫자 크기가 아니라 비트 부분집합으로 비교: max 에 없는 비트(소유자·그룹·기타·SUID/SGID/Sticky)가
+#   하나라도 켜져 있으면 거짓.  예) 기준 644 → 600·640·444 참 / 622·466·4644·700 거짓
+#   (숫자 비교는 622<644, 044<400 처럼 그룹·기타 권한이 더 넓어도 '이하'로 통과시켜 미탐이 났다)
 perm_le() {
   local p m
-  p=$(( 8#${1:-7777} )) 2>/dev/null || return 1
-  m=$(( 8#${2:-0} ))
-  [ "$p" -le "$m" ]
+  case "${1:-}" in ''|*[!0-7]*) return 1 ;; esac   # 빈 값·비정상 값(stat 실패) → 거짓
+  p=$(( 8#$1 )); m=$(( 8#${2:-0} ))
+  [ $(( p & ~m & 8#7777 )) -eq 0 ]
 }
 # (perm & mask) 비트가 하나라도 켜져 있으면 참  (예: 타 사용자 쓰기 검사 perm_has 002)
 perm_has() { [ "$(( 8#${1:-0} & 8#$2 ))" -ne 0 ]; }
 
-# 그룹/기타 권한이 기준을 넘지 않으면 참(소유자 권한은 무시).
-#   "권한 640 이하" 의 올바른 해석 — 숫자 크기가 아니라 그룹/기타 비트가 기준의 부분집합인지로 판단.
-#   예) 700 은 그룹/기타 권한이 없으므로 640 보다 제한적 → 참(perm_le 의 700>640 오판 보정).
+# 그룹/기타 권한이 기준을 넘지 않으면 참(소유자 권한·특수비트는 무시. 특수비트가 문제인 곳은 호출부에서 따로 검사 — 예: U-37 명령어).
+#   그룹/기타 비트가 기준의 부분집합인지로 판단한다. 소유자·특수비트까지 보는 perm_le 와 다른 점:
+#   예) 기준 640 에서 700 은 참(perm_le 는 소유자 x 비트 초과로 거짓).
 perm_go_le() {  # $1=파일권한  $2=기준(기본 640)
   local p m
   p=$(( 8#${1:-777} )) 2>/dev/null || return 1
@@ -362,7 +365,7 @@ walk_reg_files() {
 chk_perm() {  # code title file maxperm "owner1 owner2 ..."
   local code=$1 title=$2 f=$3 maxp=$4 owners=$5 p o
   if [ ! -e "$f" ]; then rep "$code" "$title" NA "$f 미존재 → 점검 대상 없음"; return; fi
-  p=$(stat -c '%a' "$f" 2>/dev/null); o=$(stat -c '%U' "$f" 2>/dev/null)
+  p=$(stat -Lc '%a' "$f" 2>/dev/null); o=$(stat -Lc '%U' "$f" 2>/dev/null)   # 링크면 대상 파일 기준
   case " $owners " in
     *" $o "*) : ;;
     *) rep "$code" "$title" VULN "$f 소유자=$o 권한=$p  (기준: 소유자 [$owners], 권한 $maxp 이하)"; return ;;
@@ -761,34 +764,119 @@ if [ -z "$sysshell" ]; then rep U-11 "사용자 Shell 점검" GOOD "시스템 �
 else rep U-11 "사용자 Shell 점검" VULN "로그인 가능 셸을 가진 시스템 계정: $sysshell → nologin/false 로 변경"; fi
 
 # U-12 세션 종료 시간 설정
-# [기준] 양호 - Session Timeout(TMOUT) 600초 이하로 설정 / 취약 - 미설정 또는 초과
-tmout=$(grep -rhE '^[[:space:]]*(export[[:space:]]+)?TMOUT=' /etc/profile /etc/profile.d/ /etc/bashrc /etc/bash.bashrc /etc/csh.cshrc /etc/csh.login 2>/dev/null | grep -vE '^[[:space:]]*#' | grep -oE 'TMOUT=[0-9]+' | grep -oE '[0-9]+' | sort -n | head -1)
+# [기준] 양호 - Session Timeout 600초(10분) 이하로 설정 / 취약 - 미설정 또는 초과
+#   ※ sh/ksh/bash: 로그인 셸이 읽는 순서(아래 sh_sys)대로 TMOUT 대입을 따라가 마지막 값(실효값)으로 판정한다(최솟값 아님).
+#     readonly 가 걸린 뒤의 대입·unset 은 무시(bash 동작). export/readonly/declare/typeset 접두, 따옴표 값,
+#     ';'·'&&'·'||' 로 이은 문장, unset TMOUT 도 반영. 실효값이 숫자가 아니면(변수·산술식) 수동확인.
+#   ※ csh/tcsh: 로그인 셸이 csh/tcsh 인 계정이 있을 때만 /etc/csh.cshrc·csh.login·profile.d/*.csh(읽는 순서) 의
+#     set autologout(분) 1~10 도 요구한다(csh 파일의 TMOUT= 는 보지 않음).
+#   ※ SSH ClientAliveInterval 은 가이드 판단 대상이 아니라 참고로만 표시.
+# sh_sys: sh 계열 로그인 셸이 시스템 환경설정 파일을 읽는 실제 순서(U-12·U-14 공용). 파일마다 awk 에 읽을 줄 범위 lo·hi(빈값=끝까지)를 넘긴다.
+#   /etc/profile 은 /etc/bash.bashrc 를 source 하는 줄과 profile.d 루프 줄에서 나눠 그 자리에 해당 파일을 끼워 읽는다.
+#   /etc/profile(~source 줄) → /etc/bash.bashrc → /etc/profile(~루프 줄) → /etc/profile.d/*.sh·sh.local → /etc/profile(루프 뒤) → /etc/bashrc
+#   (루프 앞에서 bash.bashrc 를 source 하는 줄이 없으면 bash.bashrc 를 맨 앞에 둔다)
+sh_pd=$(grep -nE '^[^#]*/etc/profile\.d' /etc/profile 2>/dev/null | head -1 | cut -d: -f1)
+sh_bb=$(grep -nE '^[^#]*(\.|source)[[:space:]]+["'\'']?/etc/bash\.bashrc' /etc/profile 2>/dev/null | head -1 | cut -d: -f1)
+[ -n "$sh_pd" ] && [ -n "$sh_bb" ] && [ "$sh_pd" -lt "$sh_bb" ] && sh_bb=""
+sh_sys=()
+sh_seg() { [ -f "$1" ] && [ -r "$1" ] && sh_sys+=("lo=$2" "hi=$3" "$1"); }
+if [ -n "$sh_bb" ]; then sh_seg /etc/profile 1 "$sh_bb"; sh_seg /etc/bash.bashrc 1 ""; sh_seg /etc/profile $((sh_bb+1)) "$sh_pd"
+else sh_seg /etc/bash.bashrc 1 ""; sh_seg /etc/profile 1 "$sh_pd"; fi
+for f in /etc/profile.d/*.sh /etc/profile.d/sh.local; do sh_seg "$f" 1 ""; done
+[ -n "$sh_pd" ] && sh_seg /etc/profile $((sh_pd+1)) ""
+sh_seg /etc/bashrc 1 ""
+tm_res=$(awk -v q="'" '
+  FNR < lo+0 || (hi != "" && hi+0 < FNR) { next }      # sh_sys 의 줄 범위 밖
+  { l=$0; sub(/^[ \t]+/, "", l); if (l ~ /^#/) next; sub(/[ \t]#.*$/, "", l)
+    n=split(l, st, /;|&&|\|\|/)
+    for (i=1; i<=n; i++) {
+      s=st[i]; sub(/^[ \t]+/, "", s)
+      while (s ~ /^(then|do|else|\{)[ \t]/) sub(/^[^ \t]+[ \t]+/, "", s)
+      if (s ~ /^unset[ \t]+(-v[ \t]+)?TMOUT([ \t]|$)/) { if (!ro) { v=""; src=FILENAME ":" FNR "(unset)" }; continue }
+      kw=""
+      while (match(s, /^(export|readonly|declare|typeset)([ \t]+-[a-zA-Z]+)*[ \t]+/)) { if (kw == "") kw=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) }
+      r=(kw ~ /^readonly/ || kw ~ /^(declare|typeset)[ \t].*-[a-zA-Z]*r/)
+      if (s ~ /^TMOUT=/) {
+        x=substr(s, 7); sub(/[ \t].*$/, "", x); gsub(/"/, "", x); gsub(q, "", x)
+        if (!ro) { v=x; src=FILENAME ":" FNR }
+        if (r) ro=1
+      } else if (r && s ~ /^TMOUT([ \t]|$)/) ro=1
+    } }
+  END { printf "%s|%s|%s", v, src, (ro ? ",readonly" : "") }' "${sh_sys[@]}" /dev/null 2>/dev/null)
+tmout=${tm_res%%|*}; tm_rest=${tm_res#*|}; tm_src=${tm_rest%%|*}; tm_ro=${tm_rest#*|}
+tm_ok=0; tm_num=1
+case "$tmout" in ''|*[!0-9]*) tm_num=0 ;; *) [ "$tmout" -ge 1 ] 2>/dev/null && [ "$tmout" -le 600 ] && tm_ok=1 ;; esac
+csh_users=$(awk -F: '$7 ~ /(^|\/)t?csh$/ {printf "%s ", $1}' /etc/passwd 2>/dev/null)
+csh_ok=1; csh_ev=""
+if [ -n "$csh_users" ]; then
+  cf=(); for f in /etc/csh.cshrc /etc/csh.login /etc/profile.d/*.csh; do [ -f "$f" ] && [ -r "$f" ] && cf+=("$f"); done
+  alo_res=$(awk '{ l=$0; sub(/#.*$/, "", l) }
+    l ~ /^[ \t]*set[ \t]+autologout([ \t]|=|$)/ { x=l; sub(/^[^=]*=?[ \t]*\(?[ \t]*/, "", x); sub(/[^0-9].*$/, "", x); a=x; src=FILENAME ":" FNR }
+    l ~ /^[ \t]*unset[ \t]+autologout/ { a=""; src=FILENAME ":" FNR "(unset)" }
+    END { printf "%s|%s", a, src }' "${cf[@]}" /dev/null 2>/dev/null)
+  alo=${alo_res%%|*}; alo_src=${alo_res#*|}; csh_ok=0
+  case "$alo" in ''|*[!0-9]*) ;; *) [ "$alo" -ge 1 ] 2>/dev/null && [ "$alo" -le 10 ] && csh_ok=1 ;; esac
+  csh_ev="csh·tcsh 로그인 계정(${csh_users% }) autologout=${alo:-미설정}${alo_src:+ ($alo_src)} (10분 이하 필요)"
+fi
 cai=$(sshd_val clientaliveinterval)
 cac=$(sshd_val clientalivecountmax)
-if [ -n "$tmout" ] && [ "$tmout" -ge 1 ] && [ "$tmout" -le 600 ]; then
-  rep U-12 "세션 종료 시간 설정" GOOD "TMOUT=$tmout (<=600). SSH ClientAliveInterval=${cai:-미설정}"
+if [ "$tm_ok" -eq 1 ]; then tm_ev="TMOUT=$tmout (<=600, 실효값 ${tm_src}${tm_ro})"
+else tm_ev="TMOUT=${tmout:-미설정}${tm_src:+ (실효값 ${tm_src}${tm_ro})} (600초 이하 필요)"; fi
+if [ "$tm_ok" -eq 1 ] && [ "$csh_ok" -eq 1 ]; then
+  rep U-12 "세션 종료 시간 설정" GOOD "$tm_ev. SSH ClientAliveInterval=${cai:-미설정}" ${csh_ev:+"$csh_ev"}
+elif [ "$tm_num" -eq 0 ] && [ -n "$tmout" ] && [ "$csh_ok" -eq 1 ]; then
+  rep U-12 "세션 종료 시간 설정" MAN "TMOUT=$tmout (실효값 ${tm_src}${tm_ro}) 숫자가 아님(변수·산술식) → 로그인 셸에서 echo \$TMOUT 로 600 이하 확인. SSH ClientAliveInterval=${cai:-미설정}"
 else
-  rep U-12 "세션 종료 시간 설정" VULN "TMOUT=${tmout:-미설정} (600초 이하 필요). SSH ClientAliveInterval=${cai:-미설정}/CountMax=${cac:-미설정}"
+  rep U-12 "세션 종료 시간 설정" VULN "$tm_ev. SSH ClientAliveInterval=${cai:-미설정}/CountMax=${cac:-미설정}" ${csh_ev:+"$csh_ev"}
 fi
 
 # U-13 안전한 비밀번호 암호화 알고리즘 사용
-# [기준] 양호 - SHA-256/512, yescrypt 등 안전한 알고리즘 / 취약 - DES, MD5 등
+# [기준] 양호 - SHA-2 이상의 안전한 비밀번호 암호화 알고리즘 사용 / 취약 - 취약한 알고리즘 사용
+#   가이드 점검 Step1~3 을 모두 만족해야 양호(AND — 설정·기존 해시 중 하나만 강하다고 양호로 보지 않음):
+#   ① /etc/login.defs ENCRYPT_METHOD = SHA256·SHA512(Debian 은 YESCRYPT 도). 미설정이면 기본 DES/MD5 라 취약.
+#   ② $PAM_PW 의 password 유형 pam_unix.so 줄마다 sha256·sha512·yescrypt 지정, md5·bigcrypt 없음.
+#   ③ /etc/shadow 해시가 모두 SHA-2 이상($5·$6·$y·$gy·$7 형식, 잠금 '!' 뒤에 남은 해시 포함).
+#      그 밖의 $ 형식(MD5 $1 등)·DES(13자 이상 비-$ 해시)는 취약.
+#   ※ Blowfish($2a·$2b·$2y 해시, pam blowfish, BCRYPT)는 가이드에 SHA-2 이상 여부가 없어 수동확인.
+#   ※ 비-root 로 shadow 를 못 읽으면 ①② 충족 시 수동확인(root 재점검), 미충족이면 취약.
 em=$(conf_line '^[[:space:]]*ENCRYPT_METHOD' /etc/login.defs | awk '{print $2}')
-pamsha=$(grep -rhE 'pam_unix\.so.*(sha512|sha256|yescrypt)' $PAM_PW 2>/dev/null | grep -vE '^[[:space:]]*#' | head -1)
+u13_bad=""; u13_bf=""
+case "$(printf '%s' "$em" | tr '[:lower:]' '[:upper:]')" in
+  SHA256|SHA512|YESCRYPT) ;;
+  BCRYPT) u13_bf=" ENCRYPT_METHOD=$em" ;;
+  *)      u13_bad=" ENCRYPT_METHOD=${em:-미설정}" ;;
+esac
+pam_f=(); for f in $PAM_PW; do [ -f "$f" ] && pam_f+=("$f"); done
+pam_res=$(awk '{ l=$0; sub(/#.*$/, "", l) }
+  l ~ /^[ \t]*-?password[ \t]/ && l ~ /pam_unix\.so/ {
+    n++; l=" " l " "; gsub(/[ \t]+/, " ", l); f=FILENAME; sub(/.*\//, "", f)
+    if (l ~ / (md5|bigcrypt) /) b=b " " f ":" FNR "(md5·bigcrypt)"
+    else if (l ~ / blowfish /) bf=bf " " f ":" FNR "(blowfish)"
+    else if (l !~ / (sha256|sha512|yescrypt|gost_yescrypt) /) b=b " " f ":" FNR "(알고리즘 미지정)"
+  }
+  END { printf "%d|%s|%s", n, b, bf }' "${pam_f[@]}" /dev/null 2>/dev/null)
+pam_n=${pam_res%%|*}; pam_rest=${pam_res#*|}
+u13_bad="$u13_bad${pam_rest%%|*}"; u13_bf="$u13_bf${pam_rest#*|}"
+[ "${pam_n:-0}" -gt 0 ] 2>/dev/null || u13_bad="$u13_bad pam_unix(password) 줄 없음($PAM_PW)"
+sh_s="?"; sh_w=""; sh_b=""
 if [ "$IS_ROOT" -eq 1 ] && [ -r /etc/shadow ]; then
-  weakacc=$(awk -F: '$2 ~ /^\$1\$/ || ($2 != "" && $2 !~ /^[\*!]/ && $2 !~ /^\$/ && length($2) >= 13 && length($2) <= 14) {print $1}' /etc/shadow | tr '\n' ' ')
-  strong=$(awk -F: '$2 ~ /^\$(5|6|7|y|gy|2b)\$/ {c++} END{print c+0}' /etc/shadow)
-else
-  weakacc=""; strong="?"
+  sh_res=$(awk -F: '{ h=$2; lk=""; if (h ~ /^!/) lk="(잠금)"; sub(/^!+/, "", h) }
+    h == "" || h ~ /^\*/ { next }
+    h ~ /^\$(5|6|7|y|gy)\$/ { s++; next }
+    h ~ /^\$2[abxy]?\$/ { b=b " " $1 lk; next }
+    h ~ /^\$/ || 13 <= length(h) { w=w " " $1 lk }
+    END { printf "%d|%s|%s", s, w, b }' /etc/shadow 2>/dev/null)
+  if [ -n "$sh_res" ]; then sh_s=${sh_res%%|*}; sh_rest=${sh_res#*|}; sh_w=${sh_rest%%|*}; sh_b=${sh_rest#*|}; fi
 fi
-if [ -n "$weakacc" ]; then
-  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" VULN "MD5($1$)/DES 해시 사용 계정: $weakacc"
-elif echo "$em" | grep -qiE 'SHA512|SHA256|YESCRYPT' || [ -n "$pamsha" ] || { [ "$strong" != "?" ] && [ "$strong" -gt 0 ]; }; then
-  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" GOOD "ENCRYPT_METHOD=${em:-미명시}, pam_unix=${pamsha:+sha/yescrypt}, 강한해시 계정수=$strong"
-elif [ "$strong" = "?" ]; then
-  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" MAN "ENCRYPT_METHOD=${em:-미명시} (SHA-2 이상 권장). shadow 확인 불가(비-root) → root로 재점검"
+u13_ev="ENCRYPT_METHOD=${em:-미설정}, pam_unix(password) ${pam_n:-0}줄, SHA-2 이상 해시 계정수=$sh_s"
+if [ -n "$u13_bad" ] || [ -n "$sh_w" ]; then
+  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" VULN "SHA-2 미만 설정·해시:${u13_bad}${sh_w:+ 해시 계정$sh_w(passwd 로 재설정 필요)}" "$u13_ev"
+elif [ "$sh_s" = "?" ]; then
+  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" MAN "ENCRYPT_METHOD·pam_unix 는 SHA-2 이상${u13_bf:+(Blowfish:$u13_bf)}. shadow 확인 불가(비-root) → root로 재점검" "$u13_ev"
+elif [ -n "$u13_bf$sh_b" ]; then
+  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" MAN "Blowfish(bcrypt) 사용:${u13_bf}${sh_b:+ 해시 계정$sh_b} → SHA-2 이상 인정 여부 확인 필요" "$u13_ev"
 else
-  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" VULN "ENCRYPT_METHOD=${em:-미명시}, pam_unix에 sha512/yescrypt 미지정 → 기본 알고리즘 확인 필요"
+  rep U-13 "안전한 비밀번호 암호화 알고리즘 사용" GOOD "ENCRYPT_METHOD=$em, pam_unix(password) ${pam_n}줄 모두 SHA-2 이상 지정, SHA-2 이상 해시 계정수=$sh_s(그 외 해시 없음)"
 fi
 
 #==============================================================================
@@ -796,12 +884,133 @@ echo -e "${W}[ 2. 파일 및 디렉토리 관리 ]${N}"
 #==============================================================================
 
 # U-14 root 홈, PATH 디렉터리 및 PATH 설정
-# [기준] 양호 - PATH 환경변수에 "."이 맨 앞/중간에 없음 / 취약 - 포함
-path_src=$(cat /etc/environment 2>/dev/null; conf_line '(^|[[:space:]])PATH=' /etc/profile /etc/profile.d/*.sh /root/.bash_profile /root/.bashrc /root/.profile 2>/dev/null; echo "PATH=$PATH")
-if echo "$path_src" | grep -qE 'PATH=[^#]*(^|=|:)\.(/|:|$)|PATH=[^#]*::|PATH=:[^#]'; then
-  rep U-14 "root 홈, PATH 디렉터리 및 PATH 설정" VULN "PATH 설정에 '.' 또는 빈 경로(::) 포함: $(echo "$path_src" | grep -E 'PATH=' | tr '\n' ' ' | cut -c1-180)"
+# [기준] 양호 - PATH 환경변수에 "."이 맨 앞/중간에 없음 / 취약 - 맨 앞이나 중간에 포함
+#   ※ 가이드 조치: /etc/profile → root → 일반 사용자 환경설정 파일을 차례로 확인(셸별 대상 파일
+#     + /etc/environment, login.defs ENV_PATH·ENV_SUPATH). 마지막 줄만이 아니라 모든 PATH 대입 줄을 본다:
+#     sh 계열 'PATH=…'·'PATH+=…'(export 등 접두 포함), csh 'setenv PATH …'·'set path=( … )'. CLASSPATH 등은 제외.
+#   ※ 값을 ':'(csh path 는 공백)로 나눠 마지막이 아닌 위치에 '.'·'..'·'./…'·빈 항목이 있으면 취약.
+#     끝의 '.' 은 기준상 양호(참고 표기). 단 셸이 그 뒤에 읽는 파일이 PATH=$PATH:… 로 덧붙이면 중간이 되므로 취약.
+#   ※ 읽는 순서: 시스템 파일은 /etc/environment·login.defs → U-12 의 sh_sys 순서 → csh 시스템 파일.
+#     계정마다 그 상태에서 다시 시작해 로그인 파일(.bash_profile→.bash_login→.profile 중 처음 것, 단위 L)을 읽되
+#     .bashrc 를 부르는 줄 자리에 .bashrc 를 끼운다. L 에 묶이지 않은 나머지 파일(.bashrc·.profile·.kshrc 등)과
+#     csh 파일(.cshrc·.tcshrc·.login)은 단위마다 시스템 상태에서 따로 이어 읽는다(다른 셸·비로그인 셸 흐름).
+#     같은 흐름에서 끝 '.' 뒤에 덧붙이면 취약. 끝 '.' 과 덧붙이기가 서로 다른 계정 단위에 있으면 읽는 순서를
+#     확정할 수 없어 양호 대신 수동확인.
+#   ※ 함수 정의 본문('name () { … }'·'function name', 중괄호 깊이로 추적) 안의 PATH 대입은 호출 여부를 알 수 없어
+#     덧붙이기·재지정 판정에서 뺀다(맨 앞·중간 '.' 은 그대로 취약). 예: RHEL /etc/bashrc 의 pathmunge 재정의.
+#     대신 호출 줄로 판정한다: pathmunge 는 대입으로 본다('after' 면 $PATH 뒤에, 아니면 앞에 추가).
+#     그 밖에 본문에서 $PATH 뒤에 덧붙이는 함수를 끝 '.' 뒤에 부르면 인자·분기에 따라 달라 수동확인.
+#   ※ 스크립트 프로세스의 $PATH(SSM·sudo 비로그인 값)는 실행 방식마다 달라 판정에 쓰지 않는다.
+p14_args=(g=sys); p14_nf=0
+p14_add() {   # $1=단위 $2=파일 $3·$4=읽을 줄 범위(빈값=끝까지)
+  [ -f "$2" ] && [ -r "$2" ] || return 0
+  p14_args+=("u=$1" "lo=$3" "hi=$4" "$2"); [ "$3" = 1 ] && p14_nf=$((p14_nf+1)); return 0
+}
+p14_add S /etc/environment 1 ""; p14_add S /etc/login.defs 1 ""
+p14_args+=(u=S "${sh_sys[@]}")
+for f in "${sh_sys[@]}"; do [ "$f" = lo=1 ] && p14_nf=$((p14_nf+1)); done
+for f in /etc/csh.cshrc /etc/csh.login /etc/profile.d/*.csh; do p14_add S "$f" 1 ""; done
+p14_rh=$(awk -F: '$1=="root" {print $6; exit}' /etc/passwd 2>/dev/null)
+for d in "${p14_rh:-/root}" $(awk -F: -v m="$UID_MIN" 'm <= $3+0 && $3+0 < 60000 && $7 !~ /(nologin|false)/ {print $6}' /etc/passwd 2>/dev/null | sort -u); do
+  [ -d "$d" ] || continue
+  p14_args+=("g=$d")
+  p14_lf=""; for rc in .bash_profile .bash_login .profile; do [ -f "$d/$rc" ] && { p14_lf=$rc; break; }; done
+  p14_bl=""; [ -n "$p14_lf" ] && [ -f "$d/.bashrc" ] && p14_bl=$(grep -nE '^[^#]*(~|\$HOME|\$\{HOME\}|'"$d"')["'\'']?/\.bashrc' "$d/$p14_lf" 2>/dev/null | head -1 | cut -d: -f1)
+  if [ -n "$p14_bl" ]; then p14_add L "$d/$p14_lf" 1 "$p14_bl"; p14_add L "$d/.bashrc" 1 ""; p14_add L "$d/$p14_lf" $((p14_bl+1)) ""
+  elif [ -n "$p14_lf" ]; then p14_add L "$d/$p14_lf" 1 ""; fi
+  for rc in .bash_profile .bash_login .profile .bashrc .kshrc; do
+    [ "$rc" = "$p14_lf" ] || { [ "$rc" = .bashrc ] && [ -n "$p14_bl" ]; } || p14_add "$rc" "$d/$rc" 1 ""
+  done
+  for rc in .cshrc .tcshrc .login; do p14_add C "$d/$rc" 1 ""; done
+done
+p14_res=$(awk -v q="'" '
+  function val1(x,   i, c, o, qc) {          # 대입 값 한 단어(따옴표 안 공백 허용, 따옴표 제거)
+    o=""; qc=""
+    for (i=1; i<=length(x); i++) {
+      c=substr(x, i, 1)
+      if (qc != "") { if (c == qc) qc=""; else o=o c; continue }
+      if (c == "\"" || c == q) { qc=c; continue }
+      if (c ~ /[ \t;&|]/) break
+      o=o c
+    }
+    return o
+  }
+  function addb(m) { if (m in sb) return; sb[m]=1; nb++; if (nb <= 5) B=B " " m }
+  function addm(m) { if (m in sm) return; sm[m]=1; nm++; if (nm <= 3) M=M " " m }
+  function fnb(l,   t, o, c) {             # 함수 정의 본문(정의·닫는 줄 포함)이면 1. 파일마다 중괄호 깊이(fd)로 추적
+    if (l == "") return (0 < fd)
+    if (fw) { fw=0; if (l !~ /^[{]/) return 0 }                     # "name ()" 다음 줄의 "{"
+    else if (fd == 0) {
+      if (l !~ /^(function[ \t]+[^ \t(){}]+|[A-Za-z_][A-Za-z0-9_.:-]*[ \t]*\([ \t]*\))/) return 0
+      fnm=l; sub(/^function[ \t]+/, "", fnm); sub(/[ \t(){].*$/, "", fnm)  # 함수 이름
+      if (l !~ /[{]/) { fw=1; return 1 }
+    }
+    t=l; o=gsub(/[{]/, "", t); c=gsub(/[}]/, "", t); fd+=o-c; if (fd < 0) fd=0
+    return 1
+  }
+  function chk(v, sp, c, f,   e, n, i, k, hit, last, o, x) {   # PATH 값 하나 판정(sp=공백 구분, c=0 sh·1 csh 흐름, f=함수 본문)
+    o=v
+    if (sp) { gsub(/\$\{path(:q)?\}|\$path:q/, "$path", v); n=split(v, e, " ") }   # ${path:q}(RHEL csh.login) 도 $path
+    else { gsub(/\$\{PATH\}/, "$PATH", v); gsub(/\$\{PATH:\+/, "", v); gsub(/\$\{[^}]*\}/, "$V", v); gsub(/[}]/, "", v); gsub(/\$\([^)]*\)/, "$C", v); n=split(v, e, ":") }   # ${PATH:+$PATH:}x → $PATH:x
+    k=0; hit=0; last=0
+    for (i=1; i<=n; i++) {
+      if (e[i] == "$PATH" || e[i] == "$path") { if (!k) k=i; continue }
+      if (e[i] == "" || e[i] ~ /^\.\.?(\/|$)/) { if (i < n || n == 1) hit=1; else last=1 }
+    }
+    if (hit) addb(here "[" substr(o, 1, 50) "]")
+    if (last) { nt++; if (nt <= 5) T=T " " here }
+    if (f) { if (k && k < n) fa[fnm]=1; return }                     # 함수 본문: 실행이 확정되지 않아 순서 판정 제외(덧붙이는 함수만 기록)
+    if (!k) pend[c]=0                                                # PATH 를 새로 지정 → 앞의 끝 . 무효
+    else if (k < n) {                                                # $PATH 뒤에 경로를 덧붙임
+      if (pend[c]) addb(psrc[c] "(끝 " q "." q ")+" here "(뒤에 경로 추가)")
+      if (u != "S") { ap[c SUBSEP u]=here; for (x in tp) { split(x, e, SUBSEP); if (e[1] == c "" && e[2] != u) addm(tp[x] "(끝 " q "." q ")·" here "(뒤에 경로 추가)") } }
+    }
+    if (last) { pend[c]=1; psrc[c]=here; pu[c]=u }
+  }
+  function endu(   j, x, e) {               # 계정 단위가 끝날 때 끝 . 이 남아 있으면, 다른 계정 단위의 덧붙이기와는 순서 불확정
+    if (cu == "" || cu == "S") return
+    for (j=0; j<2; j++) if (pend[j] && pu[j] == cu) {
+      tp[j SUBSEP cu]=psrc[j]
+      for (x in ap) { split(x, e, SUBSEP); if (e[1] == j "" && e[2] != cu) addm(psrc[j] "(끝 " q "." q ")·" ap[x] "(뒤에 경로 추가)") }
+    }
+  }
+  FNR == 1 && (g != cg || u != cu) {        # 계정·단위가 바뀌면 시스템 파일까지의 상태에서 다시 시작
+    endu()
+    if (cg == "sys" && g != "sys") for (j=0; j<2; j++) { s0[j]=pend[j]; s1[j]=psrc[j]; s2[j]=pu[j] }
+    if (g != cg) { split("", ap); split("", tp) }
+    if (g != "sys") for (j=0; j<2; j++) { pend[j]=s0[j]; psrc[j]=s1[j]; pu[j]=s2[j] }
+    cg=g; cu=u }
+  FNR == 1 { fd=0; fw=0 }                   # 함수 본문 추적은 파일(구간)마다 1행부터
+  { l=$0; sub(/^[ \t]+/, "", l); if (l ~ /^#/) l=""; sub(/[ \t]#.*$/, "", l); fb=fnb(l) }
+  l == "" || FNR < lo+0 || (hi != "" && hi+0 < FNR) { next }   # 빈 줄·주석, 끼워 읽기용 줄 범위 밖
+  { here=FILENAME ":" FNR
+    if (match(l, /(^|[ \t;(])setenv[ \t]+PATH[ \t]+/)) chk(val1(substr(l, RSTART+RLENGTH)), 0, 1, fb)
+    if (match(l, /(^|[ \t;(])set[ \t]+path[ \t]*=[ \t]*\(/)) { x=substr(l, RSTART+RLENGTH); sub(/\).*$/, "", x); chk(x, 1, 1, fb) }
+    if (match(l, /(^|[ \t;&|])pathmunge[ \t]+[^ \t;&|()]+/)) {      # pathmunge 디렉터리 [after]
+      x=substr(l, RSTART, RLENGTH); sub(/^.*pathmunge[ \t]+/, "", x); gsub(/"/, "", x); gsub(q, "", x)
+      s=substr(l, RSTART+RLENGTH); gsub(/"/, "", s); gsub(q, "", s)
+      if (s ~ /^[ \t]+after([ \t;&|)]|$)/) x="$PATH:" x; else x=x ":$PATH"
+      chk(x, 0, 0, fb) }
+    if (!fb && pend[0] && l !~ /^unset[ \t]/)                       # 덧붙이는 함수(pathmunge 외) 호출
+      for (x in fa) if (x != "pathmunge" && l ~ ("(^|[ \t;&|])" x "([ \t;&|)]|$)")) addm(psrc[0] "(끝 " q "." q ")·" here "(" x " 호출)")
+    s=l
+    while (match(s, /(^|[ \t;&|(])PATH\+?=/)) {
+      p=substr(s, RSTART, RLENGTH); s=substr(s, RSTART+RLENGTH); x=val1(s)
+      if (p ~ /\+=$/) x="$PATH" x
+      chk(x, 0, 0, fb)
+    } }
+  END { endu(); if (5 < nb) B=B " 외 " (nb-5) "건"; if (3 < nm) M=M " 외 " (nm-3) "건"; printf "OK|%s|%s|%s", B, M, T }' "${p14_args[@]}" /dev/null 2>/dev/null)
+p14_ok=0; p14_bad=""; p14_unk=""; p14_tail=""
+case "$p14_res" in "OK|"*) p14_ok=1; p14_res=${p14_res#OK|}; p14_bad=${p14_res%%|*}; p14_res=${p14_res#*|}; p14_unk=${p14_res%%|*}; p14_tail=${p14_res#*|} ;; esac
+p14_note=""; [ "$IS_ROOT" -ne 1 ] && p14_note=" (비-root 실행: 읽을 수 없는 root·타 계정 파일 제외)"
+if [ "$p14_ok" -ne 1 ]; then
+  rep U-14 "root 홈, PATH 디렉터리 및 PATH 설정" MAN "PATH 설정 파일 분석 실패 → root 로그인 셸 echo \$PATH 와 환경설정 파일 수동 확인"
+elif [ -n "$p14_bad" ]; then
+  rep U-14 "root 홈, PATH 디렉터리 및 PATH 설정" VULN "PATH 맨 앞·중간에 '.' 또는 빈 항목:${p14_bad}"
+elif [ -n "$p14_unk" ]; then
+  rep U-14 "root 홈, PATH 디렉터리 및 PATH 설정" MAN "끝 '.' 뒤 \$PATH 경로 추가의 순서·실행 여부 확정 불가(서로 묶이지 않은 계정 파일·덧붙이는 함수 호출):${p14_unk} → 해당 계정 로그인 셸에서 echo \$PATH 로 '.' 이 맨 끝인지 확인${p14_note}"
 else
-  rep U-14 "root 홈, PATH 디렉터리 및 PATH 설정" GOOD "PATH 설정에 '.' / 빈 경로 없음"
+  rep U-14 "root 홈, PATH 디렉터리 및 PATH 설정" GOOD "PATH 맨 앞·중간에 '.'·빈 항목 없음(전역·root·일반계정 환경설정 ${p14_nf}개 파일 점검)${p14_note}" ${p14_tail:+"참고: 끝에 '.' 있음(기준상 양호, 삭제 권고):$p14_tail"}
 fi
 
 # U-15 파일 및 디렉터리 소유자 설정
@@ -829,7 +1038,7 @@ else rep U-17 "시스템 시작 스크립트 권한 설정" VULN "부적절: $ss
 # U-18 /etc/shadow  [기준] 양호 - 소유자 root + 권한 400 이하
 if [ ! -e /etc/shadow ]; then rep U-18 "/etc/shadow 파일 소유자 및 권한 설정" NA "/etc/shadow 없음"
 else
-  sp=$(stat -c '%a' /etc/shadow); so=$(stat -c '%U' /etc/shadow); sg=$(stat -c '%G' /etc/shadow)
+  sp=$(stat -Lc '%a' /etc/shadow); so=$(stat -Lc '%U' /etc/shadow); sg=$(stat -Lc '%G' /etc/shadow)
   if [ "$so" = root ] && perm_le "$sp" 400; then
     rep U-18 "/etc/shadow 파일 소유자 및 권한 설정" GOOD "/etc/shadow 소유자=$so 권한=$sp (기준 400 이하)"
   elif [ "$so" = root ] && [ "$sg" = shadow ] && perm_le "$sp" 640 && ! perm_has "$sp" 007; then
@@ -843,28 +1052,39 @@ fi
 chk_perm U-19 "/etc/hosts 파일 소유자 및 권한 설정" /etc/hosts 644 "root"
 
 # U-20 /etc/(x)inetd.conf   [기준] 양호 - 소유자 root + 권한 600 이하
-inetd_f=""
-[ -e /etc/xinetd.conf ] && inetd_f=/etc/xinetd.conf
-[ -z "$inetd_f" ] && [ -e /etc/inetd.conf ] && inetd_f=/etc/inetd.conf
-if [ -z "$inetd_f" ]; then rep U-20 "/etc/(x)inetd.conf 파일 소유자 및 권한 설정" NA "(x)inetd 미사용"
+#   대상: 있는 것 모두 — /etc/inetd.conf, /etc/xinetd.conf, xinetd 사용 시 /etc/xinetd.d/* (가이드 [xinetd] 조치 Step 2).
+#   xinetd.d 파일은 xinetd.conf 의 includedir 로 읽히므로 xinetd.conf 가 있거나 xinetd 설치 시에만 대상.
+#   [systemd] system.conf 는 조치 사례에만 있고 판단기준 밖이라 제외.
+u20_fs=(); xd_fs=()
+for f in /etc/inetd.conf /etc/xinetd.conf; do [ -e "$f" ] && u20_fs+=("$f"); done
+for f in /etc/xinetd.d/*; do [ -f "$f" ] && xd_fs+=("$f"); done
+if [ ${#xd_fs[@]} -gt 0 ] && { [ -e /etc/xinetd.conf ] || pkg_installed xinetd; }; then u20_fs+=("${xd_fs[@]}"); fi
+if [ ${#u20_fs[@]} -eq 0 ]; then
+  if [ ${#xd_fs[@]} -gt 0 ]; then rep U-20 "/etc/(x)inetd.conf 파일 소유자 및 권한 설정" NA "(x)inetd 미사용 (/etc/xinetd.d 에 파일 ${#xd_fs[@]}개 있으나 xinetd.conf 없음·xinetd 미설치)"
+  else rep U-20 "/etc/(x)inetd.conf 파일 소유자 및 권한 설정" NA "(x)inetd 미사용"; fi
 else
-  bad=$(for f in "$inetd_f" /etc/xinetd.d/*; do [ -f "$f" ] || continue
-          o=$(stat -c '%U' "$f"); p=$(stat -c '%a' "$f"); { [ "$o" != root ] || ! perm_le "$p" 600; } && echo "$f($o,$p)"; done | tr '\n' ' ')
-  [ -z "$bad" ] && rep U-20 "/etc/(x)inetd.conf 파일 소유자 및 권한 설정" GOOD "$inetd_f 및 xinetd.d/* 소유자 root + 600 이하" \
-                || rep U-20 "/etc/(x)inetd.conf 파일 소유자 및 권한 설정" VULN "부적절: $bad (기준: root, 600 이하)"
+  bad=""
+  for f in "${u20_fs[@]}"; do
+    o=$(stat -Lc '%U' "$f" 2>/dev/null); p=$(stat -Lc '%a' "$f" 2>/dev/null)
+    { [ "$o" = root ] && perm_le "$p" 600; } || bad="$bad $f($o,$p)"
+  done
+  if [ -z "$bad" ]; then rep U-20 "/etc/(x)inetd.conf 파일 소유자 및 권한 설정" GOOD "$(echo "${u20_fs[*]}" | cut -c1-200) 소유자 root + 600 이하"
+  else rep U-20 "/etc/(x)inetd.conf 파일 소유자 및 권한 설정" VULN "부적절:$(echo "$bad" | cut -c1-200) (기준: root, 600 이하)"; fi
 fi
 
 # U-21 /etc/(r)syslog.conf   [기준] 양호 - 소유자 root(또는 bin,sys) + 권한 640 이하
-sysl_f=/etc/rsyslog.conf; [ -e "$sysl_f" ] || sysl_f=/etc/syslog.conf
-sysl_bad=""
-for f in "$sysl_f" /etc/rsyslog.d/*.conf; do
+#   rsyslog.conf·syslog.conf 는 있는 것 모두 + rsyslog.d/*.conf. 소유자는 가이드대로 root/bin/sys 만 허용.
+sysl_f=""; sysl_bad=""; sysl_ok=""
+for f in /etc/rsyslog.conf /etc/syslog.conf; do [ -e "$f" ] && sysl_f="$sysl_f $f"; done
+for f in /etc/rsyslog.conf /etc/syslog.conf /etc/rsyslog.d/*.conf; do
   [ -f "$f" ] || continue
-  o=$(stat -c '%U' "$f"); p=$(stat -c '%a' "$f")
-  case " root bin sys syslog " in *" $o "*) : ;; *) sysl_bad="$sysl_bad $f(소유자=$o)";; esac
+  o=$(stat -Lc '%U' "$f" 2>/dev/null); p=$(stat -Lc '%a' "$f" 2>/dev/null)
+  case " root bin sys " in *" $o "*) : ;; *) sysl_bad="$sysl_bad $f(소유자=$o)";; esac
   perm_le "$p" 640 || sysl_bad="$sysl_bad $f($p)"
+  sysl_ok="$sysl_ok ${f##*/}($o,$p)"
 done
-if [ ! -e "$sysl_f" ]; then rep U-21 "/etc/(r)syslog.conf 파일 소유자 및 권한 설정" NA "syslog 설정파일 없음"
-elif [ -z "$sysl_bad" ]; then rep U-21 "/etc/(r)syslog.conf 파일 소유자 및 권한 설정" GOOD "$sysl_f (+rsyslog.d) 소유자 root(bin/sys) + 640 이하"
+if [ -z "$sysl_f" ]; then rep U-21 "/etc/(r)syslog.conf 파일 소유자 및 권한 설정" NA "syslog 설정파일 없음"
+elif [ -z "$sysl_bad" ]; then rep U-21 "/etc/(r)syslog.conf 파일 소유자 및 권한 설정" GOOD "소유자 root(bin/sys) + 640 이하:$(echo "$sysl_ok" | cut -c1-200)"
 else rep U-21 "/etc/(r)syslog.conf 파일 소유자 및 권한 설정" VULN "부적절:$sysl_bad (기준: root/bin/sys, 640 이하)"; fi
 
 # U-22 /etc/services   [기준] 양호 - 소유자 root(또는 bin,sys) + 권한 644 이하
@@ -925,26 +1145,45 @@ if [ "$devc" -eq 0 ]; then rep U-26 "/dev에 존재하지 않는 device 파일 �
 else rep U-26 "/dev에 존재하지 않는 device 파일 점검" VULN "/dev 내 일반 파일 ${devc}개: $(echo $devf | cut -c1-150)"; fi
 
 # U-27 $HOME/.rhosts, hosts.equiv 사용 금지
-# [기준] 양호 - r계열 미사용, 또는 사용 시 소유자 root/계정 + 권한 600이하 + "+" 없음
+# [기준] 양호 - rlogin/rsh/rexec 미사용, 또는 사용 시 hosts.equiv·.rhosts 가 아래를 모두 충족
+#              1) 소유자 root 또는 해당 계정  2) 권한 600 이하  3) "+" 설정 없음
+#        취약 - r계열 사용 중 위 조건 중 하나라도 미충족 (미사용이면 신뢰파일이 있어도 양호, 삭제 권고만 남김)
+#   ※ r계열 사용: 서버 패키지·소켓 활성·TCP 512~514 LISTEN·inetd.conf/xinetd.d 활성 설정
+#     (rsh 클라이언트 패키지는 서비스가 아니고, UDP 514 는 syslog 라 제외)
+#   ※ "+": '+ +'·'+ 계정'·'호스트 +' 처럼 '+' 로 시작하는 항목(주석 줄 제외)
+#   ※ .rhosts 는 /etc/passwd 의 모든 계정 홈(시스템 계정 포함, 같은 홈은 1회)에서 찾는다.
 r_used=0
-{ pkg_installed rsh-server || pkg_installed rsh || svc_active rlogin.socket || svc_active rsh.socket || port_listen 513 || port_listen 514; } && r_used=1
-rfiles="/etc/hosts.equiv"
-if [ "$IS_ROOT" -eq 1 ]; then
-  while IFS=: read -r _ _ uid _ _ home _; do case "$uid" in ''|*[!0-9]*) continue;; esac
-    { [ "$uid" -ge "$UID_MIN" ] || [ "$uid" = 0 ]; } && [ -f "$home/.rhosts" ] && rfiles="$rfiles $home/.rhosts"; done < /etc/passwd
-fi
-found=""; plusbad=""; permbad=""
-for f in $rfiles; do
-  [ -e "$f" ] || continue; found="$found $f"
-  grep -qE '^[[:space:]]*\+' "$f" 2>/dev/null && plusbad="$plusbad $f"
-  o=$(stat -c '%U' "$f"); p=$(stat -c '%a' "$f")
-  { [ "$o" = root ] || perm_le "$p" 600; } || permbad="$permbad $f($o,$p)"
+{ pkg_installed rsh-server || pkg_installed rsh-redone-server \
+  || svc_active rexec.socket || svc_active rlogin.socket || svc_active rsh.socket \
+  || { ss -Hlnt 2>/dev/null | awk '{print $4}'; netstat -lnt 2>/dev/null | awk '/^tcp/{print $4}'; } | grep -qE '[:.](512|513|514)$' \
+  || grep -qsE '^[[:space:]]*(exec|login|shell)[[:space:]]' /etc/inetd.conf; } && r_used=1
+for r_s in rexec rlogin rsh; do   # xinetd 는 'disable = yes' 가 없으면 활성
+  [ -f "/etc/xinetd.d/$r_s" ] && ! grep -qiE '^[[:space:]]*disable[[:space:]]*=[[:space:]]*yes' "/etc/xinetd.d/$r_s" && r_used=1
 done
-if [ -z "$found" ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD ".rhosts/hosts.equiv 파일 없음 (r계열 서비스 사용=$r_used)"
-elif [ -n "$plusbad" ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" VULN "'+' 설정 존재:$plusbad"
-elif [ -n "$permbad" ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" VULN "소유자/권한 부적절:$permbad (기준: root/계정, 600 이하)"
-elif [ "$r_used" -eq 1 ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" VULN "r계열 서비스 사용 중 + 신뢰파일 존재:$found → r계열 비활성화 권장"
-else rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD "신뢰파일 존재하나 '+' 없음 + 권한 적절 + r계열 미사용:$found"; fi
+found=""; plusbad=""; permbad=""
+r_chk() {  # $1=신뢰파일  $2=허용 소유자(root 외 해당 계정)
+  local f=$1 o p
+  [ -f "$f" ] && [ ! -L "$f" ] || return 0   # rsh(ruserok)는 일반 파일만 읽음(심볼릭 링크·/dev/null 링크는 무시)
+  found="$found $f"
+  grep -vE '^[[:space:]]*#' "$f" 2>/dev/null | grep -qE '(^|[[:space:]])\+' && plusbad="$plusbad $f"
+  o=$(stat -c '%U' "$f" 2>/dev/null); p=$(stat -c '%a' "$f" 2>/dev/null)
+  { { [ "$o" = root ] || [ "$o" = "$2" ]; } && perm_le "$p" 600; } || permbad="$permbad $f($o,$p)"
+}
+r_chk /etc/hosts.equiv root
+if [ "$IS_ROOT" -eq 1 ]; then
+  r_seen=" "
+  while IFS=: read -r r_u _ _ _ _ r_home _; do
+    [ -n "$r_home" ] || continue
+    case "$r_seen" in *" $r_home "*) continue;; esac; r_seen="$r_seen$r_home "
+    r_chk "${r_home%/}/.rhosts" "$r_u"
+  done < /etc/passwd
+fi
+r_bad="${plusbad:+ '+' 설정:$plusbad}${permbad:+ 소유자/권한 부적절:$permbad}"
+if [ "$r_used" -eq 1 ] && [ -n "$r_bad" ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" VULN "r계열 서비스 사용 중 +$r_bad (기준: 소유자 root/해당 계정, 권한 600 이하, '+' 없음)"
+elif [ "$r_used" -eq 1 ] && [ "$IS_ROOT" -ne 1 ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" MAN "r계열 서비스 사용 중, hosts.equiv 는 적절(또는 없음). 계정 홈 .rhosts 는 root 권한으로 확인 필요"
+elif [ -z "$found" ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD ".rhosts/hosts.equiv 파일 없음 (r계열 서비스 사용=$r_used)"
+elif [ "$r_used" -eq 1 ]; then rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD "r계열 서비스 사용 중, 신뢰파일 소유자·권한 적절 + '+' 없음:$found"
+else rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD "r계열 서비스 미사용 (신뢰파일 존재:$found${r_bad:+ / 참고:$r_bad} → 불필요 시 삭제 권장)"; fi
 
 # U-28 접속 IP 및 포트 제한
 # [기준] 양호 - 허용 호스트 IP/포트 제한 설정(TCP Wrapper 또는 호스트 방화벽) / 취약 - 미설정
@@ -953,32 +1192,46 @@ else rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD "신뢰파일 존
 #       이 있으면 전체 허용(단, ': DENY' 로 끝나는 거부 줄은 제외).
 #     - sshd 가 libwrap 에 링크됨(ldd). RHEL/Rocky 8+ 등 tcp_wrappers 가 제거된 sshd 는 hosts.allow/deny 가 무효.
 #     위 조건을 못 채우면 호스트 방화벽 판정으로 넘어간다.
+#   ※ 호스트 방화벽은 사용 여부만 자동 확인한다(INPUT 경로 한정 — Docker 의 FORWARD/DOCKER 규칙은 제외).
+#     규칙 해석(출발지·포트 범위·zone·rich rule 등)은 도구·형식이 다양해 잘못된 양호/취약을 낼 수 있으므로
+#     방화벽이 있으면 수동확인으로 두고, 없으면 TCP Wrapper 판정 결과를 따른다.
 tcpw_deny=$(grep -viE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.deny 2>/dev/null | grep -icE 'ALL[[:space:]]*:[[:space:]]*ALL')
 tcpw_allow=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.allow 2>/dev/null)
 allow_open=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.allow 2>/dev/null \
   | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(sshd|ALL)([,[:space:]][^:]*)?:' \
   | grep -viE ':[[:space:]]*DENY[[:space:]]*$' \
-  | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|0\.0\.0\.0/0)([[:space:]]*$|[[:space:]]*:|[[:space:],]|$)' | head -3 | tr '\n' ';')
+  | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|0\.0\.0\.0/0(\.0\.0\.0)?|\[::\]/0|\*)([[:space:]]*$|[[:space:]]*:|[[:space:],]|$)' | head -3 | tr '\n' ';')
 sshd_bin=$(command -v sshd 2>/dev/null); [ -z "$sshd_bin" ] && [ -x /usr/sbin/sshd ] && sshd_bin=/usr/sbin/sshd
 wrap_ok=0; [ -n "$sshd_bin" ] && have ldd && ldd "$sshd_bin" 2>/dev/null | grep -q libwrap && wrap_ok=1
-fw="none"; fw_rules=0
-svc_active firewalld && { fw="firewalld"; firewall-cmd --list-rich-rules 2>/dev/null | grep -q . && fw_rules=1; firewall-cmd --list-sources 2>/dev/null | grep -q . && fw_rules=1; }
-{ have ufw && ufw status 2>/dev/null | grep -qi '^Status: active'; } && { fw="ufw"; ufw status 2>/dev/null | grep -qiE 'ALLOW|DENY' && fw_rules=1; }
-if [ "$fw" = none ] && [ "$IS_ROOT" -eq 1 ]; then
-  if have nft && nft list ruleset 2>/dev/null | grep -qE 'ip (saddr|daddr)|tcp dport'; then fw="nftables"; fw_rules=1
-  elif have iptables && iptables -S 2>/dev/null | grep -qE '(-s |--dport ).*-j (ACCEPT|DROP|REJECT)'; then fw="iptables"; fw_rules=1; fi
-fi
+# 호스트 방화벽 사용 여부(U-28·U-56 공통) → HFW=none|firewalld|ufw|nftables|iptables, HFW_EV=요약
+hfw_detect() {
+  local r n
+  HFW="none"; HFW_EV=""
+  if svc_active firewalld; then HFW=firewalld; HFW_EV="firewalld 활성(기본 zone=$(run_to 5 firewall-cmd --get-default-zone 2>/dev/null))"; return 0; fi
+  if have ufw && run_to 5 ufw status 2>/dev/null | grep -qi '^Status: active'; then HFW=ufw; HFW_EV="ufw 활성"; return 0; fi
+  [ "$IS_ROOT" -eq 1 ] || return 0
+  if have nft && r=$(run_to 5 nft list ruleset 2>/dev/null) && [ -n "$r" ]; then
+    n=$(printf '%s\n' "$r" | awk '/^[ \t]*chain[ \t]/{c=1;h=0;next} c&&/hook input/{h=1;if(/policy drop/)k++;next} c&&/^[ \t]*[}]/{c=0;next} c&&h&&NF{k++} END{print k+0}')
+    [ "${n:-0}" -gt 0 ] && { HFW=nftables; HFW_EV="nft input 체인 규칙/기본 차단 ${n}건"; return 0; }
+  fi
+  if have iptables && r=$(run_to 5 iptables -S INPUT 2>/dev/null) && [ -n "$r" ]; then
+    n=$(printf '%s\n' "$r" | grep -cE '^-A INPUT |^-P INPUT (DROP|REJECT)$')
+    [ "${n:-0}" -gt 0 ] && { HFW=iptables; HFW_EV="iptables INPUT 규칙/기본 차단 ${n}건"; }
+  fi
+  return 0
+}
+hfw_detect; fw=$HFW
 u28_why="TCP Wrapper 미설정"
 [ "$tcpw_deny" -ge 1 ] && [ -n "$allow_open" ] && u28_why="TCP Wrapper hosts.allow 가 전체 허용(${allow_open%;})"
 [ "$tcpw_deny" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 0 ] && u28_why="TCP Wrapper 설정은 있으나 sshd 가 libwrap 미연동(${sshd_bin:-sshd 없음}) → 무효"
 if [ "$tcpw_deny" -ge 1 ] && [ "$tcpw_allow" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 1 ]; then
   rep U-28 "접속 IP 및 포트 제한" GOOD "TCP Wrapper: hosts.deny ALL:ALL + hosts.allow ${tcpw_allow}줄(특정 호스트만 허용), sshd libwrap 연동 (방화벽=$fw)"
-elif [ "$fw_rules" -eq 1 ]; then
-  rep U-28 "접속 IP 및 포트 제한" GOOD "호스트 방화벽($fw)에 소스/포트 제한 규칙 존재"
-elif [ "$fw" = none ] && [ "$IS_ROOT" -ne 1 ]; then
+elif [ "$fw" != none ]; then
+  rep U-28 "접속 IP 및 포트 제한" MAN "$u28_why. 호스트 방화벽 사용 중($HFW_EV) → SSH 포트의 접속 IP 제한 여부 수동 확인(규칙은 자동 해석 안 함, 클라우드 SG/NACL 별도 점검)"
+elif [ "$IS_ROOT" -ne 1 ]; then
   rep U-28 "접속 IP 및 포트 제한" MAN "$u28_why. 방화벽 규칙은 root 확인 필요 (클라우드는 SG/NACL 별도 점검)"
 else
-  rep U-28 "접속 IP 및 포트 제한" VULN "$u28_why + 호스트 방화벽($fw) 제한 규칙 없음 (클라우드 SG는 별도 점검)"
+  rep U-28 "접속 IP 및 포트 제한" VULN "$u28_why + 호스트 방화벽 미사용 (클라우드 SG는 별도 점검)"
 fi
 
 # U-29 hosts.lpd   [기준] 양호 - 파일 없음, 또는 소유자 root + 권한 600 이하
@@ -1031,30 +1284,79 @@ else
 fi
 
 # U-31 홈 디렉토리 소유자 및 권한
-# [기준] 양호 - 홈 디렉토리 소유자가 해당 계정 + 타 사용자(other) 쓰기 권한 없음
-home_bad=$(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $6 ~ /^\/(home|users|export\/home)\// {print $1":"$6}' /etc/passwd \
-  | while IFS=: read -r u h; do [ -d "$h" ] || continue
-      o=$(stat -c '%U' "$h"); p=$(stat -c '%a' "$h")
-      { [ "$o" != "$u" ] || perm_has "$p" 002; } && echo "$h(소유자=$o,$p)"; done | tr '\n' ' ')
-if [ -z "$home_bad" ]; then rep U-31 "홈 디렉토리 소유자 및 권한 설정" GOOD "일반 사용자 홈 소유자 일치 + other 쓰기 없음"
+# [기준] 양호 - 홈 디렉토리 소유자가 해당 계정이고, 타 사용자(other) 쓰기 권한이 제거된 경우
+#        취약 - 소유자가 해당 계정이 아니거나, 타 사용자 쓰기 권한이 부여된 경우
+#   대상: /etc/passwd 의 root·일반 사용자(UID_MIN~59999)·로그인 셸 계정 홈 — 위치(/home 등)와 무관
+#   (가이드: 사용자 홈 외 개별 디렉토리도 점검). 공용 시스템 경로(/, /bin, /sbin, /usr/bin 등)는 제외.
+#   심볼릭 링크 홈은 대상 디렉토리 기준(stat -L), 소유자는 UID 로 비교(UID 0 별칭 오탐 방지).
+home_bad=$(awk -F: -v m="$UID_MIN" '$3 ~ /^[0-9]+$/ && ($3==0 || ($3>=m && $3<60000) || $7 !~ /\/(nologin|false|true|sync|shutdown|halt)$/) {print $1":"$3":"$6}' /etc/passwd \
+  | while IFS=: read -r u uid h; do
+      case "$h" in ""|/|/bin|/sbin|/usr|/usr/bin|/usr/sbin|/usr/games|/dev|/proc|/var/empty*) continue;; esac
+      [ -d "$h" ] || continue
+      ou=$(stat -Lc '%u' "$h" 2>/dev/null); o=$(stat -Lc '%U' "$h" 2>/dev/null); p=$(stat -Lc '%a' "$h" 2>/dev/null)
+      { [ "$ou" != "$uid" ] || perm_has "$p" 002; } && echo "$h(계정=$u,소유자=$o,$p)"; done | tr '\n' ' ')
+if [ -z "$home_bad" ]; then rep U-31 "홈 디렉토리 소유자 및 권한 설정" GOOD "root·일반 사용자·로그인 가능 계정의 홈 소유자 일치 + other 쓰기 없음"
 else rep U-31 "홈 디렉토리 소유자 및 권한 설정" VULN "부적절: $home_bad (기준: 소유자=계정, other 쓰기 없음)"; fi
 
 # U-32 홈 디렉토리로 지정한 디렉토리의 존재 관리
-# [기준] 양호 - 홈 디렉토리가 없는 계정 없음 / 취약 - 존재
-nohome=$(awk -F: -v m="$UID_MIN" '$3>=m && $3<60000 && $7 !~ /(nologin|false)/ {print $1":"$6}' /etc/passwd \
+# [기준] 양호 - 홈 디렉토리가 존재하지 않는 계정이 발견되지 않는 경우 / 취약 - 발견된 경우
+#   대상: UID 와 무관하게 로그인 가능한 모든 계정(root·시스템 계정 포함, 빈 셸 필드=/bin/sh). NIS(+/-) 줄 제외.
+#   셸이 nologin·false·true·sync·shutdown·halt 인 계정은 가이드 위협(로그인 시 / 할당)이 없어 판정에서 빼고,
+#   그중 홈이 /home 아래로 지정됐는데 없는 계정만 참고로 표시.
+nohome=$(awk -F: 'NF>=7 && $1 !~ /^[+-]/ && $7 !~ /\/(nologin|false|true|sync|shutdown|halt)$/ {print $1":"$6}' /etc/passwd \
   | while IFS=: read -r u h; do { [ -z "$h" ] || [ ! -d "$h" ]; } && echo "$u($h)"; done | tr '\n' ' ')
-if [ -z "$nohome" ]; then rep U-32 "홈 디렉토리로 지정한 디렉토리의 존재 관리" GOOD "로그인 가능 계정의 홈 디렉토리 모두 존재"
-else rep U-32 "홈 디렉토리로 지정한 디렉토리의 존재 관리" VULN "홈 디렉토리 없음: $nohome"; fi
+nohome_ref=$(awk -F: 'NF>=7 && $1 !~ /^[+-]/ && $7 ~ /\/(nologin|false|true)$/ && $6 ~ /^\/home\// {print $1":"$6}' /etc/passwd \
+  | while IFS=: read -r u h; do [ -d "$h" ] || echo "$u($h)"; done | tr '\n' ' ')
+u32_ref=""; [ -n "$nohome_ref" ] && u32_ref="참고(로그인 불가 계정, 판정 제외) /home 하위 홈 미존재: ${nohome_ref% }"
+if [ -z "$nohome" ]; then rep U-32 "홈 디렉토리로 지정한 디렉토리의 존재 관리" GOOD "로그인 가능 계정(root·시스템 계정 포함)의 홈 디렉토리 모두 존재" ${u32_ref:+"$u32_ref"}
+else rep U-32 "홈 디렉토리로 지정한 디렉토리의 존재 관리" VULN "홈 디렉토리 없음: ${nohome% }" ${u32_ref:+"$u32_ref"}; fi
 
 # U-33 숨겨진 파일 및 디렉토리 검색 및 제거
-# [기준] 양호 - 불필요/의심 숨김 파일·디렉토리 없음 / 취약 - 존재
-susp=$( shopt -s nullglob dotglob
-  for f in /tmp/.* /var/tmp/.* /dev/shm/.* /tmp/*/.* /var/tmp/*/.* /dev/shm/*/.*; do
-    case "${f##*/}" in .|..|.X11-unix|.ICE-unix|.font-unix|.Test-unix|.XIM-unix) continue;; esac
-    printf '%s\n' "$f"
-  done 2>/dev/null | head -10 | tr '\n' ' ')
-if [ -z "$susp" ]; then rep U-33 "숨겨진 파일 및 디렉토리 검색 및 제거" GOOD "임시 디렉토리(/tmp,/var/tmp,/dev/shm)에 비정상 숨김 파일 없음"
-else rep U-33 "숨겨진 파일 및 디렉토리 검색 및 제거" VULN "임시 디렉토리에 숨김 파일 존재:$susp → 사유 확인 후 제거"; fi
+# [기준] 양호 - 불필요하거나 의심스러운 숨겨진 파일·디렉토리를 제거한 경우 / 취약 - 제거하지 않은 경우
+#   가이드 점검(find / -name ".*")은 전체 탐색이라 부하가 커서(find 미사용 정책) 악성파일이 주로 놓이는 경로만
+#   깊이를 제한해 bash 로 순회한다(링크·숨김 디렉토리 안으로는 내려가지 않음, 소켓 제외).
+#   1) 숨김 파일이 있을 이유가 없는 경로 — 표준 항목 외 숨김 항목이 있으면 취약
+#      /tmp·/var/tmp·/dev/shm·/dev(2단계), /bin·/sbin·/usr/bin·/usr/sbin·/usr/local/bin·/usr/local/sbin(1단계)
+#      표준: X11 계열(.X11-unix .ICE-unix .font-unix .Test-unix .XIM-unix .X<n>-lock), .s.PGSQL.*, 임시 디렉토리 .oracle,
+#            /dev 의 .udev .initramfs* .lxc* .lxd-mounts, bin 의 FIPS 무결성 파일(.*.hmac)
+#   2) 설정 dotfile 이 정상인 경로 — 의심 항목만 취약: 내용이 실행파일(ELF·#! 스크립트)이거나 스크립트·웹 확장자
+#      (.sh .pl .py .php .jsp .asp .cgi 등)인 숨김 파일, 이름이 점·공백뿐인 위장 항목('...' 등)
+#      /root·/home/*·/etc(2단계), /opt·/srv·/usr/local·/var/www(3단계). 권한이 아니라 내용으로 보므로
+#      chmod -R 로 실행 비트가 붙은 .bashrc·cron .placeholder 등은 걸리지 않는다.
+u33_scan() {  # $1=깊이 $2..=시작 디렉토리 → 숨김 항목 경로(소켓 제외). 단계마다 하위 디렉토리 최대 2000개
+  local maxd=$1 depth=1 d e; shift
+  local -a cur=("$@") nxt
+  while [ ${#cur[@]} -gt 0 ] && [ "$depth" -le "$maxd" ]; do
+    nxt=()
+    for d in "${cur[@]}"; do
+      [ -d "$d" ] || continue
+      for e in "$d"/.[!.]* "$d"/..?*; do [ -S "$e" ] || printf '%s\n' "$e"; done
+      [ "$depth" -lt "$maxd" ] || continue
+      for e in "$d"/*; do [ ${#nxt[@]} -lt 2000 ] || break; [ -d "$e" ] && [ ! -L "$e" ] && nxt+=("$e"); done
+    done
+    cur=("${nxt[@]}"); depth=$((depth+1))
+  done
+}
+susp=$( shopt -s nullglob
+  { { u33_scan 2 /tmp /var/tmp /dev/shm /dev
+      for d in /bin /sbin /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin; do [ -L "$d" ] || u33_scan 1 "$d"; done
+    } | sort -u | while IFS= read -r f; do
+      case "${f##*/}" in (.X11-unix|.ICE-unix|.font-unix|.Test-unix|.XIM-unix|.X[0-9]*-lock|.s.PGSQL.*) continue;; esac
+      case "$f" in (/tmp/.oracle|/var/tmp/.oracle|/dev/.udev|/dev/.initramfs*|/dev/.lxc*|/dev/.lxd-mounts|*bin/.*.hmac) continue;; esac
+      printf '%s\n' "$f"
+    done
+    { u33_scan 2 /root /home/* /etc; u33_scan 3 /opt /srv /usr/local /var/www; } | sort -u | while IFS= read -r f; do
+      b=${f##*/}
+      case "$f" in (/usr/local/bin/*|/usr/local/sbin/*) continue;; esac
+      case "$b" in (*[!.[:space:]]*) ;; (*) printf '%s(위장 이름)\n' "$f"; continue;; esac
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      case "$b" in (*.sh|*.pl|*.py|*.php|*.php[0-9]|*.phtml|*.jsp|*.jspx|*.asp|*.aspx|*.cgi) printf '%s(스크립트)\n' "$f"; continue;; esac
+      hdr=""; IFS= read -r -n 4 hdr 2>/dev/null < "$f"
+      case "$hdr" in ($'\177ELF'|'#!'*) printf '%s(실행파일)\n' "$f";; esac
+    done
+  } 2>/dev/null | head -10 | tr '\n' ' ')
+if [ -z "$susp" ]; then rep U-33 "숨겨진 파일 및 디렉토리 검색 및 제거" GOOD "점검 경로(/tmp·/var/tmp·/dev·bin 디렉토리, 홈·/etc·/opt·/srv·/usr/local·/var/www)에 비정상·의심 숨김 파일 없음"
+else rep U-33 "숨겨진 파일 및 디렉토리 검색 및 제거" VULN "불필요·의심 숨김 파일 존재: ${susp% } → 사유 확인 후 제거"; fi
 
 #==============================================================================
 echo -e "${W}[ 3. 서비스 관리 ]${N}"
@@ -1072,25 +1374,112 @@ svc_off() {  # code title "port들" "proc패턴" "pkg명"
 # U-34 Finger   [기준] 양호 - 비활성화 / 취약 - 활성화
 svc_off U-34 "Finger 서비스 비활성화" 79 "fingerd|in.fingerd" finger-server
 
-# U-35 Anonymous FTP 비활성화
-# [기준] 양호 - 익명 접근 제한 / 취약 - 익명 접근 허용
-if grep -qiE '^[[:space:]]*anonymous_enable[[:space:]]*=[[:space:]]*YES' /etc/vsftpd/vsftpd.conf /etc/vsftpd.conf 2>/dev/null; then
-  rep U-35 "Anonymous FTP 비활성화" VULN "vsftpd anonymous_enable=YES (익명 FTP 허용)"
-elif grep -qiE '^[[:space:]]*<Anonymous' /etc/proftpd/proftpd.conf /etc/proftpd.conf 2>/dev/null; then
-  rep U-35 "Anonymous FTP 비활성화" VULN "proftpd <Anonymous> 블록 존재 (익명 FTP 허용)"
-elif port_listen 21; then
-  rep U-35 "Anonymous FTP 비활성화" MAN "FTP(21) 실행 중이나 익명 설정 미확인 → anonymous 설정 점검"
+# U-35 공유 서비스에 대한 익명 접근 제한 설정
+# [기준] 양호 - 공유 서비스(FTP/NFS/Samba) 익명 접근 제한, 또는 공유 서비스 미사용(가이드: 양호 또는 N/A)
+#        취약 - 공유 서비스 익명 접근 허용
+#   ※ [vsFTP] anonymous_enable 마지막 유효값(미설정 시 vsftpd 기본값 YES) / [ProFTP] <Anonymous> 블록(User·UserAlias 근거)
+#   ※ [NFS] /etc/exports(+exports.d) anonuid·anongid / [Samba] guest ok(=public) = yes
+#   ※ 설정은 그 데몬이 실행 중일 때만 판정 근거로 쓴다(vsftpd·proftpd 는 각자 프로세스/서비스, NFS: nfs-server·nfsd·2049,
+#     Samba: smb/smbd·139/445). 데몬이 꺼져 있으면 남은 설정(패키지 제거 후 conffile 등)은 참고로만 표시
+#   ※ FTP(21 LISTEN·pure-ftpd·in.ftpd)가 실행 중인데 vsftpd·proftpd 가 아니면(inetd in.ftpd·pure-ftpd 등은 ftp 계정이
+#     있으면 익명 허용) [기본 FTP] ftp/anonymous 계정을 근거로 수동확인
+u35_v=""; u35_g=""; u35_m=""; u35_n=""
+ftp_on=0; { port_listen 21 || proc_run pure-ftpd || proc_run in.ftpd; } && ftp_on=1
+vs_on=0; { proc_run vsftpd || svc_active vsftpd; } && vs_on=1
+pf_on=0; { proc_run proftpd || svc_active proftpd; } && pf_on=1
+vs_cf=0
+for f in /etc/vsftpd/vsftpd.conf /etc/vsftpd.conf; do
+  [ -f "$f" ] || continue; vs_cf=1
+  v=$(conf_line '^[[:space:]]*anonymous_enable[[:space:]]*=' "$f"); v=${v#*=}
+  v=$(printf '%s' "$v" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+  case "${v:-YES}" in
+    YES|TRUE|1) u35_a="vsftpd anonymous_enable=${v:-미설정(기본값 YES)}($f)"
+                if [ "$vs_on" -eq 1 ]; then u35_v="$u35_v $u35_a"; else u35_n="$u35_n vsftpd 미실행, $u35_a 잔존"; fi ;;
+    *)          [ "$vs_on" -eq 1 ] && u35_g="$u35_g vsftpd anonymous_enable=$v($f)" ;;
+  esac
+done
+[ "$vs_on" -eq 1 ] && [ "$vs_cf" -eq 0 ] && u35_m="$u35_m vsftpd 실행 중이나 /etc/vsftpd/vsftpd.conf·/etc/vsftpd.conf 없음 → 실제 설정파일의 anonymous_enable 확인"
+pf=""; for f in /etc/proftpd/proftpd.conf /etc/proftpd.conf /etc/proftpd/conf.d/*.conf; do [ -f "$f" ] && pf="$pf $f"; done
+if [ -n "$pf" ] && grep -qiE '^[[:space:]]*<Anonymous' $pf 2>/dev/null; then
+  ua=$(awk 'tolower($1) ~ /^<anonymous/ {a=1} a && tolower($1) ~ /^(user|useralias)$/ {printf "%s%s %s%s", s, $1, $2, ($3 != "" ? " " $3 : ""); s=", "} tolower($1) ~ /^<\/anonymous/ {a=0}' $pf 2>/dev/null)
+  u35_a="proftpd <Anonymous> 블록 존재${ua:+($ua)}"
+  if [ "$pf_on" -eq 1 ]; then u35_v="$u35_v $u35_a"; else u35_n="$u35_n proftpd 미실행, $u35_a 잔존"; fi
+elif [ "$pf_on" -eq 1 ]; then
+  if [ -n "$pf" ]; then u35_g="$u35_g proftpd <Anonymous> 블록 없음"
+  else u35_m="$u35_m proftpd 실행 중이나 /etc/proftpd/proftpd.conf·/etc/proftpd.conf 없음 → 실제 설정파일의 <Anonymous> 블록 확인"; fi
+fi
+if [ "$ftp_on" -eq 1 ] && [ "$vs_on" -eq 0 ] && [ "$pf_on" -eq 0 ]; then
+  fa=$(awk -F: '$1=="ftp" || $1=="anonymous" {printf " %s", $1}' /etc/passwd 2>/dev/null)
+  u35_m="$u35_m FTP 실행 중(21 LISTEN 또는 pure-ftpd/in.ftpd)이나 vsftpd·proftpd 아님 → 익명 접속 허용 여부 점검([기본 FTP] ftp/anonymous 계정:${fa:- 없음})"
+fi
+nfs_anon=$(sed 's/#.*//' /etc/exports /etc/exports.d/*.exports 2>/dev/null | grep -E 'anon(uid|gid)[[:space:]]*=' | awk '{printf " %s", $1}')
+if svc_active nfs-server || svc_active nfs || proc_run nfsd || port_listen 2049; then
+  if [ -n "$nfs_anon" ]; then u35_v="$u35_v NFS anonuid/anongid 설정:$nfs_anon"
+  else u35_g="$u35_g NFS 실행 중이나 anonuid/anongid 없음"; fi
+elif [ -n "$nfs_anon" ]; then u35_n="$u35_n NFS 미실행, /etc/exports anon 옵션 잔존:$nfs_anon"; fi
+smb_on=0; { svc_active smb || svc_active smbd || proc_run smbd || port_listen 445 || port_listen 139; } && smb_on=1
+smb_t=""; [ "$smb_on" -eq 1 ] && have testparm && smb_t=$(run_to 10 testparm -s </dev/null 2>/dev/null)
+[ -z "$smb_t" ] && smb_t=$(cat /etc/samba/smb.conf 2>/dev/null)
+smb_g=$(printf '%s\n' "$smb_t" | awk '/^[ \t]*\[/ {s=$0; gsub(/^[ \t]+|[ \t]+$/, "", s)} tolower($0) ~ /^[ \t]*(guest[ _]*ok|public)[ \t]*=[ \t]*(yes|true|on|1)[ \t]*$/ {printf " %s", (s == "" ? "[global]" : s)}')
+if [ "$smb_on" -eq 1 ]; then
+  if [ -n "$smb_g" ]; then u35_v="$u35_v Samba guest ok=yes:$smb_g"
+  else u35_g="$u35_g Samba 실행 중이나 guest ok 허용 없음"; fi
+elif [ -n "$smb_g" ]; then u35_n="$u35_n Samba 미실행, smb.conf guest ok=yes 잔존:$smb_g"; fi
+if [ -n "$u35_v" ]; then
+  rep U-35 "공유 서비스에 대한 익명 접근 제한 설정" VULN "익명 접근 허용:$u35_v"
+elif [ -n "$u35_m" ]; then
+  rep U-35 "공유 서비스에 대한 익명 접근 제한 설정" MAN "익명 설정 확인 필요:$u35_m${u35_g:+ / 제한 확인:$u35_g}${u35_n:+ / 참고:$u35_n}"
+elif [ -n "$u35_g" ]; then
+  rep U-35 "공유 서비스에 대한 익명 접근 제한 설정" GOOD "익명 접근 제한:$u35_g${u35_n:+ / 참고:$u35_n}"
 else
-  rep U-35 "Anonymous FTP 비활성화" GOOD "FTP 미실행 or 익명 접근 설정 없음"
+  rep U-35 "공유 서비스에 대한 익명 접근 제한 설정" GOOD "공유 서비스(FTP/NFS/Samba) 미사용 → 가이드: 양호 또는 N/A${u35_n:+ / 참고:$u35_n}"
 fi
 
-# U-36 r 계열 서비스 비활성화   [기준] 양호 - 비활성화 / 취약 - 활성화
-r_hit=""
-for p in 512 513 514; do port_listen "$p" && r_hit="$r_hit port:$p"; done
+# U-36 r 계열 서비스 비활성화
+# [기준] 양호 - 불필요한 r 계열 서비스 비활성화 / 취약 - 불필요한 r 계열 서비스 활성화
+#   ※ 대상 exec(512)·login(513)·shell(514)는 TCP. UDP 512(biff)·513(rwho)·514(syslog)는 r 계열이 아니므로 TCP 만 본다.
+#     TCP 514 를 rsyslog(imtcp)·syslog-ng 가 쓰는 경우도 있어, 소유 프로세스가 syslog 데몬이면 제외하고 참고로 표시
+#   ※ 활성: TCP 512~514 LISTEN, rshd/rlogind/rexecd 프로세스, rsh/rlogin/rexec.socket 활성,
+#     inetd 실행 중 inetd.conf 비주석 shell/login/exec 줄, xinetd 실행 중 xinetd.d shell/login/exec 서비스(disable=yes 아님)
+#     (inetd·xinetd 미실행이면 남은 설정은 참고로 표시)
+#   ※ 사용 여부: hosts.equiv·$HOME/.rhosts(U-27 수집값 found)에 설정이 있으면 사용 중 → 필요성 확인(수동확인),
+#     파일이 없거나 설정이 없으면 미사용으로 간주(가이드) → 활성 시 취약
+#   ※ rsync 데몬(가이드 참고상 r-command)은 백업 등 정상 용도가 많아 활성 시 사용 목적 확인(수동확인)
+r_hit=""; r_sync=""; r_n=""
+r_tcp=$( { ss -lnt 2>/dev/null | awk '$1 == "LISTEN" {print $4}'; netstat -lnt 2>/dev/null | awk '/^tcp/ {print $4}'; } )
+for p in 512 513 514; do
+  printf '%s\n' "$r_tcp" | grep -qE "[:.]$p\$" || continue
+  o=$( { ss -lntp 2>/dev/null; netstat -lntp 2>/dev/null; } | grep -E "[:.]$p[[:space:]]" )
+  if [ -n "$o" ] && ! printf '%s\n' "$o" | grep -qvE 'rsyslogd|syslog-ng'; then r_n="$r_n TCP $p=syslog 데몬 수신(r 계열 아님)"
+  else r_hit="$r_hit tcp:$p"; fi
+done
 proc_run "rlogind|in.rlogind|rshd|in.rshd|rexecd|in.rexecd" && r_hit="$r_hit proc"
 { svc_active rsh.socket || svc_active rlogin.socket || svc_active rexec.socket; } && r_hit="$r_hit socket"
-if [ -n "$r_hit" ]; then rep U-36 "r 계열 서비스 비활성화" VULN "r계열 서비스 활성:$r_hit"
-else rep U-36 "r 계열 서비스 비활성화" GOOD "rlogin/rsh/rexec 미실행"; fi
+o=$(grep -E '^[[:space:]]*(shell|login|exec)[[:space:]]' /etc/inetd.conf 2>/dev/null | awk '{printf " %s", $1}')
+if [ -n "$o" ]; then
+  if proc_run inetd || proc_run inetutils-inetd; then r_hit="$r_hit inetd.conf:$o"
+  else r_n="$r_n inetd 미실행, inetd.conf 활성 줄 잔존:$o"; fi
+fi
+r_xi=""; r_xs=""
+for f in /etc/xinetd.d/*; do
+  [ -f "$f" ] || continue
+  grep -qiE '^[[:space:]]*disable[[:space:]]*=[[:space:]]*yes' "$f" && continue
+  grep -qE '^[[:space:]]*service[[:space:]]+(shell|login|exec)([[:space:]]|$)' "$f" && r_xi="$r_xi ${f##*/}"
+  grep -qE '^[[:space:]]*service[[:space:]]+rsync([[:space:]]|$)' "$f" && r_xs="$r_xs ${f##*/}"
+done
+if [ -n "$r_xi$r_xs" ]; then
+  if proc_run xinetd; then r_hit="$r_hit${r_xi:+ xinetd:$r_xi}"; r_sync="$r_sync${r_xs:+ xinetd:$r_xs}"
+  else r_n="$r_n xinetd 미실행, xinetd.d 활성 설정 잔존:$r_xi$r_xs"; fi
+fi
+printf '%s\n' "$r_tcp" | grep -qE '[:.]873$' && r_sync="$r_sync tcp:873"
+{ svc_active rsync || svc_active rsyncd || svc_active rsyncd.socket; } && r_sync="$r_sync service"
+proc_run "rsync --daemon" && r_sync="$r_sync proc"
+r_tr=""; [ -n "$found" ] && r_tr=$(grep -lvE '^[[:space:]]*(#|$)' $found 2>/dev/null | awk '{printf " %s", $0}')
+r_ev="신뢰파일(hosts.equiv/.rhosts) 설정:${r_tr:- 없음}${r_n:+ / 참고:$r_n}"
+if [ -n "$r_hit" ] && [ -n "$r_tr" ]; then rep U-36 "r 계열 서비스 비활성화" MAN "r계열 서비스 활성:$r_hit, 신뢰파일 설정 있음(사용 중으로 간주) → 업무상 필요 여부 확인, 불필요 시 비활성화 ($r_ev)"
+elif [ -n "$r_hit" ]; then rep U-36 "r 계열 서비스 비활성화" VULN "r계열 서비스 활성:$r_hit, 신뢰파일 설정 없음(미사용으로 간주) → 비활성화 ($r_ev)"
+elif [ -n "$r_sync" ]; then rep U-36 "r 계열 서비스 비활성화" MAN "rlogin/rsh/rexec 미실행. rsync 데몬 활성:$r_sync → 사용 목적 확인, 불필요 시 중지 ($r_ev)"
+else rep U-36 "r 계열 서비스 비활성화" GOOD "rlogin/rsh/rexec(TCP 512~514·inetd·xinetd·socket)·rsync 데몬 미실행 ($r_ev)"; fi
 
 # U-37 crontab 설정파일 권한 설정
 # [기준] 양호 - crontab·at 명령어에 일반 사용자 실행 권한이 제거되어 있고, cron/at 관련 파일 권한이 640 이하
@@ -1193,63 +1582,106 @@ proc_run "in.tftpd|tftpd|in.talkd|talkd|in.ntalkd|ntalkd" && tt_hit="$tt_hit pro
 if [ -z "$tt_hit" ]; then rep U-44 "tftp, talk 서비스 비활성화" GOOD "tftp/talk/ntalk 미실행"
 else rep U-44 "tftp, talk 서비스 비활성화" VULN "활성:$tt_hit"; fi
 
-# 메일 서비스 공통
-mail_run=0
-{ port_listen 25 || svc_active postfix || svc_active sendmail || proc_run "master|sendmail"; } && mail_run=1
+# 메일 서비스 공통 (가이드 U-45~U-48 점검 대상: Sendmail / Postfix / Exim)
+#  ※ proc_run "master|sendmail" 은 -f 정규식이 '(^|[/ ])master|sendmail( |$)' 로 풀려 'nginx: master process' 도
+#    메일로 오인했다 → postfix master 는 실행 경로(.../postfix/[sbin/]master), exim·sendmail 은 프로세스명(-x)으로 본다.
+mail_pf_run=0; { svc_active postfix || pgrep -f '^[^ ]*/postfix/(sbin/)?master( |$)' >/dev/null 2>&1; } && mail_pf_run=1
+mail_ex_run=0; { svc_active exim4 || svc_active exim || pgrep -x 'exim4?' >/dev/null 2>&1; } && mail_ex_run=1
 mail_kind="none"
-{ svc_active postfix || pkg_installed postfix; } && mail_kind="postfix"
+{ [ "$mail_pf_run" -eq 1 ] || pkg_installed postfix; } && mail_kind="postfix"
+{ [ "$mail_ex_run" -eq 1 ] || pkg_installed exim || pkg_installed exim4-base || [ -x /usr/sbin/exim ] || [ -x /usr/sbin/exim4 ]; } && mail_kind="exim"
 { svc_active sendmail || pkg_installed sendmail || pkg_installed sendmail-cf; } && mail_kind="sendmail"
+# 둘 이상 설치된 경우 실제 기동 중인 MTA 를 점검 대상으로 한다
+if [ "$mail_pf_run" -eq 1 ]; then mail_kind="postfix"; elif [ "$mail_ex_run" -eq 1 ]; then mail_kind="exim"; fi
+mail_run=0
+{ port_listen 25 || [ "$mail_pf_run" -eq 1 ] || [ "$mail_ex_run" -eq 1 ] || \
+  { [ "$mail_kind" = sendmail ] && { svc_active sendmail || pgrep -x sendmail >/dev/null 2>&1; }; }; } && mail_run=1
+# 미기동이어도 부팅 시 자동기동(enabled)이면 '사용'으로 본다 (가이드 조치: 미사용 시 서비스 중지 '및 비활성화')
+mail_used=$mail_run
+case "$mail_kind" in
+  postfix)  svc_enabled postfix  && mail_used=1 ;;
+  sendmail) svc_enabled sendmail && mail_used=1 ;;
+  exim)     { svc_enabled exim4 || svc_enabled exim; } && mail_used=1 ;;
+esac
+mail_na="메일 서비스 미설치"; [ "$mail_kind" = none ] || mail_na="$mail_kind 설치되어 있으나 미기동·비활성화 (SMTP 서비스 미사용)"
+# exim 설정 파일 (RHEL /etc/exim, Debian /etc/exim4 또는 update-exim4.conf 생성본)
+mail_excf=""
+for mf in /etc/exim/exim.conf /etc/exim4/exim4.conf /var/lib/exim4/config.autogenerated; do [ -f "$mf" ] && mail_excf="$mail_excf $mf"; done
 
 # U-45 메일 서비스 버전 점검
 # [기준] 양호 - SMTP 서비스를 사용하지 않거나, 사용 시 알려진 취약점이 없는 최신(패치) 버전 / 취약 - 구버전
 #  ※ 판정 근거는 '리스닝 범위'가 아니라 '버전(미적용 보안 업데이트)' 이다.
 #    localhost 전용이라도 서비스가 기동 중이면 버전으로 판정하고, 외부/로컬 노출 여부는 근거에 함께 기재한다.
+#  ※ 미기동이라도 enabled 이면 '미사용 시 중지 및 비활성화' 조치가 안 된 것이므로 버전으로 판정한다.
 if [ "$mail_kind" = none ]; then
   rep U-45 "메일 서비스 버전 점검" GOOD "sendmail/postfix/exim 등 메일 서비스 미설치"
-elif [ "${mail_run:-0}" -ne 1 ]; then
-  rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 설치되어 있으나 미기동 (SMTP 서비스 미사용)"
+elif [ "$mail_used" -ne 1 ]; then
+  rep U-45 "메일 서비스 버전 점검" GOOD "$mail_na"
 else
-  expose="localhost 전용"; port_listen_ext 25 && expose="외부(25) 제공"
+  mst="기동 중"; expose="localhost 전용"; port_listen_ext 25 && expose="외부(25) 제공"
+  [ "$mail_run" -eq 1 ] || { mst="미기동이나 enabled(부팅 시 자동기동)"; expose="리슨 없음"; }
   mv=""
-  [ "$mail_kind" = postfix ] && mv=$(postconf mail_version 2>/dev/null | awk '{print $3}')
-  [ -z "$mv" ] && mv=$( (sendmail -d0.1 -bv root 2>/dev/null; echo) | grep -i 'Version' | head -1)
-  pend=$(sec_update_count 'postfix|sendmail' '^(postfix|sendmail)/')
+  case "$mail_kind" in   # 버전은 가이드 확인 명령으로, 보안 업데이트는 해당 MTA 패키지만 센다
+    postfix)  mv=$(postconf mail_version 2>/dev/null | awk '{print $3}'); mail_dp='postfix'; mail_ap='^postfix[^/]*/' ;;
+    exim)     mv=$( { run_to 10 exim -bV || run_to 10 exim4 -bV; } 2>/dev/null | head -1); mail_dp='exim'; mail_ap='^exim4?[^/]*/' ;;
+    *)        mv=$( (sendmail -d0.1 -bv root 2>/dev/null; echo) | grep -i 'Version' | head -1); mail_dp='sendmail'; mail_ap='^sendmail[^/]*/' ;;
+  esac
+  pend=$(sec_update_count "$mail_dp" "$mail_ap")
   if [ "$pend" = "?" ]; then
-    rep U-45 "메일 서비스 버전 점검" MAN "$mail_kind 기동 중($expose, 버전=${mv:-확인필요}) — 패키지 관리자 없음, 최신 버전 여부 수동 확인 필요"
+    rep U-45 "메일 서비스 버전 점검" MAN "$mail_kind $mst($expose, 버전=${mv:-확인필요}) — 패키지 관리자 없음, 최신 버전 여부 수동 확인 필요"
   elif [ "${pend:-0}" -gt 0 ]; then
-    rep U-45 "메일 서비스 버전 점검" VULN "$mail_kind 기동 중($expose, 버전=${mv:-확인필요}) + 보안 업데이트 ${pend}건 미적용(구버전)"
+    rep U-45 "메일 서비스 버전 점검" VULN "$mail_kind $mst($expose, 버전=${mv:-확인필요}) + 보안 업데이트 ${pend}건 미적용(구버전)"
   else
-    rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind 기동 중($expose, 버전=${mv:-확인필요}), 미적용 보안 업데이트 없음(최신)"
+    rep U-45 "메일 서비스 버전 점검" GOOD "$mail_kind $mst($expose, 버전=${mv:-확인필요}), 미적용 보안 업데이트 없음(최신)"
   fi
 fi
 
 # U-46 일반 사용자의 메일 서비스 실행 방지
 # [기준] 양호 - 일반 사용자의 메일 서비스(큐 조작 등) 실행 방지 설정 / 취약 - 미설정
-if [ "$mail_kind" = none ]; then rep U-46 "일반 사용자의 메일 서비스 실행 방지" NA "메일 서비스 미설치/미실행"
-elif [ "$mail_kind" = postfix ]; then
-  au=$(postconf -h authorized_submit_users 2>/dev/null)
-  ps_perm=$(stat -c '%a' /usr/sbin/postdrop 2>/dev/null)
-  if echo "$au" | grep -qiE 'root|@?[a-z]' && ! echo "$au" | grep -qi 'static:anyone'; then
-    rep U-46 "일반 사용자의 메일 서비스 실행 방지" GOOD "postfix authorized_submit_users=$au"
-  else
-    rep U-46 "일반 사용자의 메일 서비스 실행 방지" VULN "postfix authorized_submit_users 제한 없음(=${au:-미설정}) → 특정 사용자만 허용 필요"
-  fi
-else
-  if grep -qiE 'O PrivacyOptions.*restrictqrun|RunAsUser' /etc/mail/sendmail.cf 2>/dev/null; then
-    rep U-46 "일반 사용자의 메일 서비스 실행 방지" GOOD "sendmail PrivacyOptions restrictqrun / RunAsUser 설정"
+#  가이드는 'SMTP 서비스 사용 시' 점검: Sendmail=PrivacyOptions 에 restrictqrun,
+#  Postfix=/usr/sbin/postsuper, Exim=/usr/sbin/exiqgrep 의 일반 사용자 실행 권한(o+x) 제거
+if [ "$mail_kind" = none ] || [ "$mail_used" -ne 1 ]; then rep U-46 "일반 사용자의 메일 서비스 실행 방지" NA "$mail_na"
+elif [ "$mail_kind" = sendmail ]; then
+  if [ -n "$(conf_line '^[[:space:]]*O[[:space:]]+PrivacyOptions[[:space:]]*=.*restrictqrun' /etc/mail/sendmail.cf)" ]; then
+    rep U-46 "일반 사용자의 메일 서비스 실행 방지" GOOD "sendmail PrivacyOptions restrictqrun 설정"
   else
     rep U-46 "일반 사용자의 메일 서비스 실행 방지" VULN "sendmail PrivacyOptions 에 restrictqrun 미설정"
+  fi
+else
+  mq=/usr/sbin/exiqgrep
+  if [ "$mail_kind" = postfix ]; then mq=/usr/sbin/postsuper; [ -e "$mq" ] || mq="$(postconf -h command_directory 2>/dev/null)/postsuper"; fi
+  mqp=$(stat -Lc '%a' "$mq" 2>/dev/null)
+  if [ -z "$mqp" ]; then
+    rep U-46 "일반 사용자의 메일 서비스 실행 방지" MAN "$mail_kind 사용 중이나 $mq 미존재 → 큐 관리 명령 위치·권한 수동 확인 필요"
+  elif perm_has "$mqp" 001; then
+    rep U-46 "일반 사용자의 메일 서비스 실행 방지" VULN "$mail_kind $mq 권한=$mqp (일반 사용자 실행 가능) → chmod o-x $mq 필요"
+  else
+    rep U-46 "일반 사용자의 메일 서비스 실행 방지" GOOD "$mail_kind $mq 권한=$mqp (일반 사용자 실행 권한 없음)"
   fi
 fi
 
 # U-47 스팸 메일 릴레이 제한
-# [기준] 양호 - 릴레이 제한 설정 / 취약 - 오픈 릴레이 가능
-if [ "$mail_kind" = none ] || { [ "$mail_run" -eq 0 ] && ! port_listen_ext 25; }; then
-  rep U-47 "스팸 메일 릴레이 제한" NA "메일 서비스 외부 노출 없음"
+# [기준] 양호 - 릴레이 제한 설정 / 취약 - 오픈 릴레이 가능   (※ 메일 서비스 미사용 시 양호 또는 N/A)
+if [ "$mail_kind" = none ] || [ "$mail_used" -ne 1 ]; then
+  rep U-47 "스팸 메일 릴레이 제한" NA "$mail_na"
+elif [ "$mail_kind" = exim ]; then
+  # 가이드: relay_from_hosts / 'hosts =' 확인 → 전체(*, 0.0.0.0/0) 허용이면 오픈릴레이
+  ex_rl=$(grep -hiE '^[[:space:]]*(hostlist[[:space:]]+relay_from_hosts|MAIN_RELAY_NETS|dc_relay_nets|(accept[[:space:]]+)?hosts)[[:space:]]*=' $mail_excf /etc/exim4/update-exim4.conf.conf 2>/dev/null)
+  ex_open=$(printf '%s\n' "$ex_rl" | grep -E '(^|[^[:alnum:]._+-])\*([^[:alnum:].]|$)|0\.0\.0\.0/0|::/0' | head -1 | tr -s ' \t' ' ')
+  ex_rv=$(printf '%s\n' "$ex_rl" | grep -iE 'relay_from_hosts|relay_nets' | tr -s ' \t\n' ' ')
+  if [ -n "$ex_open" ]; then
+    rep U-47 "스팸 메일 릴레이 제한" VULN "exim 릴레이 허용 범위 전체($ex_open) → relay_from_hosts 를 허용 네트워크로 한정 필요"
+  elif [ -z "$mail_excf" ]; then
+    rep U-47 "스팸 메일 릴레이 제한" MAN "exim 설정 파일(/etc/exim/exim.conf, /etc/exim4/exim4.conf) 미발견 → 릴레이 정책 수동 확인 필요"
+  else
+    rep U-47 "스팸 메일 릴레이 제한" GOOD "exim 릴레이 허용 대상 제한 (${ex_rv:-relay_from_hosts 미설정})"
+  fi
 elif [ "$mail_kind" = postfix ]; then
   rr="$(postconf -h smtpd_relay_restrictions 2>/dev/null) $(postconf -h smtpd_recipient_restrictions 2>/dev/null)"
   mynet=$(postconf -h mynetworks 2>/dev/null)
-  if echo "$rr" | grep -qE 'reject_unauth_destination|defer_unauth_destination'; then
+  if echo "$mynet" | grep -qE '(^|[[:space:],])(0\.0\.0\.0/0|\[?::\]?/0)([[:space:],]|$)'; then
+    rep U-47 "스팸 메일 릴레이 제한" VULN "postfix mynetworks=$mynet (전체 대역) → permit_mynetworks 로 오픈릴레이 가능"
+  elif echo "$rr" | grep -qE 'reject_unauth_destination|defer_unauth_destination'; then
     rep U-47 "스팸 메일 릴레이 제한" GOOD "postfix reject_unauth_destination 설정 (mynetworks=$mynet)"
   else
     rep U-47 "스팸 메일 릴레이 제한" VULN "postfix 릴레이 제한(reject_unauth_destination) 미설정 → 오픈릴레이 가능"
@@ -1261,14 +1693,19 @@ else
 fi
 
 # U-48 expn, vrfy 명령어 제한
-# [기준] 양호 - noexpn/novrfy(또는 disable_vrfy_command) 설정 / 취약 - 미설정
-if [ "$mail_kind" = none ] || [ "$mail_run" -eq 0 ]; then rep U-48 "expn, vrfy 명령어 제한" NA "메일 서비스 미실행"
+# [기준] 양호 - noexpn/novrfy(또는 disable_vrfy_command) 설정 / 취약 - 미설정   (※ 메일 서비스 미사용 시 양호 또는 N/A)
+if [ "$mail_kind" = none ] || [ "$mail_used" -ne 1 ]; then rep U-48 "expn, vrfy 명령어 제한" NA "$mail_na"
 elif [ "$mail_kind" = postfix ]; then
   if postconf -h disable_vrfy_command 2>/dev/null | grep -qi yes; then rep U-48 "expn, vrfy 명령어 제한" GOOD "postfix disable_vrfy_command=yes"
   else rep U-48 "expn, vrfy 명령어 제한" VULN "postfix disable_vrfy_command=no → VRFY 명령 허용"; fi
-else
-  if grep -qiE 'PrivacyOptions.*(noexpn|novrfy|goaway)' /etc/mail/sendmail.cf 2>/dev/null; then rep U-48 "expn, vrfy 명령어 제한" GOOD "sendmail PrivacyOptions noexpn,novrfy 설정"
-  else rep U-48 "expn, vrfy 명령어 제한" VULN "sendmail PrivacyOptions 에 noexpn/novrfy 미설정"; fi
+elif [ "$mail_kind" = exim ]; then   # 가이드: acl_smtp_vrfy/acl_smtp_expn = accept 가 있으면 제거 대상
+  if [ -z "$mail_excf" ]; then rep U-48 "expn, vrfy 명령어 제한" MAN "exim 설정 파일 미발견 → acl_smtp_vrfy/acl_smtp_expn 수동 확인 필요"
+  elif grep -qiE '^[[:space:]]*acl_smtp_(vrfy|expn)[[:space:]]*=[[:space:]]*accept([[:space:]]|$)' $mail_excf 2>/dev/null; then rep U-48 "expn, vrfy 명령어 제한" VULN "exim acl_smtp_vrfy/acl_smtp_expn = accept → VRFY/EXPN 허용"
+  else rep U-48 "expn, vrfy 명령어 제한" GOOD "exim acl_smtp_vrfy/acl_smtp_expn = accept 미설정 (VRFY/EXPN 거부)"; fi
+else   # sendmail: 주석 제외, noexpn 과 novrfy 둘 다(또는 goaway) 있어야 양호
+  mpo=$(conf_line '^[[:space:]]*O[[:space:]]+PrivacyOptions[[:space:]]*=' /etc/mail/sendmail.cf)
+  if echo "$mpo" | grep -qi goaway || { echo "$mpo" | grep -qi noexpn && echo "$mpo" | grep -qi novrfy; }; then rep U-48 "expn, vrfy 명령어 제한" GOOD "sendmail PrivacyOptions noexpn,novrfy(또는 goaway) 설정"
+  else rep U-48 "expn, vrfy 명령어 제한" VULN "sendmail PrivacyOptions 에 noexpn/novrfy(또는 goaway) 미설정 (현재: ${mpo:-없음})"; fi
 fi
 
 # DNS 공통 (systemd-resolved 127.0.0.53 은 DNS 서버 아님)
@@ -1311,17 +1748,54 @@ else rep U-52 "Telnet 서비스 비활성화" GOOD "Telnet 미실행"; fi
 # FTP 공통
 ftp_run=0; port_listen 21 && ftp_run=1
 proc_run "vsftpd|proftpd|in.ftpd|pure-ftpd" && ftp_run=1
+# 설정 파일은 실행 중인 데몬 기준으로 고른다(다른 데몬이 남긴 설정을 읽지 않도록). 데몬을 모르면 존재 순서대로.
+ftp_d=""
+for f in vsftpd proftpd pure-ftpd in.ftpd; do pgrep -x "$f" >/dev/null 2>&1 && { ftp_d=$f; break; }; done
 ftp_conf=""
-[ -e /etc/vsftpd/vsftpd.conf ] && ftp_conf=/etc/vsftpd/vsftpd.conf
-[ -z "$ftp_conf" ] && [ -e /etc/vsftpd.conf ] && ftp_conf=/etc/vsftpd.conf
-[ -z "$ftp_conf" ] && [ -e /etc/proftpd/proftpd.conf ] && ftp_conf=/etc/proftpd/proftpd.conf
+for f in /etc/vsftpd/vsftpd.conf /etc/vsftpd.conf /etc/proftpd/proftpd.conf /etc/proftpd.conf; do
+  [ -e "$f" ] || continue
+  case "$ftp_d:$f" in vsftpd:*proftpd*|proftpd:*vsftpd*|pure-ftpd:*|in.ftpd:*) continue;; esac
+  ftp_conf=$f; break
+done
+case "$ftp_conf" in *vsftpd*) ftp_d=vsftpd;; *proftpd*) ftp_d=proftpd;; esac
+# 설정값(주석 제외 마지막 값). vsftpd 는 'key=값', proftpd 는 'Key 값' 형식
+ftp_val() { conf_line "^[[:space:]]*$1([[:space:]]*=|[[:space:]])" "${@:2}" | sed -E 's/^[[:space:]]*[^=[:space:]]+[[:space:]]*=?[[:space:]]*//; s/[[:space:]]+$//'; }
+ftp_yes() { case "${1^^}" in YES|TRUE|ON|1) return 0;; esac; return 1; }
+ftp_no()  { case "${1^^}" in NO|FALSE|OFF|0) return 0;; esac; return 1; }
+ftp_root_in() { local f; for f in "$@"; do grep -qE '^[[:space:]]*root[[:space:]]*$' "$f" 2>/dev/null && { printf '%s' "$f"; return 0; }; done; return 1; }   # root 줄(주석 제외)이 있는 첫 파일
 
-# U-53 FTP 서비스 정보 노출 제한   [기준] 양호 - 배너에 버전 정보 미노출 / 취약 - 노출
+# U-53 FTP 서비스 정보 노출 제한   [기준] 양호 - 접속 배너에 노출되는 정보 없음 / 취약 - 노출
+#   vsftpd : banner_file(우선)·ftpd_banner 가 없거나 값·파일이 비면(vsftpd 는 빈 값을 미설정으로 처리) 기본 배너 "(vsFTPd 버전)" 노출
+#   proftpd: ServerIdent off 또는 ServerIdent on "<배너>" 만 인정 (DisplayLogin 은 로그인 후 메시지라 무관)
+#   지정한 배너에 서비스명·버전이 들어 있어도 취약(가이드 권고: 서비스 이름·버전 미노출)
+ftp_info_re='(vs|pro|pure-?|wu-?)ftpd|[0-9]+(\.[0-9]+)+'
+u53_src=""; u53_txt=""; u53_def=""
+if [ -n "$ftp_conf" ] && [ "$ftp_d" = vsftpd ]; then
+  u53_bf=$(ftp_val banner_file "$ftp_conf"); u53_fb=$(ftp_val ftpd_banner "$ftp_conf")
+  [ -n "$u53_bf" ] && [ -r "$u53_bf" ] && [ ! -s "$u53_bf" ] && u53_bf=""   # 빈 banner_file 은 vsftpd 가 무시(ftpd_banner/기본 배너로 폴백)
+  if [ -n "$u53_bf" ]; then u53_src="banner_file=$u53_bf"; u53_txt=$(head -c 2048 "$u53_bf" 2>/dev/null) || u53_src="$u53_src(읽기 불가)"
+  elif [ -n "$u53_fb" ]; then u53_src="ftpd_banner"; u53_txt=$u53_fb; fi
+  u53_def="vsftpd ftpd_banner/banner_file 미설정(빈 값·빈 파일 포함) → 기본 배너에 vsFTPd 버전 노출 ($ftp_conf)"
+elif [ -n "$ftp_conf" ]; then   # proftpd
+  u53_si=$(ftp_val ServerIdent "$ftp_conf" /etc/proftpd/conf.d/*.conf)
+  u53_st=$(printf '%s' "${u53_si:2}" | sed -E 's/^[[:space:]]+//; s/^"(.*)"$/\1/')   # on 뒤 배너 문자열(따옴표 제거)
+  case "${u53_si,,}" in
+    off|off[[:space:]]*) u53_src="ServerIdent off";;
+    on[[:space:]]*) [ -n "$u53_st" ] && { u53_src="ServerIdent on \"배너\""; u53_txt=$u53_st; };;
+  esac
+  u53_def="proftpd ServerIdent ${u53_si:-미설정(기본 on)} → 배너 문자열 미지정, 기본 배너에 ProFTPD 서비스명 노출 ($ftp_conf)"
+fi
 if [ "$ftp_run" -eq 0 ]; then rep U-53 "FTP 서비스 정보 노출 제한" NA "FTP 서비스 미실행"
-elif grep -qiE '^[[:space:]]*(ftpd_banner|banner_file)[[:space:]]*=' "$ftp_conf" 2>/dev/null || grep -qiE '^[[:space:]]*(ServerIdent[[:space:]]+off|DisplayLogin)' "$ftp_conf" 2>/dev/null; then
-  rep U-53 "FTP 서비스 정보 노출 제한" GOOD "FTP 배너 커스터마이즈/버전 숨김 설정 존재"
+elif [ -z "$u53_def" ]; then
+  rep U-53 "FTP 서비스 정보 노출 제한" MAN "FTP(21) 실행 중이나 vsftpd/proftpd 설정 미확인(데몬=${ftp_d:-불명}) → 접속 배너(220 응답) 수동 확인"
+elif [ -z "$u53_src" ]; then
+  rep U-53 "FTP 서비스 정보 노출 제한" VULN "$u53_def"
+elif [ "${u53_src%(읽기 불가)}" != "$u53_src" ]; then
+  rep U-53 "FTP 서비스 정보 노출 제한" MAN "$u53_src → 접속 배너 수동 확인"
+elif u53_hit=$(printf '%s' "$u53_txt" | grep -oiE "$ftp_info_re" | head -3 | tr '\n' ' '); [ -n "$u53_hit" ]; then
+  rep U-53 "FTP 서비스 정보 노출 제한" VULN "$u53_src 설정됐으나 배너에 서비스명·버전 노출: ${u53_hit% }"
 else
-  rep U-53 "FTP 서비스 정보 노출 제한" VULN "FTP 배너에 기본 버전 정보 노출 (ftpd_banner/ServerIdent off 미설정)"
+  rep U-53 "FTP 서비스 정보 노출 제한" GOOD "$u53_src 설정 → 배너에 서비스명·버전 미노출 ($ftp_conf)"
 fi
 
 # U-54 암호화되지 않는 FTP 서비스 비활성화   [기준] 양호 - 평문 FTP 비활성화 / 취약 - 활성화
@@ -1341,24 +1815,93 @@ elif echo "$ftpsh" | grep -qE 'nologin|false'; then rep U-55 "FTP 계정 Shell �
 else rep U-55 "FTP 계정 Shell 제한" VULN "ftp 계정 셸=$ftpsh (nologin/false 필요)"; fi
 
 # U-56 FTP 서비스 접근 제어 설정   [기준] 양호 - 특정 IP/호스트만 허용 / 취약 - 미적용
+#   가이드 조치 예시(ProFTP AllowUser·Allow from, vsFTP user_list 허용 목록)처럼 '지정한 대상만 접속 허용'하는 설정을 인정
+#   proftpd: <Limit LOGIN>(주석·<Anonymous> 내부 제외 — 익명 로그인에만 적용)에 허용 대상(Allow from <IP>·AllowUser·AllowGroup·AllowClass)
+#            + DenyAll/Deny from all 또는 Order deny,allow(허용에 안 맞으면 거부). AllowAll·Allow from all 이 있으면 불인정
+#   vsftpd : userlist_enable=YES + userlist_deny=NO + user_list 에 계정 등록(등록 계정만 접속)
+#            또는 tcp_wrappers=YES + libwrap 연동(RHEL8+ 미지원) + hosts.deny 전체 거부 + hosts.allow 가 전체 허용(ALL·0.0.0.0/0) 아님
+#   위가 없으면 호스트 방화벽 사용 여부(U-28 의 hfw_detect)만 보고, 사용 중이면 규칙 해석 없이 수동확인
+#   ftpusers 는 차단 목록(지정 대상만 허용이 아님)이라 참고로만 출력
 if [ "$ftp_run" -eq 0 ]; then rep U-56 "FTP 서비스 접근 제어 설정" NA "FTP 미실행"
-elif grep -qiE '^[[:space:]]*tcp_wrappers[[:space:]]*=[[:space:]]*YES' "$ftp_conf" 2>/dev/null && grep -qiE 'ftp|vsftpd' /etc/hosts.allow 2>/dev/null; then
-  rep U-56 "FTP 서비스 접근 제어 설정" GOOD "vsftpd tcp_wrappers=YES + hosts.allow 제한"
-elif grep -qiE '^[[:space:]]*<Limit|AllowUser|DenyAll' "$ftp_conf" 2>/dev/null; then
-  rep U-56 "FTP 서비스 접근 제어 설정" GOOD "proftpd <Limit> 접근 제어 설정"
 else
-  rep U-56 "FTP 서비스 접근 제어 설정" VULN "FTP 접근 제어(tcp_wrappers/<Limit>) 미설정"
+  u56_ok=""; u56_why="vsftpd/proftpd 설정 미확인(데몬=${ftp_d:-불명})"; u56_ref=""
+  for f in /etc/ftpusers /etc/ftpd/ftpusers /etc/vsftpd/ftpusers /etc/vsftpd.ftpusers; do [ -e "$f" ] && u56_ref="$u56_ref $f"; done
+  u56_ref=${u56_ref# }; u56_ref="참고(차단 목록): ftpusers=${u56_ref:-없음}"
+  if [ -n "$ftp_conf" ] && [ "$ftp_d" = proftpd ]; then
+    u56_lim=$(cat "$ftp_conf" /etc/proftpd/conf.d/*.conf 2>/dev/null | grep -vE '^[[:space:]]*#' \
+      | sed -n -e '/<Anonymous/I,/<\/Anonymous>/Id' -e '/<Limit[^>]*[[:space:]]LOGIN[[:space:]>]/I,/<\/Limit>/Ip')
+    u56_all='Allow[[:space:]]+(from[[:space:]]+)?([^#]*[[:space:],])?(all|0\.0\.0\.0/0)([[:space:],]|$)'
+    u56_al=$(printf '%s\n' "$u56_lim" | grep -iE '^[[:space:]]*Allow(User|Group|Class)?[[:space:]]' | grep -viE "^[[:space:]]*$u56_all" | head -1)
+    u56_aa=$(printf '%s\n' "$u56_lim" | grep -iE "^[[:space:]]*(AllowAll([[:space:]]|\$)|$u56_all)" | head -1)
+    u56_dn=$(printf '%s\n' "$u56_lim" | grep -iE '^[[:space:]]*(DenyAll|Deny[[:space:]]+(from[[:space:]]+)?all|Order[[:space:]]+deny[[:space:]]*,[[:space:]]*allow)([[:space:]]|$)' | head -1)
+    u56_v=$(ftp_val UseFtpUsers "$ftp_conf" /etc/proftpd/conf.d/*.conf); u56_ref="$u56_ref, UseFtpUsers=${u56_v:-on(기본)}"
+    if [ -n "$u56_al" ] && [ -n "$u56_dn" ] && [ -z "$u56_aa" ]; then
+      u56_ok="proftpd <Limit LOGIN> ${u56_al#"${u56_al%%[![:space:]]*}"} + ${u56_dn#"${u56_dn%%[![:space:]]*}"}"
+    elif [ -n "$u56_aa" ]; then u56_why="proftpd <Limit LOGIN> 에 전체 허용(${u56_aa#"${u56_aa%%[![:space:]]*}"})"
+    elif [ -n "$u56_lim" ]; then u56_why="proftpd <Limit LOGIN> 이 '허용 대상(Allow from/AllowUser) + DenyAll(또는 Order deny,allow)' 형태 아님"
+    else u56_why="proftpd <Limit LOGIN> 미설정(<Anonymous> 내부 제외)"; fi
+  elif [ -n "$ftp_conf" ]; then   # vsftpd
+    u56_ue=$(ftp_val userlist_enable "$ftp_conf"); u56_ud=$(ftp_val userlist_deny "$ftp_conf"); u56_uf=$(ftp_val userlist_file "$ftp_conf")
+    u56_ref="$u56_ref, userlist_enable=${u56_ue:-NO(기본)}, userlist_deny=${u56_ud:-YES(기본)}"
+    u56_ul=""; u56_acc=""
+    for f in ${u56_uf:-/etc/vsftpd/user_list /etc/vsftpd.user_list}; do [ -e "$f" ] && { u56_ul=$f; break; }; done
+    ftp_yes "$u56_ue" && ftp_no "$u56_ud" && [ -n "$u56_ul" ] \
+      && u56_acc=$(grep -vE '^[[:space:]]*(#|$)' "$u56_ul" 2>/dev/null | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | head -5 | tr '\n' ',')
+    u56_acc=${u56_acc%,}
+    u56_bin=$(command -v vsftpd 2>/dev/null); [ -z "$u56_bin" ] && u56_bin=/usr/sbin/vsftpd
+    u56_hd=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.deny 2>/dev/null \
+      | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(vsftpd|ALL)([,[:space:]][^:]*)?:[[:space:]]*ALL([[:space:],:]|$)' | head -1)
+    u56_ha=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.allow 2>/dev/null \
+      | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(vsftpd|ALL)([,[:space:]][^:]*)?:' | grep -viE ':[[:space:]]*DENY[[:space:]]*$')
+    u56_open=$(printf '%s\n' "$u56_ha" | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|\*|0\.0\.0\.0/0(\.0\.0\.0)?)([[:space:],:]|$)' | head -1)
+    if [ -n "$u56_acc" ]; then u56_ok="vsftpd userlist_enable=YES + userlist_deny=NO → $u56_ul 등록 계정만 접속 허용($u56_acc)"
+    elif ! ftp_yes "$(ftp_val tcp_wrappers "$ftp_conf")"; then u56_why="vsftpd tcp_wrappers 미설정, user_list 허용 목록(userlist_deny=NO + 계정 등록) 미적용"
+    elif ! { have ldd && ldd "$u56_bin" 2>/dev/null | grep -q libwrap; }; then u56_why="vsftpd tcp_wrappers=YES 이나 libwrap 미연동($u56_bin) → hosts.allow/deny 무효"
+    elif [ -z "$u56_hd" ]; then u56_why="vsftpd tcp_wrappers=YES 이나 hosts.deny 에 vsftpd/ALL 전체 거부 없음"
+    elif [ -n "$u56_open" ]; then u56_why="hosts.allow 가 vsftpd 전체 허용($u56_open)"
+    else u56_v=$(printf '%s\n' "$u56_ha" | head -2 | tr '\n' ';'); u56_v=${u56_v%;}
+      u56_ok="vsftpd tcp_wrappers=YES + hosts.deny '$u56_hd' + hosts.allow 허용: ${u56_v:-없음(전체 차단)}"; fi
+  fi
+  if [ -n "$u56_ok" ]; then rep U-56 "FTP 서비스 접근 제어 설정" GOOD "$u56_ok" "$u56_ref"
+  elif [ "$HFW" != none ]; then rep U-56 "FTP 서비스 접근 제어 설정" MAN "$u56_why. 호스트 방화벽 사용 중($HFW_EV) → 21/tcp 접속 IP 제한 여부 수동 확인(규칙은 자동 해석 안 함)" "$u56_ref"
+  elif [ "$IS_ROOT" -ne 1 ]; then rep U-56 "FTP 서비스 접근 제어 설정" MAN "$u56_why. 방화벽 21/tcp 제한은 root 확인 필요" "$u56_ref"
+  elif [ -z "$ftp_conf" ]; then rep U-56 "FTP 서비스 접근 제어 설정" MAN "$u56_why + 호스트 방화벽 미사용 → 데몬 자체 접근 제어 수동 확인" "$u56_ref"
+  else rep U-56 "FTP 서비스 접근 제어 설정" VULN "$u56_why + 호스트 방화벽 미사용 (클라우드 SG는 별도 점검)" "$u56_ref"; fi
 fi
 
+
 # U-57 Ftpusers 파일 설정   [기준] 양호 - root 계정 FTP 접속 차단 / 취약 - 허용
-if [ "$ftp_run" -eq 0 ] && ! pkg_installed vsftpd && ! pkg_installed proftpd; then
+#   ftpusers(/etc/ftpusers·/etc/ftpd/ftpusers, vsftpd 는 /etc/vsftpd/ftpusers·/etc/vsftpd.ftpusers 도)에 root 줄(주석 제외) → 차단
+#   vsftpd : local_enable 이 YES 가 아니면(기본 NO) 로컬 계정 로그인 불가. userlist_enable=YES 일 때
+#            userlist_deny=YES(기본)는 user_list 에 root 가 있어야, userlist_deny=NO(허용 목록)는 root 가 없어야 차단
+#   proftpd: UseFtpUsers off 면 ftpusers 미적용. RootLogin on 이 아니면(기본 off) root 차단
+if [ "$ftp_run" -eq 0 ] && ! pkg_installed vsftpd && ! pkg_installed proftpd && ! pkg_installed proftpd-basic \
+   && ! pkg_installed proftpd-core && ! pkg_installed pure-ftpd; then
   rep U-57 "Ftpusers 파일 설정" NA "FTP 미설치/미실행 → root FTP 접속 위협 없음"
-elif grep -qiE '^root$' /etc/ftpusers /etc/vsftpd/ftpusers /etc/vsftpd.ftpusers 2>/dev/null; then
-  rep U-57 "Ftpusers 파일 설정" GOOD "ftpusers 에 root 포함 (FTP 접속 차단)"
-elif grep -qiE '^[[:space:]]*userlist_deny[[:space:]]*=[[:space:]]*NO' "$ftp_conf" 2>/dev/null && grep -qiE '^root$' /etc/vsftpd/user_list 2>/dev/null; then
-  rep U-57 "Ftpusers 파일 설정" GOOD "vsftpd user_list(허용목록)에 root 미포함"
 else
-  rep U-57 "Ftpusers 파일 설정" VULN "ftpusers/user_list 에 root 차단 설정 없음 → root FTP 접속 가능"
+  u57_fl="/etc/ftpusers /etc/ftpd/ftpusers"; [ "$ftp_d" = proftpd ] || u57_fl="$u57_fl /etc/vsftpd/ftpusers /etc/vsftpd.ftpusers"
+  u57_fu=$(ftp_root_in $u57_fl)
+  if [ -n "$ftp_conf" ] && [ "$ftp_d" = vsftpd ]; then
+    u57_le=$(ftp_val local_enable "$ftp_conf"); u57_ue=$(ftp_val userlist_enable "$ftp_conf"); u57_ud=$(ftp_val userlist_deny "$ftp_conf")
+    u57_uf=$(ftp_val userlist_file "$ftp_conf"); u57_ul=$(ftp_root_in ${u57_uf:-/etc/vsftpd/user_list /etc/vsftpd.user_list})
+    if [ -n "$u57_fu" ]; then rep U-57 "Ftpusers 파일 설정" GOOD "$u57_fu 에 root 포함 (FTP 접속 차단)"
+    elif ! ftp_yes "$u57_le"; then rep U-57 "Ftpusers 파일 설정" GOOD "vsftpd local_enable=${u57_le:-미설정(기본 NO)} → root 등 로컬 계정 FTP 로그인 불가"
+    elif ftp_yes "$u57_ue" && ! ftp_no "$u57_ud" && [ -n "$u57_ul" ]; then
+      rep U-57 "Ftpusers 파일 설정" GOOD "vsftpd userlist_enable=YES, userlist_deny=${u57_ud:-YES(기본)} + $u57_ul 에 root 포함 (접속 차단)"
+    elif ftp_yes "$u57_ue" && ftp_no "$u57_ud" && [ -z "$u57_ul" ]; then
+      rep U-57 "Ftpusers 파일 설정" GOOD "vsftpd userlist_deny=NO(허용 목록) + user_list 에 root 없음 → root 접속 불가"
+    elif ftp_yes "$u57_ue" && ftp_no "$u57_ud"; then
+      rep U-57 "Ftpusers 파일 설정" VULN "vsftpd userlist_deny=NO(허용 목록)인데 $u57_ul 에 root 포함 + ftpusers 차단 없음 → root FTP 접속 허용"
+    else rep U-57 "Ftpusers 파일 설정" VULN "vsftpd ftpusers·user_list(userlist_enable=${u57_ue:-NO})에 root 차단 없음 → root FTP 접속 가능"; fi
+  elif [ -n "$ftp_conf" ]; then   # proftpd
+    u57_uu=$(ftp_val UseFtpUsers "$ftp_conf" /etc/proftpd/conf.d/*.conf); u57_rl=$(ftp_val RootLogin "$ftp_conf" /etc/proftpd/conf.d/*.conf)
+    if ! ftp_no "$u57_uu" && [ -n "$u57_fu" ]; then rep U-57 "Ftpusers 파일 설정" GOOD "proftpd UseFtpUsers=${u57_uu:-on(기본)} + $u57_fu 에 root 포함 (접속 차단)"
+    elif ! ftp_yes "$u57_rl"; then rep U-57 "Ftpusers 파일 설정" GOOD "proftpd RootLogin=${u57_rl:-미설정(기본 off)} → root 로그인 차단"
+    else rep U-57 "Ftpusers 파일 설정" VULN "proftpd RootLogin=$u57_rl + ftpusers 차단 없음(UseFtpUsers=${u57_uu:-on}) → root FTP 접속 허용"; fi
+  elif [ -n "$u57_fu" ]; then rep U-57 "Ftpusers 파일 설정" GOOD "$u57_fu 에 root 포함 (FTP 접속 차단)"
+  elif [ "$ftp_d" = pure-ftpd ] || { [ -z "$ftp_d" ] && pkg_installed pure-ftpd; }; then
+    rep U-57 "Ftpusers 파일 설정" MAN "pure-ftpd: ftpusers 에 root 없음 → MinUID 등 root 로그인 차단 여부 수동 확인"
+  else rep U-57 "Ftpusers 파일 설정" VULN "ftpusers(/etc/ftpusers, /etc/ftpd/ftpusers)에 root 차단 설정 없음 → root FTP 접속 가능"; fi
 fi
 
 # SNMP 공통
@@ -1370,58 +1913,138 @@ snmp_conf=/etc/snmp/snmpd.conf
 if [ "$snmp_run" -eq 1 ]; then rep U-58 "불필요한 SNMP 서비스 구동 점검" VULN "SNMP(snmpd/161) 실행 중 → 미사용 시 중지"
 else rep U-58 "불필요한 SNMP 서비스 구동 점검" GOOD "SNMP 미실행"; fi
 
+# SNMP 설정 파싱(U-59~U-61 공통) — snmpd 설정 경로(/etc/snmp, /usr/share/snmp) + snmpd.conf.d/*.conf, 주석 줄 제외
+#  v1/v2c = community 정의(com2sec[6] / rocommunity[6] / rwcommunity[6]. Redhat 기본 설정은 com2sec)
+#  v3     = rouser/rwuser/createUser, 또는 영속 파일(/var/lib/net-snmp, /var/lib/snmp)의 usmUser
+#  snmp_cs 한 줄 = "키워드 출발지 community" (community 는 공백을 포함할 수 있어 맨 끝에 둔다)
+#    com2sec [-Cn 컨텍스트] 이름 출발지 community → community 바로 앞 필드가 출발지
+#    (ro|rw)community community [출발지 ...]     → community 바로 뒤 필드가 출발지(생략=default)
+#    따옴표로 묶은 community 는 공백이 있어도 한 토큰(net-snmp copy_nword) → 따옴표 토큰을 먼저 떼어 낸다
+snmp_files="$snmp_conf /etc/snmp/snmpd.local.conf /etc/snmp/snmpd.conf.d/*.conf /usr/share/snmp/snmpd.conf"
+snmp_cs=$(grep -hiE '^[[:space:]]*(com2sec6?|rocommunity6?|rwcommunity6?)[[:space:]]' $snmp_files 2>/dev/null |
+  awk '{ k = tolower($1); c = ""; s = ""
+         if (k ~ /^com2sec/) {
+           if (match($0, /[ \t]("[^"]*"|\047[^\047]*\047)[ \t]*$/)) {
+             c = substr($0, RSTART + 1); sub(/[ \t]+$/, "", c)
+             n = split(substr($0, 1, RSTART), a); if (n < 3) next; s = a[n]
+           } else { if (NF < 4) next; s = $(NF-1); c = $NF }
+         } else {
+           if ($2 ~ /^["\047]/ && match($0, /"[^"]*"|\047[^\047]*\047/)) {
+             c = substr($0, RSTART, RLENGTH); split(substr($0, RSTART + RLENGTH), a); s = a[1]
+           } else { c = $2; s = $3 }
+           if (s == "" || s ~ /^-/) s = "default"
+         }
+         if (c ~ /^["\047]/ && 1 < length(c) && substr(c, length(c)) == substr(c, 1, 1)) c = substr(c, 2, length(c) - 2)
+         if (s ~ /^["\047]/ && 1 < length(s) && substr(s, length(s)) == substr(s, 1, 1)) s = substr(s, 2, length(s) - 2)
+         if (s ~ /["\047]/) s = "default"   # 닫히지 않은 따옴표 등 해석 불가 → 보수적으로 전체 허용으로 본다
+         print k, s, c }')
+snmp_v3=0
+grep -qiE '^[[:space:]]*(rouser|rwuser|createUser|usmUser)[[:space:]]' $snmp_files /var/lib/net-snmp/snmpd.conf /var/lib/snmp/snmpd.conf 2>/dev/null && snmp_v3=1
+
 # U-59 안전한 SNMP 버전 사용   [기준] 양호 - v3 이상 / 취약 - v2 이하
+#  community 정의가 하나라도 있으면 v1/v2c 로도 접근 가능 → 취약 (rouser 를 추가해도 기본 com2sec 이 남아 있으면 취약)
 if [ "$snmp_run" -eq 0 ]; then rep U-59 "안전한 SNMP 버전 사용" NA "SNMP 미실행"
-elif grep -qiE '^[[:space:]]*(createUser|rouser|rwuser)' "$snmp_conf" 2>/dev/null && ! grep -qiE '^[[:space:]]*(rocommunity|rwcommunity)[[:space:]]' "$snmp_conf" 2>/dev/null; then
+elif [ -n "$snmp_cs" ]; then
+  rep U-59 "안전한 SNMP 버전 사용" VULN "SNMP v1/v2c community 설정 존재($(printf '%s\n' "$snmp_cs" | awk '!s[$1]++ { printf "%s%s", (n++ ? "," : ""), $1 }')) → v3 전용으로 전환"
+elif [ "$snmp_v3" -eq 1 ]; then
   rep U-59 "안전한 SNMP 버전 사용" GOOD "SNMPv3(createUser/rouser)만 사용, v1/v2c community 없음"
 else
-  rep U-59 "안전한 SNMP 버전 사용" VULN "SNMP v1/v2c community 설정 존재 → v3 전용으로 전환"
+  rep U-59 "안전한 SNMP 버전 사용" MAN "SNMP 실행 중이나 snmpd.conf 에서 community/v3 사용자 설정을 찾지 못함 → snmpd -c 설정 경로 확인"
 fi
 
 # U-60 SNMP Community String 복잡성 설정
-# [기준] 양호 - public/private 아님 + 복잡성 충족 / 취약 - 기본값 또는 단순
+# [기준] 양호 - public/private 아님 + (영문·숫자 포함 10자리 이상 또는 영문·숫자·특수문자 포함 8자리 이상)
+#        취약 - 기본값(public/private) 또는 길이·문자 조합 미달   ※ v3 전용이면 인증 비밀번호 복잡도로 판단
+#  community 마다 값을 직접 판정한다. 근거에는 기본값 외의 community 값은 남기지 않고 키워드·길이만 적는다.
+c_def=""; c_weak=""
+while read -r ck _ cs; do
+  [ -z "$ck" ] && continue
+  case "${cs,,}" in public|private) c_def="$c_def $ck=$cs"; continue ;; esac
+  if [[ $cs =~ [A-Za-z] ]] && [[ $cs =~ [0-9] ]] && { [ "${#cs}" -ge 10 ] || { [[ $cs =~ [^A-Za-z0-9] ]] && [ "${#cs}" -ge 8 ]; }; }; then :
+  else c_weak="$c_weak $ck(${#cs}자)"; fi
+done <<< "$snmp_cs"
 if [ "$snmp_run" -eq 0 ]; then rep U-60 "SNMP Community String 복잡성 설정" NA "SNMP 미실행"
-elif grep -qiE '^[[:space:]]*(rocommunity|rwcommunity)[[:space:]]+(public|private)\b' "$snmp_conf" 2>/dev/null; then
-  rep U-60 "SNMP Community String 복잡성 설정" VULN "community=public/private (기본값 사용)"
-elif grep -qiE '^[[:space:]]*(rocommunity|rwcommunity)[[:space:]]+\S{1,7}\b' "$snmp_conf" 2>/dev/null; then
-  rep U-60 "SNMP Community String 복잡성 설정" VULN "community 문자열이 8자리 미만 → 복잡성 미달"
-elif grep -qiE '^[[:space:]]*(rocommunity|rwcommunity)' "$snmp_conf" 2>/dev/null; then
-  rep U-60 "SNMP Community String 복잡성 설정" MAN "community 설정 존재(기본값 아님) → 문자 조합/길이 복잡성 상세 확인"
+elif [ -n "$c_def" ]; then
+  rep U-60 "SNMP Community String 복잡성 설정" VULN "community 기본값 사용:$c_def"
+elif [ -n "$c_weak" ]; then
+  rep U-60 "SNMP Community String 복잡성 설정" VULN "community 복잡성 미달(영문·숫자 10자 이상 또는 영문·숫자·특수문자 8자 이상 아님):$c_weak"
+elif [ -n "$snmp_cs" ]; then
+  rep U-60 "SNMP Community String 복잡성 설정" GOOD "community 기본값 아님 + 길이·문자 조합 기준 충족"
+elif [ "$snmp_v3" -eq 1 ]; then
+  rep U-60 "SNMP Community String 복잡성 설정" MAN "community 미사용(v3 전용) → v3 인증/암호화 비밀번호 복잡도 확인"
 else
-  rep U-60 "SNMP Community String 복잡성 설정" GOOD "v1/v2c community 미사용"
+  rep U-60 "SNMP Community String 복잡성 설정" MAN "SNMP 실행 중이나 community/v3 사용자 설정을 찾지 못함 → 설정 경로 확인"
 fi
 
 # U-61 SNMP Access Control 설정   [기준] 양호 - 접근 제어 설정 / 취약 - 미설정
+#  community 별 출발지가 default·마스크 /0(0.0.0.0/0, ::/0 등)이거나 생략이면 전체 허용 → 취약. 모든 줄이 IP/대역/호스트로 제한돼야 양호
+a_open=$(printf '%s\n' "$snmp_cs" | awk '2 <= NF && tolower($2) ~ /^default$|\/0$|\/0\.0\.0\.0$/ { printf " %s(%s)", $1, $2 }')
 if [ "$snmp_run" -eq 0 ]; then rep U-61 "SNMP Access Control 설정" NA "SNMP 미실행"
-elif grep -qiE '^[[:space:]]*com2sec|^[[:space:]]*(rocommunity|rwcommunity)[[:space:]]+\S+[[:space:]]+[0-9]' "$snmp_conf" 2>/dev/null; then
-  rep U-61 "SNMP Access Control 설정" GOOD "snmpd.conf 에 com2sec/소스 IP 제한 설정 존재"
+elif [ -n "$a_open" ]; then
+  a_lo=""; port_listen 161 && ! port_listen_ext 161 && a_lo=" (참고: 161 은 localhost 에서만 리스닝)"
+  rep U-61 "SNMP Access Control 설정" VULN "SNMP 접근 허용 대상(소스 IP) 제한 미설정:$a_open$a_lo"
+elif [ -n "$snmp_cs" ]; then
+  rep U-61 "SNMP Access Control 설정" GOOD "community 별 허용 출발지(IP/대역/호스트) 제한 설정 존재"
+elif [ "$snmp_v3" -eq 1 ]; then
+  rep U-61 "SNMP Access Control 설정" MAN "community 미사용(v3 전용) → agentAddress/방화벽 등 접근 허용 대상 제한 확인"
 else
-  rep U-61 "SNMP Access Control 설정" VULN "SNMP 접근 허용 대상(소스 IP) 제한 미설정"
+  rep U-61 "SNMP Access Control 설정" MAN "SNMP 실행 중이나 community 설정을 찾지 못함 → 접근 제어 설정 확인"
 fi
 
 # U-62 로그인 시 경고 메시지 설정
 # [기준] 양호 - 서버 및 Telnet/FTP/SMTP/DNS 서비스 로그온 시 경고 메시지 설정 / 취약 - 미설정
+#  서버 = /etc/issue·/etc/motd, SSH = Banner 파일 내용에 경고문이 있어야 함(파일만 있고 OS 정보뿐이면 미설정)
+#  Telnet(/etc/issue.net)·FTP·SMTP·DNS 배너는 해당 서비스를 사용 중일 때만 점검(가이드 조치 방법)
+#  ※ 사용 여부는 포트/서비스/정확한 프로세스명(pgrep -x)으로 따로 본다. mail_run 의 proc_run "master|sendmail" 은
+#    pgrep -f 로 명령줄을 보므로 nginx 'master process' 도 잡는다(web-adm1 실측). ftp_run 의 "vsftpd|proftpd|..." 는
+#    -f 패턴에서 | 우선순위로 가운데 대안(proftpd, in.ftpd)이 앵커 없이 걸린다(예: vi /etc/proftpd/proftpd.conf)
 warn_re='(경고|허가|무단|승인|비인가|접근이 제한|unauthorized|authorized (users|personnel|access)|prohibited|monitored|warning|access is restricted)'
 sshban=$(sshd_val banner)
 b_local=0; b_ssh=0
-grep -qiE "$warn_re" /etc/issue /etc/issue.net /etc/motd 2>/dev/null && b_local=1
-{ [ -n "$sshban" ] && [ "$sshban" != none ] && { [ -s "$sshban" ] || grep -qiE "$warn_re" "$sshban" 2>/dev/null; }; } && b_ssh=1
-if [ "$b_local" -eq 1 ] && [ "$b_ssh" -eq 1 ]; then
-  rep U-62 "로그인 시 경고 메시지 설정" GOOD "서버 경고문(issue/motd) + SSH Banner 설정"
-elif [ "$b_local" -eq 1 ] || [ "$b_ssh" -eq 1 ]; then
-  rep U-62 "로그인 시 경고 메시지 설정" VULN "일부만 설정(서버 경고문=$b_local, SSH Banner=$b_ssh) → 서버 및 원격 서비스 전체에 경고 메시지 필요"
+grep -qiE "$warn_re" /etc/issue /etc/motd 2>/dev/null && b_local=1
+{ [ -n "$sshban" ] && [ "$sshban" != none ] && grep -qiE "$warn_re" "$sshban" 2>/dev/null; } && b_ssh=1
+sv_ok=""; sv_no=""; sv_man=""
+ban_chk() { if printf '%s\n' "$2" | grep -qiE "$warn_re"; then sv_ok="$sv_ok $1"; else sv_no="$sv_no $1"; fi; }   # $1=서비스 $2=배너 문자열
+[ "${telnet_on:-0}" -eq 1 ] && ban_chk Telnet "$(cat /etc/issue.net 2>/dev/null)"
+if port_listen 21 || pgrep -x 'vsftpd|proftpd|in.ftpd|pure-ftpd' >/dev/null 2>&1; then   # vsftpd ftpd_banner/banner_file, proftpd DisplayLogin/ServerIdent
+  fcf="/etc/vsftpd/vsftpd.conf /etc/vsftpd.conf /etc/proftpd.conf /etc/proftpd/proftpd.conf"
+  fex=0; for f in $fcf; do [ -f "$f" ] && fex=1; done
+  fb=$(grep -hiE '^[[:space:]]*(ftpd_banner[[:space:]]*=|ServerIdent[[:space:]]+on)' $fcf 2>/dev/null); frel=""
+  for bf in $(grep -hiE '^[[:space:]]*(banner_file[[:space:]]*=|DisplayLogin[[:space:]])' $fcf 2>/dev/null | sed -E 's/^[[:space:]]*[A-Za-z_]+[[:space:]=]+//; s/"//g'); do
+    case "$bf" in /*) fb="$fb $(head -c 4096 "$bf" 2>/dev/null)" ;; *) frel="$frel $bf" ;; esac
+  done
+  if [ "$fex" -eq 0 ]; then sv_man="$sv_man FTP(vsftpd/proftpd 설정 파일 없음)"
+  elif [ -n "$frel" ] && ! printf '%s\n' "$fb" | grep -qiE "$warn_re"; then sv_man="$sv_man FTP(DisplayLogin 상대경로:$frel)"
+  else ban_chk FTP "$fb"; fi
+fi
+if port_listen 25 || svc_active postfix || svc_active sendmail || svc_active exim || svc_active exim4; then   # postfix smtpd_banner, sendmail SmtpGreetingMessage, exim smtp_banner
+  mk=$mail_kind; svc_active postfix && mk=postfix; { svc_active exim || svc_active exim4; } && mk=exim
+  case "$mk" in
+    postfix)  ban_chk SMTP "$(postconf -h smtpd_banner 2>/dev/null)" ;;
+    sendmail) ban_chk SMTP "$(grep -hiE '^O[[:space:]]+SmtpGreetingMessage' /etc/mail/sendmail.cf 2>/dev/null)" ;;
+    exim)     ban_chk SMTP "$(grep -hiE '^[[:space:]]*(smtp_banner|MAIN_SMTP_BANNER)[[:space:]]*=' /etc/exim/exim.conf /etc/exim4/exim4.conf /etc/exim4/exim4.conf.template /etc/exim4/exim4.conf.localmacros /etc/exim4/conf.d/main/* 2>/dev/null)" ;;
+    *)        sv_man="$sv_man SMTP(25 리스닝, MTA 종류 확인 필요)" ;;
+  esac
+fi
+{ pgrep -x named >/dev/null 2>&1 || svc_active named || svc_active named-chroot || svc_active bind9; } && ban_chk DNS "$(grep -hiE '^[[:space:]]*version[[:space:]]' /etc/named.conf /etc/bind/named.conf /etc/bind/named.conf.options /etc/named/*.conf 2>/dev/null)"
+if [ "$b_local" -eq 1 ] && [ "$b_ssh" -eq 1 ] && [ -z "$sv_no" ] && [ -z "$sv_man" ]; then
+  rep U-62 "로그인 시 경고 메시지 설정" GOOD "서버 경고문(issue/motd) + SSH Banner 설정${sv_ok:+ + 서비스 배너:$sv_ok}"
+elif [ "$b_local" -eq 1 ] && [ "$b_ssh" -eq 1 ] && [ -z "$sv_no" ]; then
+  rep U-62 "로그인 시 경고 메시지 설정" MAN "서버 경고문(issue/motd) + SSH Banner 설정, 서비스 배너 확인 필요:$sv_man"
+elif [ "$b_local" -eq 1 ] || [ "$b_ssh" -eq 1 ] || [ -n "$sv_ok" ]; then
+  rep U-62 "로그인 시 경고 메시지 설정" VULN "일부만 설정(서버 경고문=$b_local, SSH Banner=$b_ssh${sv_no:+, 경고문 없는 서비스:$sv_no}) → 서버 및 원격 서비스 전체에 경고 메시지 필요"
 else
-  rep U-62 "로그인 시 경고 메시지 설정" VULN "로그온 경고 메시지 미설정 (기본 issue 는 OS 정보만 노출)"
+  rep U-62 "로그인 시 경고 메시지 설정" VULN "로그온 경고 메시지 미설정 (기본 issue 는 OS 정보만 노출)${sv_no:+, 경고문 없는 서비스:$sv_no}"
 fi
 
 # U-63 sudo 명령어 접근 관리   [기준] 양호 - /etc/sudoers 소유자 root + 권한 640 이하
 if [ ! -e /etc/sudoers ]; then rep U-63 "sudo 명령어 접근 관리" NA "/etc/sudoers 없음"
 else
-  so=$(stat -c '%U' /etc/sudoers); sp=$(stat -c '%a' /etc/sudoers)
+  so=$(stat -Lc '%U' /etc/sudoers); sp=$(stat -Lc '%a' /etc/sudoers)   # 권한은 비트 기준 640(440·600 양호, 444·604·460 취약)
   d_bad=$( shopt -s nullglob
     for f in /etc/sudoers.d/*; do
       [ -f "$f" ] || continue
-      p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
+      p=$(stat -Lc '%a' "$f"); o=$(stat -Lc '%U' "$f")
       { [ "$o" != root ] || ! perm_le "$p" 640; } && echo "$f($o,$p)"
     done | tr '\n' ' ')
   nopw=$(grep -rhE '^[^#]*NOPASSWD:[[:space:]]*ALL' /etc/sudoers /etc/sudoers.d/* 2>/dev/null | grep -vE '^[[:space:]]*#' | awk '{print $1}' | tr '\n' ' ')
@@ -1539,18 +2162,52 @@ else
 fi
 
 # U-67 로그 디렉터리 및 로그 파일 소유자/권한
-# [기준] 양호 - 디렉터리 내 로그 파일 소유자 root + 권한 644 이하 / 취약 - 아님
+# [기준] 양호 - 디렉터리 내 로그 파일 소유자 root + 권한 644 이하 / 취약 - 소유자 root 아님 또는 권한 644 초과
+#   고정 목록이 아니라 /var/log 아래 일반 파일 전체(깊이 4, 심볼릭 링크 제외)를 bash 로 순회한다(find 미사용).
+#   가이드에 syslog/adm·데몬 계정 소유 예외가 없으므로 소유자는 root 만 인정한다.
+#   권한은 숫자 크기가 아니라 비트로 본다: 644 밖 비트(특수권한·소유자 x·그룹/기타 w,x = 7133)가 있으면 초과
+#   (숫자 비교는 460·606 처럼 그룹/기타 쓰기가 있어도 644 보다 작아 통과시킨다).
 log_bad=""
 dp=$(stat -c '%a' /var/log 2>/dev/null); do_=$(stat -c '%U' /var/log 2>/dev/null)
-{ [ "$do_" = root ] && perm_le "$dp" 755; } || log_bad="$log_bad /var/log($do_,$dp)"
-for f in $LOG_FILES $LOG_FILES_UTMP; do
-  [ -e "$f" ] || continue
-  p=$(stat -c '%a' "$f"); o=$(stat -c '%U' "$f")
-  case " root syslog adm " in *" $o "*) : ;; *) log_bad="$log_bad ${f}(소유자=$o)";; esac
-  perm_le "$p" 644 || log_bad="$log_bad ${f}($p)"
-done
-if [ -z "$log_bad" ]; then rep U-67 "로그 디렉토리 소유자 및 권한 설정" GOOD "/var/log 및 주요 로그 파일 소유자 root(syslog/adm) + 권한 644 이하"
-else rep U-67 "로그 디렉토리 소유자 및 권한 설정" VULN "기준(root, 644 이하) 초과:$log_bad"; fi
+{ [ "$do_" = root ] && ! perm_has "${dp:-777}" 7022; } || log_bad=" /var/log($do_,$dp)"
+log_st=$( shopt -s nullglob dotglob
+  _lw() {   # $1=디렉터리 $2=깊이 → "권한 소유자 경로" 출력(stat 은 디렉터리별로 묶어 호출, 하위 디렉터리는 그 뒤에)
+    local f fl=() dl=()
+    for f in "$1"/*; do
+      if [ -L "$f" ]; then continue
+      elif [ -d "$f" ]; then dl+=("$f")
+      elif [ -f "$f" ]; then fl+=("$f"); [ ${#fl[@]} -ge 500 ] && { stat -c '%a %U %n' -- "${fl[@]}"; fl=(); }
+      fi
+    done
+    [ ${#fl[@]} -eq 0 ] || stat -c '%a %U %n' -- "${fl[@]}"
+    [ "$2" -lt 4 ] || return 0
+    for f in "${dl[@]}"; do _lw "$f" $(( $2 + 1 )); done
+  }
+  _lw /var/log 1 2>/dev/null )
+n_log=0; n_own=0; n_perm=0; l_own=""; l_perm=""; o_list=""
+while read -r p o f; do
+  [ -n "$f" ] || continue
+  n_log=$((n_log+1))
+  if [ "$o" != root ]; then
+    n_own=$((n_own+1)); [ "$n_own" -le 10 ] && l_own="$l_own ${f}($o,$p)"
+    case " $o_list " in *" $o "*) ;; *) o_list="${o_list:+$o_list }$o";; esac
+  elif perm_has "$p" 7133; then
+    n_perm=$((n_perm+1)); [ "$n_perm" -le 10 ] && l_perm="$l_perm ${f}($p)"
+  fi
+done < <(printf '%s\n' "$log_st")
+[ "$n_own" -gt 10 ] && l_own="$l_own 외 $((n_own-10))개"
+[ "$n_perm" -gt 10 ] && l_perm="$l_perm 외 $((n_perm-10))개"
+u67_ev=()
+[ -n "$log_bad" ] && u67_ev+=("/var/log 디렉터리 기준(root, 755 이하) 초과:$log_bad")
+[ "$n_own" -gt 0 ] && u67_ev+=("소유자 root 아님 ${n_own}개:$l_own → 서비스 계정($o_list)이 직접 기록하는 로그는 서비스 설정과 함께 root 로 변경(예외 운영 시 근거 문서화)")
+[ "$n_perm" -gt 0 ] && u67_ev+=("권한 644 초과 ${n_perm}개:$l_perm")
+if [ "${#u67_ev[@]}" -gt 0 ]; then
+  rep U-67 "로그 디렉토리 소유자 및 권한 설정" VULN "기준(root, 644 이하) 위반 — /var/log 하위 일반 파일 ${n_log}개 점검(깊이 4, 링크 제외)" "${u67_ev[@]}"
+elif [ "$IS_ROOT" -ne 1 ]; then
+  rep U-67 "로그 디렉토리 소유자 및 권한 설정" MAN "/var/log 하위 일반 파일 ${n_log}개는 기준 충족. 단 root 가 아니어서 접근 제한 하위 디렉터리(audit 등)는 미점검 → root 로 재점검"
+else
+  rep U-67 "로그 디렉토리 소유자 및 권한 설정" GOOD "/var/log 및 하위 로그 파일 ${n_log}개(깊이 4, 링크 제외) 소유자 root + 권한 644 이하"
+fi
 
 #==============================================================================
 echo
@@ -3840,10 +4497,47 @@ if ($Target -eq "tomcat") {
 
     Write-Host "[ 1. 계정 관리 ]" -ForegroundColor White
     Rep "WEB-01" "NA" @("가이드 점검대상(Tomcat/JEUS)에 IIS 미포함 → IIS 관리자 계정은 서버 계정 항목(W-01)에서 점검")
+    # WEB-02 가이드: 관리자 비밀번호가 암호화되어 있거나 유추하기 어려우면 양호(웹 전용 관리자 계정·WMSVC 유무는 기준 아님)
+    #   IIS 관리자 = 로컬 Administrators(SAM 해시) + IIS 관리자 사용자(administration.config credentials, SHA-256 해시)
+    #   (1) IIS 구성(administration/applicationHost/redirection.config)의 password 속성을 XML 로 읽음(주석·connectionString 내부 제외)
+    #       [enc:]·해시가 아닌 평문은 강도 평가(p.277): 2종 10자·3종 8자 미만, 계정명 포함(같은 요소 userName·administration.config <add> name,
+    #       도메인 제외 3자 이상), admin/root 포함, 영문만, 1111·1234·abcd 식 4자 연속이면 약함 → 취약(값·계정명은 출력 안 함, 길이·종류 수·사유만)
+    #       기준 충족 평문은 취약에서 빼고 아래 정책 분기로 넘김([enc:] 재설정 권고만 근거에 남김), 빈 값은 내장 계정(IUSR 등)이라 제외
+    #   (2) SAM 쪽 secedit: ClearTextPassword=1(해독 가능 저장) + 복잡도 미적용 → 취약, 1 + 복잡도 적용 → 수동확인
+    #       0 + 복잡도 사용·최소 8자(3종 8자) → 양호, 0 + 복잡도 미흡 → 수동확인(실제 비밀번호 확인), 확인 불가 → 수동확인
     $wmsvc = Get-Service WMSVC -ErrorAction SilentlyContinue
     if (-not $IIS_INSTALLED) { Rep "WEB-02" "NA" @("IIS 미설치") }
-    elseif ($null -eq $wmsvc) { Rep "WEB-02" "VULN" @("WMSVC/IIS 관리자 사용자 미사용 → 웹 전용 관리자 계정 부재, 자격증명 정책 미비(전용 관리 계정·강한 비밀번호 권장)") }
-    else { Rep "WEB-02" "MAN" @("IIS 관리자 사용자 존재 → 비밀번호 복잡도/암호화 정책 확인(WMSVC=$($wmsvc.Status))") }
+    else { $sd02 = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { "Sysnative" } else { "System32" }
+        $cfg02 = Join-Path $env:windir "$sd02\inetsrv\config"; $cr02 = 0; $wk02 = @(); $st02 = @(); $nr02 = @(); $sec02 = @{}
+        foreach ($f02 in @("administration.config","applicationHost.config","redirection.config")) { $p02 = Join-Path $cfg02 $f02
+            if (-not (Test-Path -LiteralPath $p02)) { if ($f02 -eq "applicationHost.config") { $nr02 += "$f02(없음)" }; continue }
+            try { $x02 = New-Object Xml.XmlDocument; $x02.XmlResolver = $null; $x02.Load($p02); $a02 = @($x02.SelectNodes("//@password")) } catch { $nr02 += "$f02(읽기 실패)"; continue }
+            foreach ($n02 in $a02) { $v02 = "$($n02.Value)"; if ($v02 -eq "") { continue }; $cr02++
+                if ($v02 -match '^\[enc:.+:enc\]$' -or ($f02 -eq "administration.config" -and $v02 -match '^[0-9A-Fa-f]{64,}$')) { continue }
+                $k02 = 0; foreach ($r02 in @('[A-Z]','[a-z]','[0-9]','[^A-Za-z0-9]')) { if ($v02 -cmatch $r02) { $k02++ } }
+                $e02 = $n02.OwnerElement; $u02 = $e02.GetAttribute("userName"); if ($u02 -eq "" -and $f02 -eq "administration.config" -and $e02.LocalName -eq "add") { $u02 = $e02.GetAttribute("name") }
+                $u02 = (($u02 -split '\\')[-1] -split '@')[0].ToLowerInvariant(); $q02 = $v02.ToLowerInvariant(); $h02 = @()
+                if ($u02.Length -ge 3 -and $q02.Contains($u02)) { $h02 += "계정명 포함" }
+                if ($q02 -match 'admin|root') { $h02 += "admin/root 포함" }
+                if ($v02 -match '^[A-Za-z]+$') { $h02 += "영문만" }
+                for ($i02 = 0; $i02 -le $q02.Length - 4; $i02++) { $s02 = $q02.Substring($i02, 4)
+                    if ($s02 -match '^(.)\1{3}$' -or @(@('0123456789','abcdefghijklmnopqrstuvwxyz','9876543210','zyxwvutsrqponmlkjihgfedcba') | Where-Object { $_.Contains($s02) }).Count) { $h02 += "4자 연속"; break } }
+                $d02 = "$f02 <$($e02.LocalName)> password(평문 $($v02.Length)자·$($k02)종$(if ($h02.Count) { '·' + ($h02 -join '·') }))"
+                if ($h02.Count -eq 0 -and (($k02 -ge 3 -and $v02.Length -ge 8) -or ($k02 -ge 2 -and $v02.Length -ge 10))) { $st02 += $d02 } else { $wk02 += $d02 } } }
+        if ($IS_ADMIN) { $inf02 = Join-Path $env:TEMP ("web02_secpol_{0}.inf" -f $PID)
+            secedit /export /cfg $inf02 /areas SECURITYPOLICY /quiet 2>$null | Out-Null
+            foreach ($l02 in @(Get-Content $inf02 -Encoding Unicode -ErrorAction SilentlyContinue)) { if ($l02 -match '^\s*(ClearTextPassword|PasswordComplexity|MinimumPasswordLength)\s*=\s*(\d+)') { $sec02[$matches[1]] = [int]$matches[2] } }
+            Remove-Item $inf02 -Force -ErrorAction SilentlyContinue }
+        $ct02 = $sec02["ClearTextPassword"]; $pc02 = $sec02["PasswordComplexity"]; $ml02 = $sec02["MinimumPasswordLength"]; $cx02 = ($pc02 -eq 1 -and $ml02 -ge 8)
+        $pol02 = "로컬 정책: ClearTextPassword=$(if ($null -eq $ct02) {'확인 불가'} else {$ct02}), PasswordComplexity=$(if ($null -eq $pc02) {'확인 불가'} else {$pc02}), MinimumPasswordLength=$(if ($null -eq $ml02) {'확인 불가'} else {$ml02})"
+        $iis02 = "IIS 구성 password 속성 $($cr02)건(평문 약함 $($wk02.Count)건·기준 충족 $($st02.Count)건, 나머지 [enc:]/해시), WMSVC=$(if ($wmsvc) {$wmsvc.Status} else {'미설치'})"
+        $ev02 = @($iis02, $pol02); if ($st02.Count -gt 0) { $ev02 += "평문 저장(강도 기준 충족): $(($st02 | Select-Object -First 5) -join ', ') → IIS 관리자/appcmd 로 다시 설정해 [enc:] 암호화 저장 권고" }
+        if ($wk02.Count -gt 0) { Rep "WEB-02" "VULN" (@("IIS 구성 파일에 유추하기 쉬운 비밀번호 평문 저장(2종 10자·3종 8자 미만 또는 계정명·admin/root 포함·영문만·4자 연속): $(($wk02 | Select-Object -First 5) -join ', ') → 복잡도 기준 비밀번호로 바꾸고 IIS 관리자/appcmd 로 다시 설정해 [enc:] 암호화 저장") + $ev02) }
+        elseif ($nr02.Count -gt 0 -or $null -eq $ct02 -or $null -eq $pc02 -or $null -eq $ml02) { Rep "WEB-02" "MAN" (@("IIS 구성/로컬 보안 정책 확인 불가$(if ($nr02.Count) {": $($nr02 -join ', ')"}) → 관리자 권한으로 재실행해 관리자 비밀번호 암호화 저장·복잡도 확인") + $ev02) }
+        elseif ($ct02 -eq 1 -and -not $cx02) { Rep "WEB-02" "VULN" (@("ClearTextPassword=1(해독 가능한 암호화 저장) + 복잡도 정책 미흡(PasswordComplexity=$pc02, 최소 $($ml02)자) → 관리자 비밀번호가 암호화·복잡도 어느 쪽도 보장되지 않음, '사용 안 함'·복잡도 적용 후 비밀번호 재설정") + $ev02) }
+        elseif ($ct02 -eq 1) { Rep "WEB-02" "MAN" (@("ClearTextPassword=1(해독 가능한 암호화 저장), 복잡도 정책은 적용 → 실제 관리자 비밀번호가 3종 8자/2종 10자 이상인지 확인, '사용 안 함' 설정 후 비밀번호 재설정 권고") + $ev02) }
+        elseif ($cx02) { Rep "WEB-02" "GOOD" (@("관리자 비밀번호가 SAM 에 해시로 저장(해독 가능 암호화 없음) + 복잡도 정책(3종 이상·$($ml02)자 이상) 적용, IIS 구성에 유추하기 쉬운 평문 없음 → 암호화·유추 어려움 충족") + $ev02) }
+        else { Rep "WEB-02" "MAN" (@("비밀번호는 해시로 저장되나 복잡도 정책 미흡(PasswordComplexity=$pc02, 최소 $($ml02)자) → 관리자 비밀번호가 3종 8자/2종 10자 이상인지 확인") + $ev02) } }
     $sam = Join-Path $env:windir "System32\config\SAM"; $samUsers = AclHasUsers $sam
     if ($null -eq $samUsers) { Rep "WEB-03" "MAN" @("SAM ACL 확인 불가 → System/Administrators 로만 제한 확인") }
     elseif ($samUsers) { Rep "WEB-03" "VULN" @("$sam 에 Users/Everyone 접근 권한 → System/Administrators 로 제한 필요") }
