@@ -291,9 +291,21 @@ elif [ "$NACCT" -gt 0 ]; then rep D-02 MAN "잠금 해제된 일반(Oracle 관�
 elif [ -n "$e2$EACCT" ]; then rep D-02 MAN "조회 실패(${e2:-$EACCT}) → 권한 있는 계정으로 재점검하거나 수동 확인"
 else rep D-02 GOOD "Oracle 관리 계정 외 잠금 해제된 계정 없음(샘플/테스트 계정 없음)"; fi
 
+# D-03·D-05·D-09 공통: 공통 사용자(common=YES)의 잠금 상태와 비밀번호 한도는 CDB 루트 기준이다
+#   (루트에서 잠근 공통 사용자는 PDB 에서 못 풂 ORA-65146, 비밀번호 관련 한도는 루트에서 지정한 프로파일 값 적용).
+#   루트 접속이면 사용자를 정의된 컨테이너에서만 판정한다(PDB 행은 로컬 사용자만, 공통 사용자는 루트 행으로).
+#   --pdb 단독 점검이어도 공통 사용자 판정을 위해 루트를 함께 조회. PDB 에 직접 접속하면 루트를 볼 수 없어 PDB 값으로 판정.
+PWCONS="$CONS"; CUF=""
+if [ "$CON_NAME" = 'CDB$ROOT' ]; then
+  if ver_ge 12 2; then CUF=" AND u.inherited='NO'"; else CUF=" AND (u.common='NO' OR sys_context('USERENV','CON_ID')='1')"; fi
+  # --pdb 로 루트가 빠졌을 때만 루트 추가. '-'(PDB 목록 조회 실패 → 현재 컨테이너=루트)는 이미 루트라 그대로 둠(중복 조회 방지)
+  case " $(upper "$CONS") " in *' CDB$ROOT '*|' - ') ;; *) PWCONS="CDB\$ROOT $CONS";; esac
+fi
+pwviol() { local CONS="$PWCONS" NCONS; NCONS=$(set -- $PWCONS; echo $#); viol "$1"; }
+
 # D-03 비밀번호 사용기간·복잡도 — 잠기지 않은 비밀번호 계정에 실제 적용되는 프로파일 기준
 _lt=$(eff PASSWORD_LIFE_TIME); _vf=$(eff PASSWORD_VERIFY_FUNCTION)
-viol "SELECT username||'('||profile||': LIFE_TIME='||lt||', VERIFY_FUNCTION='||NVL(vf,'NULL')||')' FROM (SELECT u.username, u.profile, $_lt lt, $_vf vf FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD') WHERE lt='UNLIMITED' OR NVL(CASE WHEN REGEXP_LIKE(lt,'^[0-9]+\$') THEN TO_NUMBER(lt) END,0) > $PW_LIFE_MAX OR NVL(vf,'NULL') IN ('NULL','UNLIMITED') ORDER BY 1;"
+pwviol "SELECT username||'('||profile||': LIFE_TIME='||lt||', VERIFY_FUNCTION='||NVL(vf,'NULL')||')' FROM (SELECT u.username, u.profile, $_lt lt, $_vf vf FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD'$CUF) WHERE lt='UNLIMITED' OR NVL(CASE WHEN REGEXP_LIKE(lt,'^[0-9]*[.]?[0-9]+\$') THEN TO_NUMBER(lt) END,0) > $PW_LIFE_MAX OR NVL(vf,'NULL') IN ('NULL','UNLIMITED') ORDER BY 1;"
 verdict D-03 "잠기지 않은 비밀번호 계정 모두 사용기간 ${PW_LIFE_MAX}일 이하 + 복잡도 검증함수(PASSWORD_VERIFY_FUNCTION) 적용" \
   "사용기간(${PW_LIFE_MAX}일 이하, --pw-life-max 로 기관 기준 조정) 또는 복잡도 검증함수 미적용 계정 → 프로파일 설정 필요,"
 
@@ -309,7 +321,7 @@ else rep D-04 GOOD "SYS/SYSTEM·Oracle 관리 계정 외 관리자 권한(DBA �
 # D-05 비밀번호 재사용 제약 — 둘 다 UNLIMITED(제약 없음) 또는 둘 다 숫자인데 가이드 최소값(REUSE_MAX 10회·REUSE_TIME 365일) 미만
 #   (한쪽만 UNLIMITED 이면 Oracle 에서는 재사용 자체가 불가 → 제약 적용으로 봄)
 _rm=$(eff PASSWORD_REUSE_MAX); _rt=$(eff PASSWORD_REUSE_TIME)
-viol "SELECT username||'('||profile||': REUSE_MAX='||rm||', REUSE_TIME='||rt||')' FROM (SELECT u.username, u.profile, $_rm rm, $_rt rt FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD') WHERE (rm='UNLIMITED' AND rt='UNLIMITED') OR (rm<>'UNLIMITED' AND rt<>'UNLIMITED' AND (NVL(CASE WHEN REGEXP_LIKE(rm,'^[0-9]*[.]?[0-9]+\$') THEN TO_NUMBER(rm) END,0) < $REUSE_MAX_MIN OR NVL(CASE WHEN REGEXP_LIKE(rt,'^[0-9]*[.]?[0-9]+\$') THEN TO_NUMBER(rt) END,0) < $REUSE_TIME_MIN)) ORDER BY 1;"
+pwviol "SELECT username||'('||profile||': REUSE_MAX='||rm||', REUSE_TIME='||rt||')' FROM (SELECT u.username, u.profile, $_rm rm, $_rt rt FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD'$CUF) WHERE (rm='UNLIMITED' AND rt='UNLIMITED') OR (rm<>'UNLIMITED' AND rt<>'UNLIMITED' AND (NVL(CASE WHEN REGEXP_LIKE(rm,'^[0-9]*[.]?[0-9]+\$') THEN TO_NUMBER(rm) END,0) < $REUSE_MAX_MIN OR NVL(CASE WHEN REGEXP_LIKE(rt,'^[0-9]*[.]?[0-9]+\$') THEN TO_NUMBER(rt) END,0) < $REUSE_TIME_MIN)) ORDER BY 1;"
 verdict D-05 "잠기지 않은 비밀번호 계정 모두 재사용 제약 적용(REUSE_MAX ${REUSE_MAX_MIN}회·REUSE_TIME ${REUSE_TIME_MIN}일 이상 또는 재사용 불가)" \
   "비밀번호 재사용 제약 없음/미흡(기준 REUSE_MAX ${REUSE_MAX_MIN}회·REUSE_TIME ${REUSE_TIME_MIN}일 이상) 계정 → ALTER PROFILE ... PASSWORD_REUSE_TIME/MAX 설정,"
 
@@ -342,7 +354,7 @@ else rep D-08 GOOD "잠금 해제된 비밀번호 계정 모두 12C(SHA-2) 검�
 
 # D-09 로그인 실패 잠금 — 실제 적용 프로파일의 FAILED_LOGIN_ATTEMPTS 가 UNLIMITED 또는 기준 초과
 _fa=$(eff FAILED_LOGIN_ATTEMPTS)
-viol "SELECT username||'('||profile||': FAILED_LOGIN_ATTEMPTS='||fa||')' FROM (SELECT u.username, u.profile, $_fa fa FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD') WHERE fa='UNLIMITED' OR NVL(CASE WHEN REGEXP_LIKE(fa,'^[0-9]+\$') THEN TO_NUMBER(fa) END,0) > $LOGIN_FAIL_MAX ORDER BY 1;"
+pwviol "SELECT username||'('||profile||': FAILED_LOGIN_ATTEMPTS='||fa||')' FROM (SELECT u.username, u.profile, $_fa fa FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD'$CUF) WHERE fa='UNLIMITED' OR NVL(CASE WHEN REGEXP_LIKE(fa,'^[0-9]+\$') THEN TO_NUMBER(fa) END,0) > $LOGIN_FAIL_MAX ORDER BY 1;"
 verdict D-09 "잠금 해제된 비밀번호 계정 모두 로그인 실패 ${LOGIN_FAIL_MAX}회 이하에서 잠금(FAILED_LOGIN_ATTEMPTS)" \
   "로그인 실패 잠금 미설정(UNLIMITED) 또는 기준(${LOGIN_FAIL_MAX}회, --login-fail-max 로 조정) 초과 계정 → FAILED_LOGIN_ATTEMPTS 설정,"
 
@@ -439,8 +451,9 @@ elif [ -n "$V_ERR" ]; then rep D-20 MAN "조회 실패($V_ERR) → 권한 있는
 else rep D-20 GOOD "객체 소유자가 SYS·SYSTEM·Oracle 관리 계정·DBA 계정으로 한정"; fi
 
 # D-21 GRANT OPTION 제한 — 가이드 쿼리(grantable=YES, 기본 스키마 소유 제외, DBA 보유자 제외): 나오면 취약
-viol "SELECT grantee||':'||privilege||' ON '||owner||'.'||table_name FROM dba_tab_privs WHERE grantable='YES' AND owner NOT IN ('SYS','MDSYS','ORDPLUGINS','ORDSYS','SYSTEM','WMSYS','SDB','LBACSYS') AND owner NOT IN $MU AND grantee NOT IN $DBAH ORDER BY 1;"
-verdict D-21 "일반 계정에 WITH GRANT OPTION 으로 부여된 객체 권한 없음" \
+#   Oracle 관리 스키마 객체를 PUBLIC·Oracle 관리 계정에 준 설치 기본 부여(XDB→PUBLIC 등)만 제외, 일반 계정의 GRANT OPTION 은 소유 스키마와 무관하게 잡음
+viol "SELECT grantee||':'||privilege||' ON '||owner||'.'||table_name FROM dba_tab_privs WHERE grantable='YES' AND owner NOT IN ('SYS','MDSYS','ORDPLUGINS','ORDSYS','SYSTEM','WMSYS','SDB','LBACSYS') AND NOT (owner IN $MU AND (grantee='PUBLIC' OR grantee IN $MU)) AND grantee NOT IN $DBAH ORDER BY 1;"
+verdict D-21 "일반 계정에 WITH GRANT OPTION 으로 부여된 객체 권한 없음(Oracle 관리 스키마 객체의 PUBLIC·관리 계정 설치 기본 부여는 제외)" \
   "WITH GRANT OPTION 객체 권한을 가진 비 DBA 계정 → 회수 후 롤로 부여,"
 
 # D-22 RESOURCE_LIMIT (컨테이너별)
