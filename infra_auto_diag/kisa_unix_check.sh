@@ -1002,32 +1002,46 @@ else rep U-27 "\$HOME/.rhosts, hosts.equiv 사용 금지" GOOD "r계열 서비�
 #       이 있으면 전체 허용(단, ': DENY' 로 끝나는 거부 줄은 제외).
 #     - sshd 가 libwrap 에 링크됨(ldd). RHEL/Rocky 8+ 등 tcp_wrappers 가 제거된 sshd 는 hosts.allow/deny 가 무효.
 #     위 조건을 못 채우면 호스트 방화벽 판정으로 넘어간다.
+#   ※ 호스트 방화벽은 사용 여부만 자동 확인한다(INPUT 경로 한정 — Docker 의 FORWARD/DOCKER 규칙은 제외).
+#     규칙 해석(출발지·포트 범위·zone·rich rule 등)은 도구·형식이 다양해 잘못된 양호/취약을 낼 수 있으므로
+#     방화벽이 있으면 수동확인으로 두고, 없으면 TCP Wrapper 판정 결과를 따른다.
 tcpw_deny=$(grep -viE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.deny 2>/dev/null | grep -icE 'ALL[[:space:]]*:[[:space:]]*ALL')
 tcpw_allow=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' /etc/hosts.allow 2>/dev/null)
 allow_open=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.allow 2>/dev/null \
   | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(sshd|ALL)([,[:space:]][^:]*)?:' \
   | grep -viE ':[[:space:]]*DENY[[:space:]]*$' \
-  | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|0\.0\.0\.0/0)([[:space:]]*$|[[:space:]]*:|[[:space:],]|$)' | head -3 | tr '\n' ';')
+  | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|0\.0\.0\.0/0(\.0\.0\.0)?|\[::\]/0|\*)([[:space:]]*$|[[:space:]]*:|[[:space:],]|$)' | head -3 | tr '\n' ';')
 sshd_bin=$(command -v sshd 2>/dev/null); [ -z "$sshd_bin" ] && [ -x /usr/sbin/sshd ] && sshd_bin=/usr/sbin/sshd
 wrap_ok=0; [ -n "$sshd_bin" ] && have ldd && ldd "$sshd_bin" 2>/dev/null | grep -q libwrap && wrap_ok=1
-fw="none"; fw_rules=0
-svc_active firewalld && { fw="firewalld"; firewall-cmd --list-rich-rules 2>/dev/null | grep -q . && fw_rules=1; firewall-cmd --list-sources 2>/dev/null | grep -q . && fw_rules=1; }
-{ have ufw && ufw status 2>/dev/null | grep -qi '^Status: active'; } && { fw="ufw"; ufw status 2>/dev/null | grep -qiE 'ALLOW|DENY' && fw_rules=1; }
-if [ "$fw" = none ] && [ "$IS_ROOT" -eq 1 ]; then
-  if have nft && nft list ruleset 2>/dev/null | grep -qE 'ip (saddr|daddr)|tcp dport'; then fw="nftables"; fw_rules=1
-  elif have iptables && iptables -S 2>/dev/null | grep -qE '(-s |--dport ).*-j (ACCEPT|DROP|REJECT)'; then fw="iptables"; fw_rules=1; fi
-fi
+# 호스트 방화벽 사용 여부(U-28·U-56 공통) → HFW=none|firewalld|ufw|nftables|iptables, HFW_EV=요약
+hfw_detect() {
+  local r n
+  HFW="none"; HFW_EV=""
+  if svc_active firewalld; then HFW=firewalld; HFW_EV="firewalld 활성(기본 zone=$(run_to 5 firewall-cmd --get-default-zone 2>/dev/null))"; return 0; fi
+  if have ufw && run_to 5 ufw status 2>/dev/null | grep -qi '^Status: active'; then HFW=ufw; HFW_EV="ufw 활성"; return 0; fi
+  [ "$IS_ROOT" -eq 1 ] || return 0
+  if have nft && r=$(run_to 5 nft list ruleset 2>/dev/null) && [ -n "$r" ]; then
+    n=$(printf '%s\n' "$r" | awk '/^[ \t]*chain[ \t]/{c=1;h=0;next} c&&/hook input/{h=1;if(/policy drop/)k++;next} c&&/^[ \t]*[}]/{c=0;next} c&&h&&NF{k++} END{print k+0}')
+    [ "${n:-0}" -gt 0 ] && { HFW=nftables; HFW_EV="nft input 체인 규칙/기본 차단 ${n}건"; return 0; }
+  fi
+  if have iptables && r=$(run_to 5 iptables -S INPUT 2>/dev/null) && [ -n "$r" ]; then
+    n=$(printf '%s\n' "$r" | grep -cE '^-A INPUT |^-P INPUT (DROP|REJECT)$')
+    [ "${n:-0}" -gt 0 ] && { HFW=iptables; HFW_EV="iptables INPUT 규칙/기본 차단 ${n}건"; }
+  fi
+  return 0
+}
+hfw_detect; fw=$HFW
 u28_why="TCP Wrapper 미설정"
 [ "$tcpw_deny" -ge 1 ] && [ -n "$allow_open" ] && u28_why="TCP Wrapper hosts.allow 가 전체 허용(${allow_open%;})"
 [ "$tcpw_deny" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 0 ] && u28_why="TCP Wrapper 설정은 있으나 sshd 가 libwrap 미연동(${sshd_bin:-sshd 없음}) → 무효"
 if [ "$tcpw_deny" -ge 1 ] && [ "$tcpw_allow" -ge 1 ] && [ -z "$allow_open" ] && [ "$wrap_ok" -eq 1 ]; then
   rep U-28 "접속 IP 및 포트 제한" GOOD "TCP Wrapper: hosts.deny ALL:ALL + hosts.allow ${tcpw_allow}줄(특정 호스트만 허용), sshd libwrap 연동 (방화벽=$fw)"
-elif [ "$fw_rules" -eq 1 ]; then
-  rep U-28 "접속 IP 및 포트 제한" GOOD "호스트 방화벽($fw)에 소스/포트 제한 규칙 존재"
-elif [ "$fw" = none ] && [ "$IS_ROOT" -ne 1 ]; then
+elif [ "$fw" != none ]; then
+  rep U-28 "접속 IP 및 포트 제한" MAN "$u28_why. 호스트 방화벽 사용 중($HFW_EV) → SSH 포트의 접속 IP 제한 여부 수동 확인(규칙은 자동 해석 안 함, 클라우드 SG/NACL 별도 점검)"
+elif [ "$IS_ROOT" -ne 1 ]; then
   rep U-28 "접속 IP 및 포트 제한" MAN "$u28_why. 방화벽 규칙은 root 확인 필요 (클라우드는 SG/NACL 별도 점검)"
 else
-  rep U-28 "접속 IP 및 포트 제한" VULN "$u28_why + 호스트 방화벽($fw) 제한 규칙 없음 (클라우드 SG는 별도 점검)"
+  rep U-28 "접속 IP 및 포트 제한" VULN "$u28_why + 호스트 방화벽 미사용 (클라우드 SG는 별도 점검)"
 fi
 
 # U-29 hosts.lpd   [기준] 양호 - 파일 없음, 또는 소유자 root + 권한 600 이하
@@ -1559,8 +1573,6 @@ ftp_val() { conf_line "^[[:space:]]*$1([[:space:]]*=|[[:space:]])" "${@:2}" | se
 ftp_yes() { case "${1^^}" in YES|TRUE|ON|1) return 0;; esac; return 1; }
 ftp_no()  { case "${1^^}" in NO|FALSE|OFF|0) return 0;; esac; return 1; }
 ftp_root_in() { local f; for f in "$@"; do grep -qE '^[[:space:]]*root[[:space:]]*$' "$f" 2>/dev/null && { printf '%s' "$f"; return 0; }; done; return 1; }   # root 줄(주석 제외)이 있는 첫 파일
-# stdin=21/tcp 허용 규칙 줄, $1=출발지 지정 표시(정규식) → 출발지 없는(전체) 허용이 없을 때만 첫 줄 출력
-ftp_fw_pick() { local r; r=$(grep -v '^[[:space:]]*$'); [ -n "$r" ] || return 1; printf '%s\n' "$r" | grep -qvE "$1" && return 1; printf '%s\n' "$r" | head -1; }
 
 # U-53 FTP 서비스 정보 노출 제한   [기준] 양호 - 접속 배너에 노출되는 정보 없음 / 취약 - 노출
 #   vsftpd : banner_file(우선)·ftpd_banner 가 없거나 값·파일이 비면(vsftpd 는 빈 값을 미설정으로 처리) 기본 배너 "(vsFTPd 버전)" 노출
@@ -1613,14 +1625,60 @@ elif echo "$ftpsh" | grep -qE 'nologin|false'; then rep U-55 "FTP 계정 Shell �
 else rep U-55 "FTP 계정 Shell 제한" VULN "ftp 계정 셸=$ftpsh (nologin/false 필요)"; fi
 
 # U-56 FTP 서비스 접근 제어 설정   [기준] 양호 - 특정 IP/호스트만 허용 / 취약 - 미적용
+#   가이드 조치 예시(ProFTP AllowUser·Allow from, vsFTP user_list 허용 목록)처럼 '지정한 대상만 접속 허용'하는 설정을 인정
+#   proftpd: <Limit LOGIN>(주석·<Anonymous> 내부 제외 — 익명 로그인에만 적용)에 허용 대상(Allow from <IP>·AllowUser·AllowGroup·AllowClass)
+#            + DenyAll/Deny from all 또는 Order deny,allow(허용에 안 맞으면 거부). AllowAll·Allow from all 이 있으면 불인정
+#   vsftpd : userlist_enable=YES + userlist_deny=NO + user_list 에 계정 등록(등록 계정만 접속)
+#            또는 tcp_wrappers=YES + libwrap 연동(RHEL8+ 미지원) + hosts.deny 전체 거부 + hosts.allow 가 전체 허용(ALL·0.0.0.0/0) 아님
+#   위가 없으면 호스트 방화벽 사용 여부(U-28 의 hfw_detect)만 보고, 사용 중이면 규칙 해석 없이 수동확인
+#   ftpusers 는 차단 목록(지정 대상만 허용이 아님)이라 참고로만 출력
 if [ "$ftp_run" -eq 0 ]; then rep U-56 "FTP 서비스 접근 제어 설정" NA "FTP 미실행"
-elif grep -qiE '^[[:space:]]*tcp_wrappers[[:space:]]*=[[:space:]]*YES' "$ftp_conf" 2>/dev/null && grep -qiE 'ftp|vsftpd' /etc/hosts.allow 2>/dev/null; then
-  rep U-56 "FTP 서비스 접근 제어 설정" GOOD "vsftpd tcp_wrappers=YES + hosts.allow 제한"
-elif grep -qiE '^[[:space:]]*<Limit|AllowUser|DenyAll' "$ftp_conf" 2>/dev/null; then
-  rep U-56 "FTP 서비스 접근 제어 설정" GOOD "proftpd <Limit> 접근 제어 설정"
 else
-  rep U-56 "FTP 서비스 접근 제어 설정" VULN "FTP 접근 제어(tcp_wrappers/<Limit>) 미설정"
+  u56_ok=""; u56_why="vsftpd/proftpd 설정 미확인(데몬=${ftp_d:-불명})"; u56_ref=""
+  for f in /etc/ftpusers /etc/ftpd/ftpusers /etc/vsftpd/ftpusers /etc/vsftpd.ftpusers; do [ -e "$f" ] && u56_ref="$u56_ref $f"; done
+  u56_ref=${u56_ref# }; u56_ref="참고(차단 목록): ftpusers=${u56_ref:-없음}"
+  if [ -n "$ftp_conf" ] && [ "$ftp_d" = proftpd ]; then
+    u56_lim=$(cat "$ftp_conf" /etc/proftpd/conf.d/*.conf 2>/dev/null | grep -vE '^[[:space:]]*#' \
+      | sed -n -e '/<Anonymous/I,/<\/Anonymous>/Id' -e '/<Limit[^>]*[[:space:]]LOGIN[[:space:]>]/I,/<\/Limit>/Ip')
+    u56_all='Allow[[:space:]]+(from[[:space:]]+)?([^#]*[[:space:],])?(all|0\.0\.0\.0/0)([[:space:],]|$)'
+    u56_al=$(printf '%s\n' "$u56_lim" | grep -iE '^[[:space:]]*Allow(User|Group|Class)?[[:space:]]' | grep -viE "^[[:space:]]*$u56_all" | head -1)
+    u56_aa=$(printf '%s\n' "$u56_lim" | grep -iE "^[[:space:]]*(AllowAll([[:space:]]|\$)|$u56_all)" | head -1)
+    u56_dn=$(printf '%s\n' "$u56_lim" | grep -iE '^[[:space:]]*(DenyAll|Deny[[:space:]]+(from[[:space:]]+)?all|Order[[:space:]]+deny[[:space:]]*,[[:space:]]*allow)([[:space:]]|$)' | head -1)
+    u56_v=$(ftp_val UseFtpUsers "$ftp_conf" /etc/proftpd/conf.d/*.conf); u56_ref="$u56_ref, UseFtpUsers=${u56_v:-on(기본)}"
+    if [ -n "$u56_al" ] && [ -n "$u56_dn" ] && [ -z "$u56_aa" ]; then
+      u56_ok="proftpd <Limit LOGIN> ${u56_al#"${u56_al%%[![:space:]]*}"} + ${u56_dn#"${u56_dn%%[![:space:]]*}"}"
+    elif [ -n "$u56_aa" ]; then u56_why="proftpd <Limit LOGIN> 에 전체 허용(${u56_aa#"${u56_aa%%[![:space:]]*}"})"
+    elif [ -n "$u56_lim" ]; then u56_why="proftpd <Limit LOGIN> 이 '허용 대상(Allow from/AllowUser) + DenyAll(또는 Order deny,allow)' 형태 아님"
+    else u56_why="proftpd <Limit LOGIN> 미설정(<Anonymous> 내부 제외)"; fi
+  elif [ -n "$ftp_conf" ]; then   # vsftpd
+    u56_ue=$(ftp_val userlist_enable "$ftp_conf"); u56_ud=$(ftp_val userlist_deny "$ftp_conf"); u56_uf=$(ftp_val userlist_file "$ftp_conf")
+    u56_ref="$u56_ref, userlist_enable=${u56_ue:-NO(기본)}, userlist_deny=${u56_ud:-YES(기본)}"
+    u56_ul=""; u56_acc=""
+    for f in ${u56_uf:-/etc/vsftpd/user_list /etc/vsftpd.user_list}; do [ -e "$f" ] && { u56_ul=$f; break; }; done
+    ftp_yes "$u56_ue" && ftp_no "$u56_ud" && [ -n "$u56_ul" ] \
+      && u56_acc=$(grep -vE '^[[:space:]]*(#|$)' "$u56_ul" 2>/dev/null | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | head -5 | tr '\n' ',')
+    u56_acc=${u56_acc%,}
+    u56_bin=$(command -v vsftpd 2>/dev/null); [ -z "$u56_bin" ] && u56_bin=/usr/sbin/vsftpd
+    u56_hd=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.deny 2>/dev/null \
+      | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(vsftpd|ALL)([,[:space:]][^:]*)?:[[:space:]]*ALL([[:space:],:]|$)' | head -1)
+    u56_ha=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts.allow 2>/dev/null \
+      | grep -iE '^[[:space:]]*([^:]*[,[:space:]])?(vsftpd|ALL)([,[:space:]][^:]*)?:' | grep -viE ':[[:space:]]*DENY[[:space:]]*$')
+    u56_open=$(printf '%s\n' "$u56_ha" | grep -iE '^[^:]*:[[:space:]]*([^:]*[,[:space:]])?(ALL|\*|0\.0\.0\.0/0(\.0\.0\.0)?)([[:space:],:]|$)' | head -1)
+    if [ -n "$u56_acc" ]; then u56_ok="vsftpd userlist_enable=YES + userlist_deny=NO → $u56_ul 등록 계정만 접속 허용($u56_acc)"
+    elif ! ftp_yes "$(ftp_val tcp_wrappers "$ftp_conf")"; then u56_why="vsftpd tcp_wrappers 미설정, user_list 허용 목록(userlist_deny=NO + 계정 등록) 미적용"
+    elif ! { have ldd && ldd "$u56_bin" 2>/dev/null | grep -q libwrap; }; then u56_why="vsftpd tcp_wrappers=YES 이나 libwrap 미연동($u56_bin) → hosts.allow/deny 무효"
+    elif [ -z "$u56_hd" ]; then u56_why="vsftpd tcp_wrappers=YES 이나 hosts.deny 에 vsftpd/ALL 전체 거부 없음"
+    elif [ -n "$u56_open" ]; then u56_why="hosts.allow 가 vsftpd 전체 허용($u56_open)"
+    else u56_v=$(printf '%s\n' "$u56_ha" | head -2 | tr '\n' ';'); u56_v=${u56_v%;}
+      u56_ok="vsftpd tcp_wrappers=YES + hosts.deny '$u56_hd' + hosts.allow 허용: ${u56_v:-없음(전체 차단)}"; fi
+  fi
+  if [ -n "$u56_ok" ]; then rep U-56 "FTP 서비스 접근 제어 설정" GOOD "$u56_ok" "$u56_ref"
+  elif [ "$HFW" != none ]; then rep U-56 "FTP 서비스 접근 제어 설정" MAN "$u56_why. 호스트 방화벽 사용 중($HFW_EV) → 21/tcp 접속 IP 제한 여부 수동 확인(규칙은 자동 해석 안 함)" "$u56_ref"
+  elif [ "$IS_ROOT" -ne 1 ]; then rep U-56 "FTP 서비스 접근 제어 설정" MAN "$u56_why. 방화벽 21/tcp 제한은 root 확인 필요" "$u56_ref"
+  elif [ -z "$ftp_conf" ]; then rep U-56 "FTP 서비스 접근 제어 설정" MAN "$u56_why + 호스트 방화벽 미사용 → 데몬 자체 접근 제어 수동 확인" "$u56_ref"
+  else rep U-56 "FTP 서비스 접근 제어 설정" VULN "$u56_why + 호스트 방화벽 미사용 (클라우드 SG는 별도 점검)" "$u56_ref"; fi
 fi
+
 
 # U-57 Ftpusers 파일 설정   [기준] 양호 - root 계정 FTP 접속 차단 / 취약 - 허용
 #   ftpusers(/etc/ftpusers·/etc/ftpd/ftpusers, vsftpd 는 /etc/vsftpd/ftpusers·/etc/vsftpd.ftpusers 도)에 root 줄(주석 제외) → 차단
