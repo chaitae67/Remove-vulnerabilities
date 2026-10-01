@@ -17,7 +17,7 @@
 #     윈도우 웹서비스   web_windows_<iis|tomcat>_<호스트>_<YYYYMMDD_HHMM>.csv/.html
 #   → python make_reports.py <폴더> 로 바로 보고서 변환 가능
 #
-#   내장 원본: kisa_unix_check.sh(c639288e), kisa_win_check.ps1(e6956d73), web_linux_check.sh(243a6c2a), web_windows_check.ps1(db4a08d3)
+#   내장 원본: kisa_unix_check.sh(974bb402), kisa_win_check.ps1(e6956d73), web_linux_check.sh(243a6c2a), web_windows_check.ps1(db4a08d3)
 #==============================================================================
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 
@@ -335,18 +335,26 @@ perm_go_le() {  # $1=파일권한  $2=기준(기본 640)
   [ $(( (p & 8#070) & ~(m & 8#070) )) -eq 0 ] && [ $(( (p & 8#007) & ~(m & 8#007) )) -eq 0 ]
 }
 
-# find 미사용 파일 순회 — 지정한 디렉터리들을 순수 bash(globstar)로 재귀 순회하며
+# find 미사용 파일 순회 — 지정한 디렉터리들을 순수 bash 로 재귀 순회하며
 #   "일반 파일" 경로만 한 줄씩 출력한다. (find 명령을 쓰지 않기 위한 대체 구현)
 #   * 전체 파일시스템(/) 이 아니라 범위가 한정된 디렉터리에만 사용할 것(메모리·성능).
-#   * 심볼릭 링크는 대상이 일반 파일이면 포함(find -L -type f 와 동일한 취지).
+#   * 심볼릭 링크는 대상이 일반 파일이면 포함하되, 디렉터리 링크 안으로는 들어가지 않는다.
+#   * globstar(**) 를 쓰지 않는다: bash 4.2 이하(Amazon Linux 2·CentOS 7)의 ** 는 디렉터리 링크를 따라가
+#     /dev/fd → /proc/self/fd → /proc·/ 로 끝없이 확장되고, 결과를 전부 메모리에 쌓은 뒤 순회해
+#     메모리 고갈로 서버가 멈춘다(db-active 9/29·9/30 장애). 디렉터리 단위로 읽고 깊이도 제한한다.
 walk_reg_files() {
-  local d f
-  ( shopt -s nullglob dotglob globstar 2>/dev/null
-    for d in "$@"; do
-      [ -d "$d" ] || continue
-      for f in "$d"/**; do
-        [ -f "$f" ] && printf '%s\n' "$f"
+  ( shopt -s nullglob dotglob 2>/dev/null
+    _walk_dir() {   # $1=디렉터리 $2=깊이
+      local f
+      [ "$2" -gt 20 ] && return
+      for f in "$1"/*; do
+        if [ -L "$f" ]; then [ -f "$f" ] && printf '%s\n' "$f"
+        elif [ -d "$f" ]; then _walk_dir "$f" $(( $2 + 1 ))
+        elif [ -f "$f" ]; then printf '%s\n' "$f"; fi
       done
+    }
+    for d in "$@"; do
+      [ -d "$d" ] && _walk_dir "$d" 0
     done )
 }
 
