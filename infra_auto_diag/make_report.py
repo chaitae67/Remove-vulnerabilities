@@ -189,8 +189,17 @@ def main():
             if getattr(args, k)}
 
     host = loaded[0]["host"] or "server"
-    base = args.output or os.path.join(
-        os.getcwd(), "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40]
+    # 기본 저장 위치: 현재 폴더의 reports_out/ (없으면 생성). -o 로 경로를 주면 그대로 따른다.
+    if args.output:
+        base = args.output
+    else:
+        out_dir = os.path.join(os.getcwd(), "reports_out")
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception:
+            out_dir = os.getcwd()
+        base = os.path.join(
+            out_dir, "report_{}_{}.xlsx".format(args.kind, "".join(c for c in host if c.isalnum() or c in "-_")[:40]
                                                 or "server"))
     cap = server_report.SPECS[fill_kind].get("servers", 99) if fill_kind != "web" else 99
     chunks = [loaded[i:i + cap] for i in range(0, len(loaded), cap)]

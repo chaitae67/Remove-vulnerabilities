@@ -3,7 +3,7 @@
 r"""폴더 안의 진단 결과(CSV/JSON)를 한 번에 결과보고서(xlsx)로 변환한다.
 
 CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를 알아서 구분해
-종류별로 보고서를 만들어 출력 폴더(기본: 결과보고서_출력)에 저장한다.
+종류별로 보고서를 만들어 출력 폴더(기본: reports_out)에 저장한다.
 
 파일명 규칙(스크립트가 저장하는 이름 그대로면 자동 인식):
   cloud_AWS_*.csv / cloud_AZURE_* / cloud_GCP_* / cloud_NAVER_*   → 클라우드(계정마다 1개)
@@ -24,7 +24,7 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
     최신본 기록은 출력 폴더의 .report_version.json 에 종류별로 남는다(터미널엔 이번 최신 파일만 표시).
 
 사용:
-  python make_reports.py                        # 현재 폴더(하위 폴더 포함) → ./결과보고서_출력/
+  python make_reports.py                        # 현재 폴더(하위 폴더 포함) → ./reports_out/
   python make_reports.py <입력폴더> -o <출력폴더>
   python make_reports.py --kind linux a.csv b.csv   # 종류를 직접 지정(파일명이 규칙과 다를 때)
 
@@ -306,7 +306,7 @@ def main():
     ap = argparse.ArgumentParser(description="폴더 안 진단 결과(CSV/JSON) → 결과보고서 일괄 변환")
     ap.add_argument("inputs", nargs="*", default=["."],
                     help="입력 폴더 또는 파일들(기본: 현재 폴더)")
-    ap.add_argument("-o", "--output", default="결과보고서_출력", help="출력 폴더(기본: 결과보고서_출력)")
+    ap.add_argument("-o", "--output", default="reports_out", help="출력 폴더(기본: reports_out)")
     ap.add_argument("--kind", choices=["linux", "windows", "web", "dbms", "aws", "azure", "gcp", "naver"],
                     help="종류를 직접 지정(파일명이 규칙과 다를 때 — 입력을 파일들로 줄 것)")
     ap.add_argument("--project", help="표지 사업명")

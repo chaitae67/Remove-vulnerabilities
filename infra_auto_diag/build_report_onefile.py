@@ -38,7 +38,7 @@ def main():
         ('r"""makereport_all.py — CSV/JSON 진단결과 → 결과보고서(xlsx) 단일 파일(자동 생성, 편집 금지).\n'
          "양식·변환코드를 내장한다. build_report_onefile.py 로 재생성.\n\n"
          "사용(파이썬3 + lxml 필요):\n"
-         "  python makereport_all.py <입력폴더>            # 폴더 안 CSV/JSON 전부 → 결과보고서_출력/\n"
+         "  python makereport_all.py <입력폴더>            # 폴더 안 CSV/JSON 전부 → reports_out/\n"
          "  python makereport_all.py a.csv b.csv           # 파일 지정\n"
          "  python makereport_all.py --kind linux x.csv    # 종류 직접 지정\n"
          '"""\n'),

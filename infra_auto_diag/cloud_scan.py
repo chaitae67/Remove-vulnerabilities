@@ -76,13 +76,25 @@ def collect_creds(provider, args):
         # 키를 안 주면 boto3 기본 체인(CloudShell/EC2 역할/env/~/.aws)을 사용
         ak = args.access_key or _env("AWS_ACCESS_KEY_ID")
         sk = args.secret_key or _env("AWS_SECRET_ACCESS_KEY")
+        profile = args.profile or ""
+        # 리전: --region > 환경변수 > `aws configure`(~/.aws/config 의 해당/기본 프로필) 자동.
+        # 특정 리전을 하드코딩하지 않는다 — 어느 계정이든 configure 된 리전을 그대로 따라간다.
+        # (aws configure 가 저장하는 리전은 환경변수가 아니라 config 파일이라, boto3 세션에
+        #  맡겨야 읽힌다. 셋 다 없으면 빈 값 → 아래 main 에서 안내 후 중단.)
+        region = args.region or _env("AWS_REGION", "AWS_DEFAULT_REGION") or ""
+        if not region:
+            try:
+                import boto3
+                region = boto3.session.Session(profile_name=profile or None).region_name or ""
+            except Exception:
+                region = ""
         creds = {
             "access_key": ak, "secret_key": sk,
             "session_token": args.session_token or _env("AWS_SESSION_TOKEN"),
-            "profile": args.profile or "",
-            "region": args.region or _env("AWS_REGION", "AWS_DEFAULT_REGION") or "ap-northeast-2",
+            "profile": profile,
+            "region": region,
         }
-        creds["mode"] = "key" if ak else ("profile" if creds["profile"] else "env")
+        creds["mode"] = "key" if ak else ("profile" if profile else "env")
         return creds
     if p == "azure":
         # 비우면 DefaultAzureCredential(az login / Cloud Shell / 관리 ID) 사용
@@ -113,20 +125,46 @@ def collect_creds(provider, args):
 
 
 # ------------------------------------------------------------------ 결과 저장
-def _base_name(os_label, out_path):
-    """저장 파일 기본 경로(확장자 제외). 한글/특수문자 없는 ASCII 이름 → 쉘 다운로드 호환."""
+def _reports_dir():
+    """기본 저장 폴더 reports_out/ (리포지토리, 서버 fleet 보고서와 같은 폴더). 실패 시 현재 폴더."""
+    out_dir = os.path.join(SCRIPT_DIR, "reports_out")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        out_dir = os.getcwd()
+    return out_dir
+
+
+def _safe_name(s):
+    """파일명에 쓸 수 없는 문자를 _ 로. (make_reports 의 _safe 와 같은 취지)"""
+    import re
+    return re.sub(r"[^0-9A-Za-z._-]", "_", str(s or "")).strip("_") or "x"
+
+
+def _report_base(provider, host, target, out_path):
+    """보고서 xlsx 기본 경로(확장자 제외). make_reports 와 같은 공식 이름:
+    (자동화진단)클라우드_서버_취약점진단_결과보고서_<CSP>_<계정>_<YYMMDDHHMM>"""
+    if out_path:
+        root, ext = os.path.splitext(out_path)
+        return root if ext.lower() in (".xlsx", ".csv") else out_path
+    stamp = datetime.datetime.now().strftime("%y%m%d%H%M")
+    csp = (provider or "result").upper()
+    acct = _safe_name((target or {}).get("account") or host or csp)
+    name = f"(자동화진단)클라우드_서버_취약점진단_결과보고서_{csp}_{acct}_{stamp}"
+    return os.path.join(_reports_dir(), name)
+
+
+def _csv_base(provider, out_path):
+    """CSV 폴백 기본 경로(확장자 제외). ASCII 이름(cloud_<CSP>_<시각>) → 쉘 다운로드·make_reports 인식 호환."""
     if out_path:
         root, ext = os.path.splitext(out_path)
         return root if ext.lower() in (".xlsx", ".csv") else out_path
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    return os.path.join(os.getcwd(), f"cloud_{(os_label or 'result').upper()}_{stamp}")
+    return os.path.join(_reports_dir(), f"cloud_{(provider or 'result').upper()}_{stamp}")
 
 
-def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True, target=None):
-    """CSV(항상, 설치 불필요) + 다중시트 보고서 XLSX(openpyxl 있으면) 저장, 경로 목록 반환."""
-    base = _base_name(os_label, out_path)
-    saved = []
-    # 1) CSV — 표준 라이브러리, 한글 깨짐 방지(utf-8-sig). 설치 없이도 항상 저장.
+def _save_csv(provider, base, results, target=None):
+    """CSV 저장(표준 라이브러리, utf-8-sig). 저장 경로 반환."""
     import csv
     csv_path = base + ".csv"
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -142,20 +180,31 @@ def save_results(provider, os_label, host, results, out_path=None, want_xlsx=Tru
             w.writerow([r.get("code", ""), r.get("title", ""), r.get("importance", ""),
                         verdict, " / ".join(r.get("evidence", [])),
                         " / ".join(r.get("resources", []))])
-    saved.append(csv_path)
-    # 2) 보고서 XLSX — 공식 CSP 양식(5시트+3차트) 채우기 우선, 안 되면 코드 생성 폴백
+    return csv_path
+
+
+def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True, target=None):
+    """보고서 XLSX(공식 양식) 저장. xlsx 가 만들어지면 CSV 는 남기지 않고, xlsx 생성 불가(또는 --no-excel)일 때만 CSV 로 폴백. 경로 목록 반환."""
+    saved = []
+    # 1) 보고서 XLSX — make_reports 와 같은 공식 이름. 공식 CSP 양식 채우기 우선, 안 되면 코드 생성 폴백
+    xlsx_ok = False
     if want_xlsx:
-        xlsx = base + ".xlsx"
-        if not _fill_cloud_template(provider, host, os_label, results, xlsx, target):
+        xlsx = _report_base(provider, host, target, out_path) + ".xlsx"
+        if _fill_cloud_template(provider, host, os_label, results, xlsx, target):
+            saved.append(xlsx)
+            xlsx_ok = True
+        else:
             try:
                 import cloud_check.report as _rep
                 saved.append(_rep.build_report(provider, host, results, xlsx))
+                xlsx_ok = True
             except ImportError:
-                pass  # openpyxl 미설치 → CSV 로 충분
+                pass  # openpyxl 미설치 → CSV 로 폴백
             except Exception as e:  # noqa: BLE001
                 print(f"    (엑셀 보고서 생성 실패: {type(e).__name__}: {e} → CSV 로 저장됨)")
-        else:
-            saved.append(xlsx)
+    # 2) CSV — xlsx 를 못 만들었을 때만(또는 --no-excel) 폴백 저장(ASCII 이름)
+    if not xlsx_ok:
+        saved.append(_save_csv(provider, _csv_base(provider, out_path), results, target))
     return saved
 
 
@@ -225,7 +274,7 @@ def main():
     ap.add_argument("provider", choices=["aws", "azure", "gcp", "naver"], help="점검 대상 CSP")
     ap.add_argument("-o", "--output", help="저장 경로(확장자 제외 기본명). 기본: 현재 폴더에 cloud_<CSP>_<시각>")
     ap.add_argument("--json", dest="json_out", help="결과를 JSON 으로 저장(openpyxl 없는 곳에서 뽑아, PC 에서 make_report 로 xlsx 생성용)")
-    ap.add_argument("--no-excel", action="store_true", help="xlsx 저장 생략(CSV 는 항상 저장)")
+    ap.add_argument("--no-excel", action="store_true", help="xlsx 저장 생략(대신 CSV 저장)")
     ap.add_argument("--all-regions", action="store_true", help="AWS 전 리전 스캔(기본은 지정 리전만 → 빠름)")
     # 공통/개별 자격증명
     ap.add_argument("--access-key"); ap.add_argument("--secret-key")
@@ -249,7 +298,16 @@ def main():
         sys.exit(f"[!] {cloud_check.label(provider)} 진단 SDK 미설치 → pip install {pkg}")
 
     creds = collect_creds(provider, args)
-    print(f"\n[*] {cloud_check.label(provider)} 진단 시작 …")
+    if provider == "aws" and not creds.get("region"):
+        sys.exit("[!] AWS 리전을 확인할 수 없습니다. 다음 중 하나로 지정하세요:\n"
+                 "    · aws configure  (Default region name 설정)\n"
+                 "    · 환경변수 AWS_DEFAULT_REGION=ap-southeast-2\n"
+                 "    · 옵션 --region ap-southeast-2")
+    if provider == "aws":
+        print(f"\n[*] {cloud_check.label(provider)} 진단 시작 … (리전: {creds['region']}"
+              f"{', 전 리전' if args.all_regions else ''})")
+    else:
+        print(f"\n[*] {cloud_check.label(provider)} 진단 시작 …")
     try:
         report = cloud_check.run(provider, creds)
     except RuntimeError as e:
@@ -282,14 +340,14 @@ def main():
                        _f, ensure_ascii=False)
         print(f"[+] JSON 저장: {args.json_out}  (PC 에서: python make_report.py {provider} --result {args.json_out})")
 
-    # 저장: CSV(항상) + 보고서 XLSX(openpyxl 있으면)
+    # 저장: 보고서 XLSX(공식 양식). 만들 수 없으면 CSV 로 폴백
     paths = save_results(provider, os_label, host, results, args.output, want_xlsx=not args.no_excel,
                          target=target)
     print()
     for pth in paths:
         print(f"[+] 저장: {pth}")
     if not any(p.endswith(".xlsx") for p in paths) and not args.no_excel:
-        print("    (xlsx 보고서는 openpyxl 이 없어 생략 — CSV 를 열거나 pip install openpyxl 후 재실행)")
+        print("    (xlsx 보고서는 openpyxl/lxml 이 없어 생략 — CSV 로 저장됨. pip install openpyxl lxml 후 재실행하면 xlsx 로 저장)")
     print("[*] 완료")
 
 
