@@ -111,6 +111,25 @@ http_get()  { have curl && curl -sk -m 5 "$1" 2>/dev/null; }
 other_readable() { local p; p=$(stat -c '%a' "$1" 2>/dev/null) || return 1; [ "$(( 8#$p & 8#004 ))" -ne 0 ]; }
 other_writable() { local p; p=$(stat -c '%a' "$1" 2>/dev/null) || return 1; [ "$(( 8#$p & 8#002 ))" -ne 0 ]; }
 tmo() { if have timeout; then timeout "$@"; else shift; "$@"; fi; }
+perm_le() { local p=$1; case "$p" in ''|*[!0-7]*) return 1;; esac; [ $(( 8#$p & ~8#$2 & 8#7777 )) -eq 0 ]; }   # 권한 $1 이 $2 이하(비트 부분집합)
+# 가이드 WEB-02 [비밀번호 설정 기준](p.277) 중 파일로 판단 가능한 항목 → 위반 사유(없으면 빈 출력)
+#   2종 이상 10자 / 3종 이상 8자, Null, 문자 또는 숫자만, ID 와 같거나 유사, 연속 문자(1111·1234·abcd), 지양 예시 문자열
+pw_guide_bad() {  # $1=계정명 $2=비밀번호
+  local u=$1 pw=$2 t=0 r="" l lp lu
+  [ -z "$pw" ] && { printf 'Null'; return; }
+  case "$pw" in *[[:upper:]]*) t=$((t+1));; esac
+  case "$pw" in *[[:lower:]]*) t=$((t+1));; esac
+  case "$pw" in *[[:digit:]]*) t=$((t+1));; esac
+  case "$pw" in *[![:alnum:]]*) t=$((t+1));; esac
+  l=${#pw}
+  { [ "$t" -ge 3 ] && [ "$l" -ge 8 ]; } || { [ "$t" -ge 2 ] && [ "$l" -ge 10 ]; } || r="$r 조합·길이 미달(${t}종 ${l}자)"
+  printf '%s' "$pw" | grep -qE '^([[:alpha:]]+|[[:digit:]]+)$' && r="$r 문자 또는 숫자만"
+  lp=$(printf '%s' "$pw" | tr '[:upper:]' '[:lower:]'); lu=$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')
+  [ ${#lu} -ge 3 ] && case "$lp" in *"$lu"*) r="$r 계정명과 같거나 유사";; esac
+  awk -v s="$lp" 'BEGIN{q="0123456789 abcdefghijklmnopqrstuvwxyz"; for(i=1;i<=length(s)-3;i++){w=substr(s,i,4); c=substr(w,1,1); if(index(q,w)||w==c c c c) exit 0} exit 1}' && r="$r 연속·반복 문자"
+  case "$lp" in root|rootroot|root123|123root|admin|admin123|123admin|osadmin|adminos) r="$r 지양 예시 문자열";; esac
+  printf '%s' "${r# }"
+}
 # jar 내부 파일 읽기(표준출력만, 읽기 전용): unzip → python(zipfile, 바이트 그대로 출력해 LANG=C 에서도 안전)
 #   ※ python 코드는 ASCII 만 사용(py3.6 은 C 로케일에서 -c 인자의 비 ASCII 로 실패)
 read_jar() {
@@ -146,6 +165,23 @@ except Exception:
     done
   fi
   printf '%s\n' "$out"
+}
+# jar 안 항목 내용(unzip 없으면 python zipfile) — $1=jar $2=항목 경로
+jar_cat() {
+  local out="" p
+  have unzip && out=$(unzip -p "$1" "$2" 2>/dev/null)
+  if [ -z "$out" ]; then
+    for p in python3 /usr/libexec/platform-python python; do
+      have "$p" || continue
+      out=$(tmo 30 "$p" -c 'import sys, zipfile
+try:
+    sys.stdout.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]).decode("utf-8", "replace"))
+except Exception:
+    pass' "$1" "$2" 2>/dev/null)
+      [ -n "$out" ] && break
+    done
+  fi
+  printf '%s' "$out"
 }
 # 관리자 권한 계정 여부(WEB-09): priv_chk 계정 → PRIV_ST(VULN/MAN/빈값=권한 없음) PRIV_EV(근거)
 #   UID 0 또는 sudo -l -U 에 (ALL|root) ... ALL 전권 → VULN, sudo 일부 명령 허용·확인 불가 → MAN (그룹명만으로 판정하지 않음)
@@ -232,11 +268,25 @@ else
     if grep -qiE 'username="(admin|tomcat|manager|root)"' "$tu"; then
       rep WEB-01 VULN "$tu 에 기본/추측용이 계정명 사용 → 계정명 변경 필요"
     else rep WEB-01 GOOD "$tu 에 기본 계정명(admin/tomcat 등) 미사용"; fi
-    if grep -qiE 'password="(admin|tomcat|manager|1234|password|)"' "$tu"; then
-      rep WEB-02 VULN "$tu 에 취약/공백 비밀번호 존재 → 강력한 비밀번호 설정 필요"
-    else rep WEB-02 GOOD "$tu 관리자 비밀번호가 취약/공백이 아님"; fi
+    # 판단기준: 관리자 비밀번호가 암호화되어 있지 않거나 유추하기 쉬우면 취약 → 해시 저장(server.xml Realm 의
+    # CredentialHandler/digest + 해시 형식 값)이면 양호, 평문이면 p.277 기준 위반 시 취약. 비밀번호 값은 출력하지 않는다.
+    sx="$(dirname "$tu")/server.xml"; dg=0
+    grep -vE '^[[:space:]]*<!--' "$sx" 2>/dev/null | grep -qiE 'CredentialHandler|digest=' && dg=1
+    tu_users=$(tr '\n' ' ' < "$tu" | awk '{s=$0; o=""; while((i=index(s,"<!--"))>0){o=o substr(s,1,i-1); s=substr(s,i+4); j=index(s,"-->"); if(!j){s=""; break} s=substr(s,j+3)} print o s}' | grep -oE '<user[[:space:]][^>]*>')
+    w2_bad=""; w2_hash=0; w2_n=0
+    while IFS= read -r ul; do
+      [ -n "$ul" ] || continue
+      un=$(printf '%s' "$ul" | sed -nE 's/.*[[:space:]]username="([^"]*)".*/\1/p')
+      pw=$(printf '%s' "$ul" | sed -nE 's/.*[[:space:]]password="([^"]*)".*/\1/p')
+      w2_n=$((w2_n+1))
+      if [ "$dg" -eq 1 ] && printf '%s' "$pw" | grep -qE '^([0-9A-Fa-f]{32,}|[0-9A-Fa-f]+\$[0-9]+\$[0-9A-Fa-f]{32,})$'; then w2_hash=$((w2_hash+1)); continue; fi
+      why=$(pw_guide_bad "$un" "$pw"); [ -n "$why" ] && w2_bad="$w2_bad ${un:-?}(평문, $why)"
+    done <<< "$tu_users"
+    if [ "$w2_n" -eq 0 ]; then rep WEB-02 GOOD "$tu 에 활성 user 계정 없음(관리자 콘솔 계정 미등록)"
+    elif [ -n "$w2_bad" ]; then rep WEB-02 VULN "$tu 관리자 비밀번호 기준 미달:$w2_bad → 복잡도 기준에 맞는 추측하기 어려운 비밀번호 설정"
+    else rep WEB-02 GOOD "$tu 계정 ${w2_n}개 — 해시 저장 ${w2_hash}개, 평문은 비밀번호 설정 기준(조합·길이·연속 문자 등) 충족" "주기적 재사용·개인정보 사용 여부는 파일로 판단 불가(수동 확인)"; fi
     tup=$(stat -c '%a' "$tu" 2>/dev/null)
-    if [ "$(( 8#${tup:-777} & 8#177 ))" -eq 0 ] 2>/dev/null || [ "${tup:-999}" -le 600 ] 2>/dev/null; then
+    if perm_le "$tup" 600; then
       rep WEB-03 GOOD "$tu 권한=$tup (600 이하)"
     else rep WEB-03 VULN "$tu 권한=$tup (기준: 600 이하)"; fi
   fi
@@ -380,7 +430,7 @@ fi
 if [ "$TARGET" = nginx ]; then
   if conf_grep 'proxy_pass' >/dev/null; then
     if conf_grep 'proxy_pass[[:space:]]+https?://\$' >/dev/null; then rep WEB-10 VULN "proxy_pass 대상이 변수(\$host 등) → 임의 목적지 중계(오픈 프록시) 위험"
-    else rep WEB-10 GOOD "proxy_pass 대상이 고정 백엔드 → 오픈 프록시 아님"; fi
+    else rep WEB-10 MAN "proxy_pass 설정 존재(대상: $(conf_grep 'proxy_pass' | sed -E 's/.*proxy_pass[[:space:]]+//; s/;.*//' | sort -u | head -5 | tr '\n' ' ')) → 업무상 불필요한 Proxy 설정인지 확인 후 불필요하면 제거"; fi
   else rep WEB-10 GOOD "proxy_pass 설정 없음(중계 미사용)"; fi
 else
   rep WEB-10 GOOD "Connector proxyName/proxyPort 미설정 → 프록시 구성 없음"
@@ -415,10 +465,18 @@ fi
 if [ "$TARGET" = nginx ]; then
   rep WEB-13 NA "Nginx 는 DB 연결/스크립트 매핑 대상이 아니어서 가이드상 점검대상 제외"
 else
-  if [ -n "$APP_JAR" ] && [ -f "$APP_JAR" ]; then
-    if other_readable "$APP_JAR"; then rep WEB-13 VULN "DB 접속정보 포함 $APP_JAR 에 other(일반 사용자) 읽기 권한 부여($(stat -c '%a' "$APP_JAR")) → 접근 제한 필요"
-    else rep WEB-13 GOOD "$APP_JAR 에 일반 사용자 읽기 권한 없음($(stat -c '%a' "$APP_JAR"))"; fi
-  else rep WEB-13 MAN "app.jar 경로 미확인 → DB 접속정보 포함 파일의 일반 사용자 접근 권한 확인 필요"; fi
+  # 가이드 Tomcat Step 2: DB 연결 리소스가 존재하는 설정 파일 접근권한 600 → 외부 application.yml 또는 이를 담은 jar
+  f13=""; [ -n "$APP_YML" ] && [ -f "$APP_YML" ] && f13="$APP_YML"
+  [ -z "$f13" ] && [ -n "$APP_JAR" ] && [ -f "$APP_JAR" ] && f13="$APP_JAR"
+  c13="$APP_YML_CONTENT"
+  [ -z "$c13" ] && [ -n "$f13" ] && [ "$f13" = "$APP_JAR" ] && c13="$(jar_cat "$APP_JAR" BOOT-INF/classes/application.yml)$(jar_cat "$APP_JAR" BOOT-INF/classes/application.properties)"
+  if [ -z "$f13" ] || [ -z "$c13" ]; then rep WEB-13 MAN "애플리케이션 설정(application.yml/jar) 확인 불가 → DB 연결 리소스가 있는 설정 파일 권한 600 여부 확인"
+  elif ! printf '%s\n' "$c13" | grep -qiE 'datasource|jdbc:'; then rep WEB-13 GOOD "설정에 DB 연결 리소스(datasource/jdbc) 없음 ($f13)"
+  else
+    p13=$(stat -c '%a' "$f13" 2>/dev/null)
+    if perm_le "$p13" 600; then rep WEB-13 GOOD "DB 연결 리소스 포함 설정 $f13 권한=$p13 (600 이하)"
+    else rep WEB-13 VULN "DB 연결 리소스 포함 설정 $f13 권한=$p13 (기준: 600 이하) → 설정 파일 접근권한 600 으로 설정"; fi
+  fi
 fi
 
 # WEB-14 경로 내 파일 접근 통제
@@ -575,7 +633,7 @@ if [ "$TARGET" = nginx ]; then
     elif [ "$sup" = 0 ] && [ "$esm" != 1 ]; then rep WEB-25 VULN "$ev25 → 배포판 지원 종료($eolv) 후 ESM 미사용 → 보안 업데이트 미수신" "$evs"
     elif [ -z "$inst" ] || [ -z "$cand" ]; then rep WEB-25 MAN "$ev25 → 후보 버전 확인 불가(apt 캐시), 최신 보안 패치 적용 여부 수동 확인" "$evs"
     elif [ "$age" -gt 7 ]; then rep WEB-25 MAN "$ev25 → 패키지 목록이 오래되어(7일 초과) 최신 여부 판단 불가" "$evs"
-    elif [ "$sup" = 1 ] || [ "$esm" = 1 ]; then rep WEB-25 GOOD "$ev25 → 후보(보안 업데이트 포함)와 동일, 최신 보안 패치 적용" "$evs (패치 적용 정책·주기는 인터뷰로 확인)"
+    elif [ "$sup" = 1 ] || [ "$esm" = 1 ]; then rep WEB-25 MAN "$ev25 → 후보(보안 업데이트 포함)와 동일, 최신 보안 패치 적용 확인. 패치 적용 정책 수립·주기적 패치 관리 여부는 인터뷰 확인" "$evs"
     else rep WEB-25 MAN "$ev25 → 배포판 보안 지원 기간 확인 불가, 보안 업데이트 수신 여부 수동 확인" "$evs"; fi
   elif [ "$nmgr" = rpm ] && [ -n "$npkg" ]; then
     rep WEB-25 MAN "Nginx ${NGX_VER:-?} / $osrel / 패키지 $npkg — rpm 계열은 저장소 메타데이터 조회(부하·네트워크) 생략 → 배포판 보안 공지와 수동 비교"
@@ -590,11 +648,11 @@ else
     ref_s=$(date -d "$TC_REF" +%s 2>/dev/null); stale=0
     [ -n "$ref_s" ] && [ $(( $(date +%s) - ref_s )) -gt $(( 90 * 86400 )) ] && stale=1
     if [ -n "$tl" ] && [ "$t3" -lt "$tl" ]; then
-      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER < $br.$tl($TC_REF 기준 최신) → 이후 보안 수정 미반영, 최신 패치 버전으로 업그레이드(Spring Boot tomcat.version 지정 또는 Boot 업그레이드)"
+      rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER < $br.$tl($TC_REF 기준 최신) → 이후 보안 수정 미반영, 최신 보안 패치 적용(충분한 테스트 후) 및 주기적 패치 적용 정책 수립"
     elif [ -n "$tl" ] && [ "$stale" = 1 ]; then
       rep WEB-25 MAN "내장 Tomcat $TOMCAT_VER ≥ $br.$tl 이나 기준표($TC_REF)가 오래됨 → tomcat.apache.org 최신 패치·보안 공지와 비교"
     elif [ -n "$tl" ]; then
-      rep WEB-25 GOOD "내장 Tomcat $TOMCAT_VER — $br 브랜치 최신($br.$tl, $TC_REF 기준) 적용, 정기 패치 관리 유지(패치 정책은 인터뷰로 확인)"
+      rep WEB-25 MAN "내장 Tomcat $TOMCAT_VER — $br 브랜치 최신($br.$tl, $TC_REF 기준) 적용 확인. 패치 적용 정책 수립·주기적 패치 관리 여부는 인터뷰 확인"
     elif [ "$t1" -lt 11 ]; then
       rep WEB-25 VULN "내장 Tomcat $TOMCAT_VER — 지원 종료(EOL) 브랜치($br) → 보안 패치 미제공, 지원 브랜치(9.0/10.1/11.0 등)로 업그레이드"
     else rep WEB-25 MAN "내장 Tomcat $TOMCAT_VER — 기준표에 없는 브랜치($br) → tomcat.apache.org 최신 패치·보안 공지와 비교"; fi
@@ -603,19 +661,34 @@ fi
 
 # WEB-26 로그 디렉터리/파일 권한
 if [ "$TARGET" = nginx ]; then
-  ld=/var/log/nginx
-  if [ -d "$ld" ]; then
-    lp=$(stat -c '%a' "$ld" 2>/dev/null)
-    if [ "$(( 8#${lp:-0} & 8#005 ))" -ne 0 ]; then rep WEB-26 VULN "$ld 권한=$lp → 일반 사용자 읽기/접근 허용(750 이하 권장)"
-    else rep WEB-26 GOOD "$ld 권한=$lp → 일반 사용자 접근 없음"; fi
-  else rep WEB-26 MAN "로그 디렉터리(/var/log/nginx) 미확인 → 일반 사용자 접근 권한 확인"; fi
+  ld26="/var/log/nginx"; lf26=""
+  [ -d /var/log/nginx ] || ld26=""
 else
-  ld=""; for d in $APP_LOGDIRS; do [ -d "$d" ] && ld="$d" && break; done
-  if [ -n "$ld" ]; then
-    lp=$(stat -c '%a' "$ld" 2>/dev/null)
-    if [ "$(( 8#${lp:-0} & 8#005 ))" -ne 0 ]; then rep WEB-26 VULN "$ld 권한=$lp → 일반 사용자 로그 열람/접근 허용(750 이하 권장)"
-    else rep WEB-26 GOOD "$ld 권한=$lp → 일반 사용자 접근 없음"; fi
-  else rep WEB-26 MAN "애플리케이션 로그 디렉터리 미확인 → 일반 사용자 접근 권한 확인"; fi
+  # Tomcat 로그: 실행 중 프로세스가 쓰는 로그 파일(/proc/<pid>/fd 의 *.log·logs/ 하위·표준출력 파일)과 그 디렉터리,
+  #   CATALINA_BASE/logs, application.yml logging.file.*, 관용 경로 중 존재하는 것
+  APP_PID=$(printf '%s' "$JPROC" | awk '{print $1}'); lf26=""; ld26=""
+  cb=$(printf '%s' "$JPROC" | grep -oE -- '-Dcatalina\.base=[^ ]+' | head -1 | cut -d= -f2)
+  if [ -n "$APP_PID" ] && [ -d "/proc/$APP_PID/fd" ]; then
+    for fd in /proc/$APP_PID/fd/*; do
+      t=$(readlink "$fd" 2>/dev/null) || continue
+      [ -f "$t" ] || continue
+      case "$t" in *.log|*.log.*|*/logs/*|*/log/*) ;; *) case "${fd##*/}" in 1|2) ;; *) continue;; esac;; esac
+      case " $lf26 " in *" $t "*) ;; *) lf26="$lf26 $t"; d=$(dirname "$t"); case " $ld26 " in *" $d "*) ;; *) ld26="$ld26 $d";; esac;; esac
+    done
+  fi
+  for d in ${cb:+$cb/logs} $APP_LOGDIRS; do [ -d "$d" ] && case " $ld26 " in *" $d "*) ;; *) ld26="$ld26 $d"; for f in "$d"/*; do [ -f "$f" ] && [ ! -L "$f" ] && lf26="$lf26 $f"; done;; esac; done
+fi
+if [ "$TARGET" = nginx ] && [ -n "$ld26" ]; then for f in /var/log/nginx/*; do [ -f "$f" ] && [ ! -L "$f" ] && lf26="$lf26 $f"; done; fi
+if [ -z "${ld26// /}${lf26// /}" ]; then
+  rep WEB-26 MAN "로그 디렉터리·파일 위치 미확인 → 로그 디렉터리 및 파일의 일반 사용자 접근 권한 확인"
+else
+  bad26=""; n26=0
+  for x in $ld26 $lf26; do
+    xp=$(stat -c '%a' "$x" 2>/dev/null) || continue; n26=$((n26+1))
+    [ $(( 8#$xp & 8#007 )) -ne 0 ] && bad26="$bad26 $x($xp)"
+  done
+  if [ -n "$bad26" ]; then rep WEB-26 VULN "일반 사용자 접근 권한 있음:$(echo "$bad26" | cut -c1-300) → 로그 디렉터리 및 파일에 일반 사용자 접근 권한 제거(chmod o-rwx)"
+  else rep WEB-26 GOOD "로그 디렉터리·파일 ${n26}개 일반 사용자 접근 권한 없음 (디렉터리:${ld26})"; fi
 fi
 
 #==============================================================================

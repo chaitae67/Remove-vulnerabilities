@@ -331,11 +331,13 @@ else { Rep "W-17" "하드디스크 기본 공유 제거" "VULN" @("AutoShareServ
 #     NetMeeting RDS(mnmsrvc), Portable Media Serial Number(WmdmPmSN), Print Spooler, Remote Registry, Simple TCP/IP(simptcp),
 #     UPnP Device Host(upnphost), Wireless Zero Configuration(WZCSVC/WlanSvc)  + 기존 점검 대상(SharedAccess/Telnet/SNMPTRAP/Fax/SSDPSRV/RemoteAccess)
 #   가이드 조건: TrkWks/TrkSvr 는 AD(도메인) 미구성 시, Print Spooler 는 연결된 프린터가 없을 때만 불필요 → 조건 밖이면 판정 제외(참고 표기)
-#   Automatic Updates·Cryptographic Services·DHCP/DNS Client 는 가이드도 조건부로 적은 OS 필수 구성요소라 판정 제외
+#   Cryptographic Services(CryptSvc)는 가이드 목록에 조건 없이 있어 판정 포함.
+#   Automatic Updates(수동/WSUS 패치 시)·DHCP Client(고정 IP 단독 시스템)·DNS Client(DNS 서버 아님, IPSEC 시 필요)는
+#   가이드가 조건을 단 서비스이고 조건 충족 여부를 시스템 상태로 확정할 수 없어 판정 제외
 #   ※ 서비스명 정확 일치 + Win32 서비스만 인정 (Get-Service -Name Browser 는 표시 이름이 'Browser' 인 커널 드라이버 bowser 도 반환 → 제외)
 $risky = @("Alerter","ClipSrv","Browser","TrkWks","TrkSvr","WerSvc","ERSvc","hidserv","ImapiService","Irmon","Messenger","mnmsrvc","WmdmPmSN",
            "Spooler","RemoteRegistry","simptcp","upnphost","WZCSVC","WlanSvc",
-           "SharedAccess","TlntSvr","Telnet","SNMPTRAP","Fax","SSDPSRV","RemoteAccess")
+           "SharedAccess","TlntSvr","Telnet","SNMPTRAP","Fax","SSDPSRV","RemoteAccess","CryptSvc")
 $running = @(); $cond18 = @()
 foreach ($n in $risky) {
     $s = @(Get-Service -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $n -and "$($_.ServiceType)" -notmatch 'Driver' }) | Select-Object -First 1
@@ -444,7 +446,7 @@ $comm = @(); try { $comm = (Get-Item "HKLM:\SYSTEM\CurrentControlSet\Services\SN
 # [기준] 양호 - SNMP 미사용 또는 Community String 설정하여 사용 / 취약 - 불필요하게 사용
 if (-not $SNMP_ON) { Rep "W-29" "불필요한 SNMP 서비스 구동 점검" "GOOD" @("SNMP 서비스 미설치/미실행") }
 elseif ($comm.Count -gt 0) { Rep "W-29" "불필요한 SNMP 서비스 구동 점검" "MAN" @("SNMP 사용 중 (Community 설정됨) → 업무상 필요 여부 확인") }
-else { Rep "W-29" "불필요한 SNMP 서비스 구동 점검" "VULN" @("SNMP 서비스 실행/설치됨 → 미사용 시 제거") }
+else { Rep "W-29" "불필요한 SNMP 서비스 구동 점검" "VULN" @("SNMP 서비스 실행/설치됨 → 불필요 시 서비스 중지/사용 안 함") }
 
 # W-30 SNMP Community String 복잡성 설정
 # [기준] 양호 - SNMP 미사용 또는 Community String 이 public/private 아님 / 취약 - public/private
@@ -492,8 +494,8 @@ if (-not (SvcRunning "TlntSvr") -and -not (PortListening 23)) {
     Rep "W-34" "Telnet 서비스 비활성화" "GOOD" @("Telnet 서버 미실행")
 } else {
     $tnlm = RegVal "HKLM:\SOFTWARE\Microsoft\TelnetServer\1.0" "NTLM"
-    if ($tnlm -ge 2) { Rep "W-34" "Telnet 서비스 비활성화" "MAN" @("Telnet 실행 중이나 인증=NTLM($tnlm) → SSH/RDP 대체 권장") }
-    else { Rep "W-34" "Telnet 서비스 비활성화" "VULN" @("Telnet 서버 실행 중 + 인증 NTLM 아님 → 비활성화 필요") }
+    if ($tnlm -ge 2) { Rep "W-34" "Telnet 서비스 비활성화" "GOOD" @("Telnet 실행 중, 인증 방법=NTLM만 사용(NTLM=$tnlm)") }
+    else { Rep "W-34" "Telnet 서비스 비활성화" "VULN" @("Telnet 서버 실행 중 + 인증 NTLM 아님 → 불필요 시 서비스 중지/사용 안 함, 사용 시 인증 방법으로 NTLM만 사용") }
 }
 
 # W-35 불필요한 ODBC/OLE-DB 데이터 소스와 드라이브 제거
@@ -501,7 +503,7 @@ if (-not (SvcRunning "TlntSvr") -and -not (PortListening 23)) {
 $dsn = @()
 try { $dsn = (Get-ChildItem "HKLM:\SOFTWARE\ODBC\ODBC.INI" -ErrorAction Stop | Where-Object { $_.PSChildName -ne "ODBC Data Sources" } | ForEach-Object { $_.PSChildName }) } catch {}
 if ($dsn.Count -eq 0) { Rep "W-35" "불필요한 ODBC/OLE-DB 데이터 소스와 드라이브 제거" "GOOD" @("시스템 ODBC DSN 없음") }
-else { Rep "W-35" "불필요한 ODBC/OLE-DB 데이터 소스와 드라이브 제거" "MAN" @("시스템 ODBC DSN: $($dsn -join ', ') → 미사용 항목/평문 자격증명 제거 여부 확인") }
+else { Rep "W-35" "불필요한 ODBC/OLE-DB 데이터 소스와 드라이브 제거" "MAN" @("시스템 ODBC DSN: $($dsn -join ', ') → 현재 사용하지 않는 데이터 소스 제거 여부 확인") }
 
 # W-36 원격터미널 접속 타임아웃 설정
 # [기준] 양호 - Timeout 30분 이하 / 취약 - 미적용 또는 30분 초과
@@ -663,7 +665,7 @@ foreach ($lg in @("Security","Application","System")) {
         $logev += "$lg : LogMode=$mode, 최대 $('{0:N0}' -f $szKB)KB$(if($null -ne $fsz){", 현재 $('{0:N0}' -f [math]::Round($fsz / 1KB))KB"})$(if($old){", 가장 오래된 이벤트 $($old.ToString('yyyy-MM-dd HH:mm'))"})"
         if ($szKB -lt 10240) { $logbad += "$lg 크기 ${szKB}KB(<10,240)" }
         if ($mode -eq "Circular") { $logbad += "$lg 필요한 경우 덮어씀(Circular)" }
-        elseif ($mode -eq "Retain") { $logev += "$lg 덮어쓰지 않음(Retain) - 가득 차면 새 이벤트가 기록되지 않으므로 용량 관리 필요" }
+        elseif ($mode -eq "Retain") { $logev += "$lg 덮어쓰지 않음(Retain)" }
         elseif ($mode -ne "AutoBackup") { $logunk += "$lg(LogMode=$mode)" }
         continue
     }
@@ -951,7 +953,7 @@ else { Rep "W-54" "DoS 공격 방어 레지스트리 설정" "VULN" @("미흡: $
 
 # W-55 사용자가 프린터 드라이버를 설치할 수 없게 함
 RegExpect "W-55" "사용자가 프린터 드라이버를 설치할 수 없게 함" "HKLM:\SYSTEM\CurrentControlSet\Control\Print\Providers\LanMan Print Services\Servers" "AddPrinterDrivers" 1 `
-    "관리자만 프린터 드라이버 설치 가능" "일반 사용자의 프린터 드라이버 설치 허용 → 제한(PrintNightmare 대응)"
+    "관리자만 프린터 드라이버 설치 가능" "일반 사용자의 프린터 드라이버 설치 허용 → '사용자가 프린터 드라이버를 설치할 수 없게 함' 정책을 '사용'으로 설정"
 
 # W-56 SMB 세션 중단 관리 설정
 # [기준] 양호 - "로그온 시간 만료 시 클라이언트 연결 끊기" 사용 + "세션 중단 전 유휴 시간" 15분 이하 / 취약 - 아님
@@ -1024,7 +1026,7 @@ else { Rep "W-63" "도메인 컨트롤러-사용자의 시간 동기화" "VULN" 
 $fw = @(); try { $fw = Get-NetFirewallProfile -ErrorAction Stop } catch {}
 $fwOff = @($fw | Where-Object { -not $_.Enabled })
 if ($fw.Count -gt 0 -and $fwOff.Count -eq 0) { Rep "W-64" "윈도우 방화벽 설정" "GOOD" @("도메인/개인/공용 방화벽 프로필 모두 사용") }
-elseif ($fw.Count -eq 0) { Rep "W-64" "윈도우 방화벽 설정" "MAN" @("방화벽 프로필 상태 확인 불가 → 별도 호스트 방화벽/보안그룹 확인") }
+elseif ($fw.Count -eq 0) { Rep "W-64" "윈도우 방화벽 설정" "MAN" @("방화벽 프로필 상태 확인 불가 → firewall.cpl 에서 Windows Defender 방화벽 '사용' 여부 확인") }
 else { Rep "W-64" "윈도우 방화벽 설정" "VULN" @("방화벽 비활성 프로필: $($fwOff.Name -join ', ')") }
 
 #==============================================================================

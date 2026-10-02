@@ -166,26 +166,15 @@ if ($Target -eq "tomcat") {
     elseif ($svcAcct -match 'LocalSystem|^(NT AUTHORITY\\)?SYSTEM$|Administrator') { Rep "WEB-09" "VULN" @("웹 서비스 프로세스가 고권한 계정($svcAcct)으로 구동 → 최소권한 전용 계정으로 변경") }
     else { Rep "WEB-09" "GOOD" @("웹 서비스 실행 계정=$svcAcct (LocalSystem/관리자 아님)") }
     # WEB-10 프록시
-    if ($ymlText -and $ymlText -match 'proxyName|proxy-name|use-forward-headers') { Rep "WEB-10" "MAN" @("프록시 관련 설정 존재 → 신뢰 대상 고정 여부 확인") }
+    if ($ymlText -and $ymlText -match 'proxyName|proxy-name|use-forward-headers') { Rep "WEB-10" "MAN" @("프록시 관련 설정 존재 → 업무상 불필요한 Proxy 설정인지 확인 후 불필요하면 제거") }
     else { Rep "WEB-10" "GOOD" @("Connector proxyName/proxyPort 미설정 → 프록시 구성 없음") }
-    # WEB-11 경로 설정 — 배포(jar)·작업(nssm AppDirectory) 경로가 시스템/JDK 경로이거나,
-    #   개발 소스 저장소(.git·pom.xml·build.gradle 이 있는 폴더) 안의 빌드 산출물(target 등)을 그대로 실행하면 업무영역 미분리
+    # WEB-11 경로 설정 — 배포(jar)·작업(nssm AppDirectory) 경로가 기본(시스템/JDK) 경로와 분리됐는지
     $sysRe = 'Program Files|jdk|corretto|jre|\\bin($|\\)|^[A-Za-z]:\\Windows($|\\)'
-    $srcRoot = $null
-    if ($jarDir) {
-        $d = $jarDir
-        for ($i = 0; $i -lt 6 -and $d; $i++) {
-            if ((Test-Path -LiteralPath (Join-Path $d '.git')) -or (Test-Path -LiteralPath (Join-Path $d 'pom.xml')) -or
-                (Test-Path -LiteralPath (Join-Path $d 'build.gradle')) -or (Test-Path -LiteralPath (Join-Path $d 'build.gradle.kts'))) { $srcRoot = $d; break }
-            $d = Split-Path $d -Parent
-        }
-    }
     $ev11 = @(); if ($svcName) { $ev11 += "서비스 $svcName AppDirectory=$(if($appDir){$appDir}else{'(미설정)'})" }
     if ($jarDir -eq "") { Rep "WEB-11" "MAN" @("배포 경로 미확인 → 업무영역과 분리된 전용 경로 사용 확인") }
     elseif ($jarDir -match $sysRe) { Rep "WEB-11" "VULN" (@("작업/배포 경로가 JDK/시스템 경로 하위($jarDir) → 업무영역 미분리, 전용 경로 권장") + $ev11) }
     elseif ($appDir -and $appDir -match $sysRe) { Rep "WEB-11" "VULN" (@("서비스 작업 경로(AppDirectory)가 JDK/시스템 경로 하위($appDir) → 업무영역 미분리, 전용 경로 권장") + $ev11) }
-    elseif ($srcRoot) { Rep "WEB-11" "VULN" (@("실행 jar 가 개발 소스 저장소의 빌드 산출물 경로($jarDir, 소스 루트 $srcRoot 에 .git/pom.xml/build.gradle) → 운영 배포 경로가 개발 영역과 미분리, 전용 배포 경로로 복사해 실행") + $ev11) }
-    else { Rep "WEB-11" "GOOD" (@("배포 경로=$jarDir (시스템/JDK·소스 저장소와 분리된 전용 경로)") + $ev11) }
+    else { Rep "WEB-11" "GOOD" (@("배포 경로=$jarDir (시스템/JDK 기본 경로와 분리)") + $ev11) }
     # WEB-12 링크
     Rep "WEB-12" "GOOD" @("Tomcat allowLinking 미설정 + 웹 경로 내 심볼릭 링크/바로가기 없음")
     # WEB-13 설정 파일 노출 — DB 접속정보가 일반 사용자에게 보이는 곳이 있으면 취약
@@ -217,8 +206,8 @@ if ($Target -eq "tomcat") {
             if (-not $hits) { continue }
             $who = RegUsersRead $src[0]
             $loc = "서비스 $svcName 레지스트리 $($src[1])"
-            if ($who) { $w13 += "$loc 에 DB 비밀번호 평문 저장: $($hits -join ', ') + 키 ACL $who 읽기 허용 → 일반 사용자가 DB 접속정보 조회 가능, 권한 제한된 외부 설정/비밀 저장소로 이전" }
-            else { $ok13 += "$loc 에 비밀번호 평문($($hits -join ', ')) 있으나 키에 일반 사용자 읽기 권한 없음(평문 보관 자체는 개선 권장)" }
+            if ($who) { $w13 += "$loc 에 DB 비밀번호 평문 저장: $($hits -join ', ') + 키 ACL $who 읽기 허용 → 일반 사용자(Users) 읽기 권한 제거" }
+            else { $ok13 += "$loc 에 비밀번호 평문($($hits -join ', ')) 있으나 키에 일반 사용자 읽기 권한 없음" }
         }
     }
     $cfgDirs = @($jarDir, $appDir) | Where-Object { $_ } | ForEach-Object { $_; Join-Path $_ 'config' } | Select-Object -Unique
@@ -268,7 +257,18 @@ if ($Target -eq "tomcat") {
         if ($body -match 'Whitelabel Error Page|"status"\s*:\s*[0-9]|org\.springframework') { Rep "WEB-22" "VULN" @("기본 Whitelabel Error Page/프레임워크 정보 노출 → 사용자 정의 오류 페이지 적용 필요") }
         else { Rep "WEB-22" "GOOD" @("사용자 정의 오류 페이지 적용(Whitelabel/프레임워크 정보 미노출)") }
     } elseif ($ymlText -and $ymlText -match 'whitelabel[\s\S]{0,40}enabled\s*[:=]\s*false') { Rep "WEB-22" "GOOD" @("application.yml 에 whitelabel 비활성/사용자 정의 오류 설정") }
-    else { Rep "WEB-22" "MAN" @("에러 페이지는 -AppUrl 로 404 응답의 Whitelabel Error Page 노출 여부 실측 권장") }
+    else {
+        # 가이드: 에러 코드별 에러 페이지 설정 확인 → jar 안 web.xml <error-page>, Spring Boot 오류 뷰 error/<코드|4xx|5xx>.*
+        $ep22 = $null; $cv22 = $null
+        if ($AppJar -and (Test-Path $AppJar)) {
+            $wx22 = ReadJarEntry $AppJar '(^|/)WEB-INF/web\.xml$'
+            if ($wx22 -and $wx22 -match '<error-page>') { $ep22 = "web.xml <error-page>" }
+            if (-not $ep22) { $ep22 = JarHasEntry $AppJar '^BOOT-INF/classes/(templates|static|public|resources)/error/([45]\d\d|[45]xx)\.[A-Za-z]+$' }
+            $cv22 = JarHasEntry $AppJar '^BOOT-INF/classes/(templates|static|public|resources)/error/[^/]+$' }
+        if ($ep22) { Rep "WEB-22" "GOOD" @("에러 코드별 에러 페이지 지정: $ep22") }
+        elseif (-not ($AppJar -and (Test-Path $AppJar))) { Rep "WEB-22" "MAN" @("app.jar 미확인 → 에러 코드별 에러 페이지 설정 여부 확인") }
+        elseif ($cv22) { Rep "WEB-22" "MAN" @("에러 코드별 오류 페이지(error/404 등) 없음, 사용자 정의 오류 뷰($cv22)만 존재 → 에러 코드별 에러 페이지 지정 여부 확인") }
+        else { Rep "WEB-22" "VULN" @("jar 에 web.xml <error-page>·에러 코드별 오류 페이지(error/404 등) 지정 없음 → 에러 코드별 에러 페이지 설정") } }
     Rep "WEB-23" "NA" @("LDAP 라이브러리/설정 미존재 → 점검대상 아님")
 
     # 4. 패치 및 로그 관리
@@ -290,18 +290,27 @@ if ($Target -eq "tomcat") {
         $stale = ((Get-Date) - [datetime]$TC_REF).TotalDays -gt 90
         if ($TC_LATEST.ContainsKey($br)) {
             $lv = "$br.$($TC_LATEST[$br])"
-            if ($t3 -lt $TC_LATEST[$br]) { Rep "WEB-25" "VULN" @("내장 Tomcat $tomcatVer < $lv($TC_REF 기준 최신) → 이후 보안 수정 미반영, 최신 패치 버전으로 업그레이드(Spring Boot tomcat.version 지정 또는 Boot 업그레이드)") }
+            if ($t3 -lt $TC_LATEST[$br]) { Rep "WEB-25" "VULN" @("내장 Tomcat $tomcatVer < $lv($TC_REF 기준 최신) → 이후 보안 수정 미반영, 최신 보안 패치 적용(충분한 테스트 후) 및 주기적 패치 적용 정책 수립") }
             elseif ($stale) { Rep "WEB-25" "MAN" @("내장 Tomcat $tomcatVer ≥ $lv 이나 기준표($TC_REF)가 오래됨 → tomcat.apache.org 최신 패치·보안 공지와 비교") }
-            else { Rep "WEB-25" "GOOD" @("내장 Tomcat $tomcatVer — $br 브랜치 최신($lv, $TC_REF 기준) 적용, 정기 패치 관리 유지(패치 정책은 인터뷰로 확인)") }
+            else { Rep "WEB-25" "MAN" @("내장 Tomcat $tomcatVer — $br 브랜치 최신($lv, $TC_REF 기준) 적용 확인. 패치 적용 정책 수립·주기적 패치 관리 여부는 인터뷰 확인") }
         } elseif ([int]$matches[1] -lt 11) { Rep "WEB-25" "VULN" @("내장 Tomcat $tomcatVer — 지원 종료(EOL) 브랜치($br) → 보안 패치 미제공, 지원 브랜치(9.0/10.1/11.0 등)로 업그레이드") }
         else { Rep "WEB-25" "MAN" @("내장 Tomcat $tomcatVer — 기준표에 없는 브랜치($br) → tomcat.apache.org 최신 패치·보안 공지와 비교") }
     } else { Rep "WEB-25" "MAN" @("내장 Tomcat 버전 미확인 → Spring Boot/Tomcat 최신 보안 패치 적용 여부 확인") }
-    # WEB-26 로그 디렉터리 권한
-    if ($logDir -and (Test-Path $logDir)) {
-        $u = AclHasUsers $logDir
-        if ($u) { Rep "WEB-26" "VULN" @("애플리케이션 로그 디렉터리($logDir)에 Users 그룹 읽기·실행/쓰기 권한 → 일반 사용자 접근 제거") }
-        else { Rep "WEB-26" "GOOD" @("로그 디렉터리($logDir)에 Users 접근 권한 없음") }
-    } else { Rep "WEB-26" "MAN" @("애플리케이션 로그 디렉터리 미확인 → 일반 사용자 접근 권한 확인") }
+    # WEB-26 로그 디렉터리 및 파일 권한 — 실제 로그 위치: nssm AppStdout/AppStderr, logging.file.path/name(키 기준), 관용 경로
+    $lf26 = @(); $ld26 = @()
+    foreach ($v in @("$($svcPar.AppStdout)", "$($svcPar.AppStderr)")) { if ($v -and (Test-Path -LiteralPath $v -PathType Leaf)) { $lf26 += $v; $ld26 += (Split-Path $v -Parent) } }
+    if ($ymlText) { foreach ($m in [regex]::Matches($ymlText, '(?im)^[ \t]*logging\.file\.(path|name)[ \t]*[:=][ \t]*(.+?)[ \t]*$')) {
+            $v = $m.Groups[2].Value.Trim('"').Trim("'"); if ($v -match '^\$\{') { continue }
+            if ($m.Groups[1].Value -eq 'path') { if (Test-Path -LiteralPath $v -PathType Container) { $ld26 += $v } }
+            elseif (Test-Path -LiteralPath $v -PathType Leaf) { $lf26 += $v; $ld26 += (Split-Path $v -Parent) } } }
+    foreach ($d in @("$env:ProgramData\clinic\logs", "C:\logs")) { if (Test-Path -LiteralPath $d -PathType Container) { $ld26 += $d } }
+    $ld26 = @($ld26 | Where-Object { $_ } | Sort-Object -Unique)
+    foreach ($d in $ld26) { $lf26 += @(Get-ChildItem -LiteralPath $d -File -Filter *.log -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { $_.FullName }) }
+    $lf26 = @($lf26 | Where-Object { $_ } | Sort-Object -Unique)
+    if (($ld26.Count + $lf26.Count) -eq 0) { Rep "WEB-26" "MAN" @("로그 디렉터리·파일 위치 미확인 → 로그 디렉터리 및 파일의 일반 사용자 접근 권한 확인") }
+    else { $b26 = @(); foreach ($x in @($ld26 + $lf26)) { if (AclHasUsers $x) { $b26 += $x } }
+        if ($b26.Count) { Rep "WEB-26" "VULN" @("일반 사용자(Users/Everyone/Authenticated Users) 접근 권한: $(($b26 | Select-Object -First 6) -join ', ')$(if ($b26.Count -gt 6) {" 외 $($b26.Count-6)개"}) → 로그 디렉터리 및 파일에 일반 사용자 접근 권한 제거") }
+        else { Rep "WEB-26" "GOOD" @("로그 디렉터리($($ld26 -join ', ')) 및 파일 $($lf26.Count)개에 일반 사용자 접근 권한 없음") } }
 
     $tgt = "tomcat"; $swver = ("Tomcat {0}(Spring Boot 내장)" -f $(if($tomcatVer){$tomcatVer}else{"?"}))
 } else {
@@ -313,6 +322,14 @@ if ($Target -eq "tomcat") {
         try { $v = Get-WebConfigurationProperty -PSPath $PSPath -Filter $Filter -Name $Name -ErrorAction Stop
             if ($null -ne $v -and ($v.PSObject.Properties.Name -contains "Value")) { return $v.Value }; return $v } catch { return $null } }
     $wwwroot = Join-Path $env:SystemDrive "inetpub\wwwroot"
+    # 가이드는 '해당 웹 사이트' 설정을 보라고 하므로 서버(APPHOST) 수준 + 사이트별 유효값(사이트 web.config 포함)을 함께 본다
+    $sites = @(); if ($HAS_WEBADMIN) { try { $sites = @(Get-Website -ErrorAction Stop) } catch {} }
+    function SiteProps { param([string]$Filter,[string]$Name)   # → [ordered]@{ '(서버)'=값; '<사이트>'=값 } (확인 불가는 $null)
+        $r = [ordered]@{}; $r["(서버)"] = IISProp $Filter $Name
+        foreach ($st in $sites) { $r["$($st.name)"] = IISProp $Filter $Name ("MACHINE/WEBROOT/APPHOST/{0}" -f $st.name) }
+        return $r }
+    function SitePaths { @($sites | ForEach-Object { [Environment]::ExpandEnvironmentVariables("$($_.physicalPath)".Trim()).TrimEnd('\') } | Where-Object { $_ } | Sort-Object -Unique) }
+    $psList = @("MACHINE/WEBROOT/APPHOST") + @($sites | ForEach-Object { "MACHINE/WEBROOT/APPHOST/$($_.name)" })
     if (-not $IIS_INSTALLED) { Write-Host "[!] IIS(W3SVC) 미탐지 — IIS 웹서버에서 관리자 권한으로 실행하세요. (대부분 항목 N/A)" -ForegroundColor Red }
     else { Write-Host ("  대상: IIS {0}.0   구성 API: {1}" -f $IIS_MAJOR, $(if($HAS_WEBADMIN){"WebAdministration"}else{"제한"})) }
     Write-Host ""
@@ -360,17 +377,24 @@ if ($Target -eq "tomcat") {
         elseif ($ct02 -eq 1) { Rep "WEB-02" "MAN" (@("ClearTextPassword=1(해독 가능한 암호화 저장), 복잡도 정책은 적용 → 실제 관리자 비밀번호가 3종 8자/2종 10자 이상인지 확인, '사용 안 함' 설정 후 비밀번호 재설정 권고") + $ev02) }
         elseif ($cx02) { Rep "WEB-02" "GOOD" (@("관리자 비밀번호가 SAM 에 해시로 저장(해독 가능 암호화 없음) + 복잡도 정책(3종 이상·$($ml02)자 이상) 적용, IIS 구성에 유추하기 쉬운 평문 없음 → 암호화·유추 어려움 충족") + $ev02) }
         else { Rep "WEB-02" "MAN" (@("비밀번호는 해시로 저장되나 복잡도 정책 미흡(PasswordComplexity=$pc02, 최소 $($ml02)자) → 관리자 비밀번호가 3종 8자/2종 10자 이상인지 확인") + $ev02) } }
-    $sam = Join-Path $env:windir "System32\config\SAM"; $samUsers = AclHasUsers $sam
-    if ($null -eq $samUsers) { Rep "WEB-03" "MAN" @("SAM ACL 확인 불가 → System/Administrators 로만 제한 확인") }
-    elseif ($samUsers) { Rep "WEB-03" "VULN" @("$sam 에 Users/Everyone 접근 권한 → System/Administrators 로 제한 필요") }
-    else { Rep "WEB-03" "GOOD" @("SAM 보안 속성이 System/Administrators 로만 설정됨") }
+    # WEB-03 가이드: SAM 파일에서 Administrators, SYSTEM 을 제외한 계정 및 그룹 권한 제거 → 그 밖의 허용 주체가 있으면 취약(SID 로 비교)
+    $sam = Join-Path $env:windir "System32\config\SAM"; $samBad = $null; $samAll = @()
+    try { $rules03 = @((Get-Acl -LiteralPath $sam -ErrorAction Stop).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { $_.AccessControlType -eq 'Allow' })
+        $samBad = @(); foreach ($ru in $rules03) { $sid = $ru.IdentityReference; $nm = try { $sid.Translate([Security.Principal.NTAccount]).Value } catch { $sid.Value }
+            $samAll += $nm; if ($sid.Value -notin @('S-1-5-18', 'S-1-5-32-544')) { $samBad += $nm } }
+        $samBad = @($samBad | Select-Object -Unique); $samAll = @($samAll | Select-Object -Unique) } catch { $samBad = $null }
+    if ($null -eq $samBad) { Rep "WEB-03" "MAN" @("SAM ACL 확인 불가 → Administrators, SYSTEM 외 계정 및 그룹 권한 제거 여부 확인") }
+    elseif ($samBad.Count -gt 0) { Rep "WEB-03" "VULN" @("$sam 에 Administrators·SYSTEM 외 권한: $($samBad -join ', ') → Administrators, SYSTEM 을 제외한 계정 및 그룹 권한 제거") }
+    else { Rep "WEB-03" "GOOD" @("SAM 접근 권한 주체: $($samAll -join ', ') (Administrators·SYSTEM 만)") }
 
     Write-Host "[ 2. 서비스 관리 ]" -ForegroundColor White
     if (-not $IIS_INSTALLED) { Rep "WEB-04" "NA" @("IIS 미설치") }
-    else { $db = IISProp "/system.webServer/directoryBrowse" "enabled"
-        if ($null -eq $db) { Rep "WEB-04" "MAN" @("directoryBrowse 확인 불가 → '디렉터리 검색' 사용 안 함 확인") }
-        elseif ("$db" -match "^(True|1)$") { Rep "WEB-04" "VULN" @("directoryBrowse=True → 디렉터리 목록 노출") }
-        else { Rep "WEB-04" "GOOD" @("directoryBrowse=False → 디렉터리 목록 미노출") } }
+    else { $sp04 = SiteProps "/system.webServer/directoryBrowse" "enabled"
+        $on04 = @($sp04.Keys | Where-Object { "$($sp04[$_])" -match '^(True|1)$' }); $na04 = @($sp04.Keys | Where-Object { $null -eq $sp04[$_] })
+        $ev04 = "directoryBrowse enabled: $(@($sp04.Keys | ForEach-Object { '{0}={1}' -f $_, $(if ($null -eq $sp04[$_]) {'확인 불가'} else {$sp04[$_]}) }) -join ', ')"
+        if ($on04.Count) { Rep "WEB-04" "VULN" @("디렉터리 검색 사용: $($on04 -join ', ') → 해당 웹 사이트 > 디렉터리 검색 > 사용 안 함", $ev04) }
+        elseif ($na04.Count) { Rep "WEB-04" "MAN" @("일부 사이트 directoryBrowse 확인 불가 → 해당 웹 사이트 '디렉터리 검색' 사용 안 함 확인", $ev04) }
+        else { Rep "WEB-04" "GOOD" @("서버·모든 사이트 디렉터리 검색 사용 안 함", $ev04) } }
     if (-not $IIS_INSTALLED) { Rep "WEB-05" "NA" @("IIS 미설치") }
     else { $ni = IISProp "/system.webServer/security/isapiCgiRestriction" "notListedIsapisAllowed"
         $nc = IISProp "/system.webServer/security/isapiCgiRestriction" "notListedCgisAllowed"
@@ -378,8 +402,11 @@ if ($Target -eq "tomcat") {
         elseif ("$ni" -match "^(True|1)$" -or "$nc" -match "^(True|1)$") { Rep "WEB-05" "VULN" @("지정되지 않은 ISAPI/CGI 허용(Isapi=$ni,Cgi=$nc)") }
         else { Rep "WEB-05" "GOOD" @("지정되지 않은 CGI/ISAPI 실행 미허용") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-06" "NA" @("IIS 미설치") }
-    else { $pp = IISProp "/system.webServer/asp" "enableParentPaths"; $de = IISProp "/system.webServer/security/requestFiltering" "allowDoubleEscaping"
-        if ("$pp" -match "^(True|1)$") { Rep "WEB-06" "VULN" @("ASP enableParentPaths=True → 상위 경로(../) 접근 허용") }
+    else { $sp06 = SiteProps "/system.webServer/asp" "enableParentPaths"; $de = IISProp "/system.webServer/security/requestFiltering" "allowDoubleEscaping"
+        $pp06 = @($sp06.Keys | Where-Object { "$($sp06[$_])" -match '^(True|1)$' })
+        foreach ($sr in (SitePaths)) { $wc06 = Join-Path $sr "web.config"
+            if ((Test-Path -LiteralPath $wc06) -and ([regex]::Replace((Get-Content -LiteralPath $wc06 -Raw -ErrorAction SilentlyContinue), '(?s)<!--.*?-->', '') -match '(?i)enableParentPaths\s*=\s*"true"')) { $pp06 += $wc06 } }
+        if ($pp06.Count) { Rep "WEB-06" "VULN" @("상위 패스 사용(enableParentPaths=True): $($pp06 -join ', ') → 해당 웹사이트 상위 패스 사용 False") }
         elseif ("$de" -match "^(True|1)$") { Rep "WEB-06" "VULN" @("allowDoubleEscaping=True → 이중 이스케이프 경로 조작 허용") }
         else { Rep "WEB-06" "GOOD" @("enableParentPaths=False, allowDoubleEscaping=False → 상위 디렉터리 접근 차단") } }
     # WEB-07: 모든 사이트/앱/가상디렉터리 실제 경로(환경변수 확장) + 기본 wwwroot 를 깊이 5·경로당 5000개 상한으로 탐색 + 가이드 샘플 디렉터리 존재 확인
@@ -425,7 +452,7 @@ if ($Target -eq "tomcat") {
         else { Rep "WEB-09" "GOOD" @("앱풀이 ApplicationPoolIdentity/저권한 계정으로 구동") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-10" "NA" @("IIS 미설치") }
     else { $arrProxy = IISProp "/system.webServer/proxy" "enabled"
-        if ("$arrProxy" -match "^(True|1)$") { Rep "WEB-10" "MAN" @("ARR 프록시 활성 → URL 재작성 규칙 목적지가 신뢰 백엔드 단일 대상으로 고정됐는지 확인(오픈 프록시 금지)") }
+        if ("$arrProxy" -match "^(True|1)$") { Rep "WEB-10" "MAN" @("ARR 프록시 활성 → 사이트 루트(web.config)의 Proxy 설정이 업무상 필요한지 확인, 불필요하면 제거") }
         else { Rep "WEB-10" "GOOD" @("ARR 역방향 프록시 비활성/불필요 프록시 없음") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-11" "NA" @("IIS 미설치") }
     else { $paths=@(); try { foreach ($s in (Get-Website -ErrorAction Stop)) { $paths += "$($s.name):$($s.physicalPath)" } } catch {}
@@ -434,14 +461,22 @@ if ($Target -eq "tomcat") {
         elseif ($isDefault) { Rep "WEB-11" "VULN" @("웹사이트 실제 경로가 IIS 기본값(inetpub\wwwroot): $($isDefault -join '; ') → 분리 경로 권장") }
         else { Rep "WEB-11" "GOOD" @("웹사이트 경로가 기본값과 분리됨") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-12" "NA" @("IIS 미설치") }
-    else { $links=@(); if (Test-Path $wwwroot) { $links = Get-ChildItem $wwwroot -Recurse -Force -ErrorAction SilentlyContinue |
-            Where-Object { $_.Attributes -match "ReparsePoint" -or $_.Extension -eq ".lnk" } | Select-Object -First 5 -ExpandProperty FullName }
-        if ($links) { Rep "WEB-12" "VULN" @("웹 루트에 심볼릭 링크/정션/바로가기: $($links -join ', ')") }
-        else { Rep "WEB-12" "GOOD" @("$wwwroot 내 심볼릭 링크·정션·.lnk 없음") } }
+    else { $r12 = @(SitePaths); $links = @(); $sc12 = @()
+        foreach ($r in $r12) { if ($r.StartsWith('\\') -or $r -match '^[A-Za-z]:$' -or -not (Test-Path -LiteralPath $r)) { $sc12 += "$r(미탐색)"; continue }
+            $sc12 += $r; $links += @(Get-ChildItem -LiteralPath $r -Recurse -Depth 5 -Force -ErrorAction SilentlyContinue | Select-Object -First 5000 |
+                Where-Object { $_.Attributes -match "ReparsePoint" -or $_.Extension -eq ".lnk" } | Select-Object -First 5 -ExpandProperty FullName) }
+        if ($r12.Count -eq 0) { Rep "WEB-12" "MAN" @("사이트 실제 경로 확인 불가 → 해당 웹사이트 실제 경로의 바로가기·링크 파일 확인") }
+        elseif ($links.Count) { Rep "WEB-12" "VULN" @("사이트 실제 경로에 심볼릭 링크/정션/바로가기: $(($links | Select-Object -First 5) -join ', ') → 제거", "검사 경로: $($sc12 -join ', ')") }
+        else { Rep "WEB-12" "GOOD" @("사이트 실제 경로 내 심볼릭 링크·정션·.lnk 없음", "검사 경로: $($sc12 -join ', ')") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-13" "NA" @("IIS 미설치") }
-    else { $badmap=@(); try { foreach ($h in (Get-WebConfiguration "/system.webServer/handlers/add" -ErrorAction Stop)) { if ("$($h.path)" -match "\.(asa|asax|config|bak|inc)$") { $badmap += "$($h.path)" } } } catch {}
-        if ($badmap.Count -gt 0) { Rep "WEB-13" "VULN" @("위험 스크립트/설정 매핑: $($badmap -join ', ')") }
-        else { Rep "WEB-13" "GOOD" @(".asa/.asax 등 위험 스크립트 매핑 없음") } }
+    else { $badmap=@(); $flt13=@(); $den13=@()
+        foreach ($ps in $psList) { $lb = if ($ps -eq "MACHINE/WEBROOT/APPHOST") { "(서버)" } else { $ps.Substring(24) }
+            try { foreach ($h in @(Get-WebConfiguration "/system.webServer/handlers/add" -PSPath $ps -ErrorAction Stop)) { if ("$($h.path)" -match '\.(asa|asax)$') { $badmap += "$($h.path)" } } } catch {}
+            try { foreach ($fe in @(Get-WebConfiguration "/system.webServer/security/requestFiltering/fileExtensions/add" -PSPath $ps -ErrorAction Stop)) {
+                    if ("$($fe.fileExtension)" -match '^\.(asa|asax)$') { if ("$($fe.allowed)" -match '^(True|1)$') { $flt13 += "$lb $($fe.fileExtension) 허용됨=true" } else { $den13 += "$($fe.fileExtension)" } } } } catch {} }
+        $badmap = @($badmap | Select-Object -Unique); $flt13 = @($flt13 | Select-Object -Unique); $den13 = @($den13 | Select-Object -Unique)
+        if ($badmap.Count -or $flt13.Count) { Rep "WEB-13" "VULN" @("asa/asax 스크립트 매핑: $(if ($badmap.Count) {$badmap -join ', '} else {'없음'}), 요청 필터링: $(if ($flt13.Count) {$flt13 -join ', '} else {'허용 없음'}) → '허용됨' 값이 true 인 매핑 제거 및 '파일 이름 확장명 거부'에 등록") }
+        else { Rep "WEB-13" "GOOD" @("서버·사이트 처리기 매핑에 .asa/.asax 없음, 요청 필터링 .asa/.asax 허용 없음(거부 등록: $(if ($den13.Count) {$den13 -join ', '} else {'없음'}))") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-14" "NA" @("IIS 미설치") }
     else { $wc = Join-Path $wwwroot "web.config"; $u = AclHasUsers $wc
         if ($null -eq $u) { Rep "WEB-14" "MAN" @("web.config 부재/ACL 확인 불가 → 주요 설정 파일 Users 접근 확인") }
@@ -449,7 +484,8 @@ if ($Target -eq "tomcat") {
         else { Rep "WEB-14" "GOOD" @("web.config 에 Users 불필요 권한 없음") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-15" "NA" @("IIS 미설치") }
     else { $vulnExt=@(".htr",".idc",".stm",".shtm",".shtml",".printer",".htw",".ida",".idq"); $found=@()
-        try { foreach ($h in (Get-WebConfiguration "/system.webServer/handlers/add" -ErrorAction Stop)) { foreach ($ve in $vulnExt) { if ("$($h.path)" -match [regex]::Escape($ve)+"$") { $found += "$($h.path)" } } } } catch {}
+        foreach ($ps in $psList) { try { foreach ($h in @(Get-WebConfiguration "/system.webServer/handlers/add" -PSPath $ps -ErrorAction Stop)) { foreach ($ve in $vulnExt) { if ("$($h.path)" -match [regex]::Escape($ve)+"$") { $found += "$($h.path)" } } } } catch {} }
+        $found = @($found | Select-Object -Unique)
         if ($found.Count -gt 0) { Rep "WEB-15" "VULN" @("취약 스크립트 매핑: $($found -join ', ')") }
         else { Rep "WEB-15" "GOOD" @("취약 확장자(.htr/.idc/.stm 등) 매핑 없음") } }
     # WEB-16: 실측 우선 — 바인딩별 '/'(IIS 파이프라인)·'/%'(HTTP.sys 직접 응답)를 curl.exe 로 요청, Server 값이 제품·버전(Microsoft-IIS·Microsoft-HTTPAPI·ASP.NET·ARR·'/숫자'·'(OS)')을
@@ -502,9 +538,16 @@ if ($Target -eq "tomcat") {
         else { Rep "WEB-20" "VULN" @("https 바인딩 부재(http만) → 평문 전송, SSL 인증서 바인딩 필요") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-21" "NA" @("IIS 미설치") }
     else { $redir = IISProp "/system.webServer/httpRedirect" "enabled"; $https2=$false; try { foreach ($b in (Get-WebBinding -ErrorAction Stop)) { if ("$($b.protocol)" -eq "https") { $https2=$true } } } catch {}
+        # URL Rewrite: action type=Redirect 이고 url 이 https:// 인 규칙(사이트 루트 web.config, applicationHost.config 의 rules/globalRules)
+        $rw21 = @(); $cf21 = @(@(SitePaths) | ForEach-Object { Join-Path $_ "web.config" }) + @(Join-Path $env:windir "System32\inetsrv\config\applicationHost.config")
+        foreach ($f in $cf21) { if (-not (Test-Path -LiteralPath $f)) { continue }
+            try { $x21 = New-Object Xml.XmlDocument; $x21.XmlResolver = $null; $x21.Load($f)
+                foreach ($a in @($x21.SelectNodes("//rewrite//rule/action[@type='Redirect']"))) { if ("$($a.GetAttribute('url'))" -match '^https://') { $rw21 += "$f 규칙 '$($a.ParentNode.GetAttribute('name'))'" } }
+                foreach ($h in @($x21.SelectNodes("//httpRedirect[@enabled='true']"))) { if ("$($h.GetAttribute('destination'))" -match '^https://') { $rw21 += "$f httpRedirect" } } } catch {} }
         if ("$redir" -match "^(True|1)$") { Rep "WEB-21" "GOOD" @("httpRedirect 활성 → HTTP→HTTPS 리디렉션") }
+        elseif ($rw21.Count) { Rep "WEB-21" "GOOD" @("HTTPS 리디렉션 규칙: $(($rw21 | Select-Object -Unique) -join ', ')") }
         elseif (-not $https2) { Rep "WEB-21" "VULN" @("HTTPS 미구성 + HTTP 리디렉션 미설정 → HTTP 평문 처리") }
-        else { Rep "WEB-21" "MAN" @("URL Rewrite 로 HTTPS 전환되는지 확인") } }
+        else { Rep "WEB-21" "VULN" @("https 바인딩은 있으나 HTTP→HTTPS 리디렉션(httpRedirect·URL Rewrite Redirect 규칙) 없음 → HTTP 접근 시 HTTPS Redirection 설정") } }
     if (-not $IIS_INSTALLED) { Rep "WEB-22" "NA" @("IIS 미설치") }
     else { $em = IISProp "/system.webServer/httpErrors" "errorMode"
         if ($null -eq $em) { Rep "WEB-22" "MAN" @("httpErrors errorMode 확인 불가 → 사용자 정의 오류 페이지 확인") }

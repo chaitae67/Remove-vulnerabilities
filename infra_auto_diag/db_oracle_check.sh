@@ -24,15 +24,15 @@ fi
 JSON_FILE=""; CSV_FILE=""; HTML_FILE=""; NO_SAVE=0; NOCOLOR=0
 CONN=""; O_USER=""; O_PASS=""; O_HOST="localhost"; O_HOST_SET=0; O_PORT="1521"; O_SVC=""; SYSDBA=0; TNS_ADMIN_IN=""
 DB_CT_IN=""; PDB_IN=""
-# 기관 정책 기준값(가이드: 기관 정책에 맞게) — 옵션으로 조정
-PW_LIFE_MAX=90; LOGIN_FAIL_MAX=10; REUSE_MAX_MIN=10; REUSE_TIME_MIN=365
+# 기관 정책 기준값(가이드: 기관 정책에 맞게) — 옵션으로 조정. 비밀번호 사용기간은 가이드에 숫자 기준이 없어 지정 시에만 비교
+PW_LIFE_MAX=""; LOGIN_FAIL_MAX=10; REUSE_MAX_MIN=10; REUSE_TIME_MIN=365
 while [ $# -gt 0 ]; do
   case "$1" in
     --conn) CONN="${2:-}"; shift 2 ;; --user) O_USER="${2:-}"; shift 2 ;; --pass) O_PASS="${2:-}"; shift 2 ;;
     --host) O_HOST="${2:-}"; O_HOST_SET=1; shift 2 ;; --port) O_PORT="${2:-}"; shift 2 ;; --service) O_SVC="${2:-}"; shift 2 ;;
     --sysdba) SYSDBA=1; shift ;; --tns-admin) TNS_ADMIN_IN="${2:-}"; shift 2 ;;
     --container) DB_CT_IN="${2:-}"; shift 2 ;; --pdb) PDB_IN="${2:-}"; shift 2 ;;
-    --pw-life-max) PW_LIFE_MAX="${2:-90}"; shift 2 ;; --login-fail-max) LOGIN_FAIL_MAX="${2:-10}"; shift 2 ;;
+    --pw-life-max) PW_LIFE_MAX="${2:-}"; shift 2 ;; --login-fail-max) LOGIN_FAIL_MAX="${2:-10}"; shift 2 ;;
     --reuse-max-min) REUSE_MAX_MIN="${2:-10}"; shift 2 ;; --reuse-time-min) REUSE_TIME_MIN="${2:-365}"; shift 2 ;;
     --json) JSON_FILE="${2:-}"; shift 2 ;; --csv) CSV_FILE="${2:-}"; shift 2 ;; --html) HTML_FILE="${2:-}"; shift 2 ;;
     --no-save) NO_SAVE=1; shift ;; --no-color) NOCOLOR=1; shift ;;
@@ -45,7 +45,7 @@ while [ $# -gt 0 ]; do
 옵션: --csv f --html f --json f --no-save --no-color --sysdba --tns-admin DIR
       --container <이름|ID>   Oracle 도커 컨테이너 지정(기본: ora_pmon 프로세스가 있는 컨테이너 자동 감지)
       --pdb <이름>            CDB 루트 접속 시 이 컨테이너만 점검(기본: 루트 + 열린 PDB 전체)
-      기관 정책 기준값: --pw-life-max 90  --login-fail-max 10  --reuse-max-min 10  --reuse-time-min 365
+      기관 정책 기준값: --pw-life-max <일>(지정 시에만 사용기간 비교)  --login-fail-max 10  --reuse-max-min 10  --reuse-time-min 365
 환경변수 ORACLE_CONN / ORACLE_HOME / TNS_ADMIN 인식.
 USAGE
       exit 0 ;;
@@ -53,6 +53,7 @@ USAGE
   esac
 done
 for _v in PW_LIFE_MAX LOGIN_FAIL_MAX REUSE_MAX_MIN REUSE_TIME_MIN; do
+  [ "$_v" = PW_LIFE_MAX ] && [ -z "$PW_LIFE_MAX" ] && continue
   case "${!_v}" in ''|*[!0-9]*) echo "[!] $_v 는 숫자여야 합니다: ${!_v}" >&2; exit 2;; esac
 done
 
@@ -96,8 +97,9 @@ if [ -z "${KISA_IN_CONTAINER:-}" ] && ! command -v sqlplus >/dev/null 2>&1 && co
     _d=$(date +%Y%m%d 2>/dev/null || echo date); _h=$(printf '%s' "$HOSTN" | tr -c 'A-Za-z0-9._-' '_')
     [ -z "$CSV_FILE" ]  && CSV_FILE="db_oracle_${_h}_${_d}.csv"
     [ -z "$HTML_FILE" ] && HTML_FILE="db_oracle_${_h}_${_d}.html"
-    iargs=(--csv "$rdir/out.csv" --html "$rdir/out.html" --pw-life-max "$PW_LIFE_MAX" --login-fail-max "$LOGIN_FAIL_MAX"
+    iargs=(--csv "$rdir/out.csv" --html "$rdir/out.html" --login-fail-max "$LOGIN_FAIL_MAX"
            --reuse-max-min "$REUSE_MAX_MIN" --reuse-time-min "$REUSE_TIME_MIN")
+    [ -n "$PW_LIFE_MAX" ] && iargs+=(--pw-life-max "$PW_LIFE_MAX")
     [ -n "$JSON_FILE" ] && iargs+=(--json "$rdir/out.json")
     [ "$NO_SAVE" -eq 1 ] && iargs+=(--no-save)
     [ "$NOCOLOR" -eq 1 ] && iargs+=(--no-color)
@@ -305,18 +307,32 @@ pwviol() { local CONS="$PWCONS" NCONS; NCONS=$(set -- $PWCONS; echo $#); viol "$
 
 # D-03 비밀번호 사용기간·복잡도 — 잠기지 않은 비밀번호 계정에 실제 적용되는 프로파일 기준
 _lt=$(eff PASSWORD_LIFE_TIME); _vf=$(eff PASSWORD_VERIFY_FUNCTION)
-pwviol "SELECT username||'('||profile||': LIFE_TIME='||lt||', VERIFY_FUNCTION='||NVL(vf,'NULL')||')' FROM (SELECT u.username, u.profile, $_lt lt, $_vf vf FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD'$CUF) WHERE lt='UNLIMITED' OR NVL(CASE WHEN REGEXP_LIKE(lt,'^[0-9]*[.]?[0-9]+\$') THEN TO_NUMBER(lt) END,0) > $PW_LIFE_MAX OR NVL(vf,'NULL') IN ('NULL','UNLIMITED') ORDER BY 1;"
-verdict D-03 "잠기지 않은 비밀번호 계정 모두 사용기간 ${PW_LIFE_MAX}일 이하 + 복잡도 검증함수(PASSWORD_VERIFY_FUNCTION) 적용" \
-  "사용기간(${PW_LIFE_MAX}일 이하, --pw-life-max 로 기관 기준 조정) 또는 복잡도 검증함수 미적용 계정 → 프로파일 설정 필요,"
+#   가이드 판단기준: 기관 정책에 맞게 사용기간·복잡도 설정 → 사용기간 무제한(UNLIMITED)·검증함수 미설정은 취약,
+#   숫자 사용기간은 --pw-life-max(기관 정책) 지정 시에만 비교하고, 미지정이면 적용값을 근거로 수동확인
+_life=""; [ -n "$PW_LIFE_MAX" ] && _life=" OR NVL(CASE WHEN REGEXP_LIKE(lt,'^[0-9]*[.]?[0-9]+\$') THEN TO_NUMBER(lt) END,0) > $PW_LIFE_MAX"
+pwviol "SELECT username||'('||profile||': LIFE_TIME='||lt||', VERIFY_FUNCTION='||NVL(vf,'NULL')||')' FROM (SELECT u.username, u.profile, $_lt lt, $_vf vf FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD'$CUF) WHERE lt='UNLIMITED'$_life OR NVL(vf,'NULL') IN ('NULL','UNLIMITED') ORDER BY 1;"
+if [ -n "$PW_LIFE_MAX" ]; then
+  verdict D-03 "잠기지 않은 비밀번호 계정 모두 사용기간 ${PW_LIFE_MAX}일(기관 정책) 이하 + 복잡도 검증함수(PASSWORD_VERIFY_FUNCTION) 적용" \
+    "사용기간(기관 정책 ${PW_LIFE_MAX}일) 초과·무제한 또는 복잡도 검증함수 미적용 계정 → 프로파일 설정 필요,"
+elif [ "$V_NROW" -gt 0 ] || [ -n "$V_ERR" ]; then
+  verdict D-03 "" "사용기간 무제한(UNLIMITED) 또는 복잡도 검증함수 미적용 계정 → 기관 정책에 맞게 프로파일 사용기간·복잡도 설정,"
+else
+  pwviol "SELECT DISTINCT profile||': LIFE_TIME='||lt FROM (SELECT u.profile, $_lt lt FROM dba_users u WHERE u.account_status NOT LIKE '%LOCKED%' AND u.authentication_type='PASSWORD'$CUF) ORDER BY 1;"
+  rep D-03 MAN "잠기지 않은 비밀번호 계정 모두 사용기간 설정 + 복잡도 검증함수 적용. 사용기간 값이 기관 정책에 맞는지 확인(인터뷰)" ${V_ROWS:+"적용 사용기간: $(short "$V_ROWS")"}
+fi
 
 # D-04 관리자 권한 최소화 — 가이드 쿼리: DBA 롤 없이 SYSDBA 또는 WITH ADMIN OPTION 시스템 권한 보유(나오면 취약)
-viol "SELECT username||'(SYSDBA)' FROM v\$pwfile_users WHERE sysdba='TRUE' AND username NOT IN ('SYS','INTERNAL') AND username NOT IN $DBAH UNION ALL SELECT grantee||'('||privilege||' WITH ADMIN OPTION)' FROM dba_sys_privs WHERE admin_option='YES' AND grantee NOT IN ('SYS','SYSTEM') AND grantee NOT IN $MU AND grantee NOT IN $MR AND grantee NOT IN $DBAH ORDER BY 1;"
+#   WITH ADMIN OPTION 제외 대상: 가이드 Step 2 쿼리 목록(SYS, SYSTEM, AQ_ADMINISTRATOR_ROLE, DBA, 원문에 잘려 인쇄된
+#   MDSYS·LBACSYS·SCHEDULER_ADMIN·WMSYS) + DBA 롤 보유자.
+#   가이드 목록은 모두 Oracle 설치 시 생성되는 내장 계정·롤이므로, 같은 성격인 Oracle 관리 계정·롤
+#   (12c 이상 ORACLE_MAINTAINED='Y', 11g 는 기본 목록 $MU/$MR)도 제외한다 — 버전별로 늘어난 내장 계정을 가이드 의도대로 반영.
+viol "SELECT username||'(SYSDBA)' FROM v\$pwfile_users WHERE sysdba='TRUE' AND username NOT IN ('SYS','INTERNAL') AND username NOT IN $DBAH UNION ALL SELECT grantee||'('||privilege||' WITH ADMIN OPTION)' FROM dba_sys_privs WHERE admin_option='YES' AND grantee NOT IN ('SYS','SYSTEM','AQ_ADMINISTRATOR_ROLE','DBA','MDSYS','LBACSYS','SCHEDULER_ADMIN','WMSYS') AND grantee NOT IN $MU AND grantee NOT IN $MR AND grantee NOT IN $DBAH ORDER BY 1;"
 r4="$V_ROWS"; n4=$V_NROW; e4="$V_ERR"
 viol "SELECT grantee FROM dba_role_privs WHERE granted_role='DBA' AND grantee NOT IN ('SYS','SYSTEM') AND grantee NOT IN $MU AND grantee NOT IN $MR ORDER BY 1;"
 if [ "$n4" -gt 0 ]; then rep D-04 VULN "DBA 롤 없이 관리자 권한(SYSDBA/WITH ADMIN OPTION) 보유 ${n4}건: $(short "$r4") → 불필요 권한 회수" ${V_ROWS:+"DBA 롤 보유 일반 계정: $(short "$V_ROWS")"}
 elif [ "$V_NROW" -gt 0 ]; then rep D-04 MAN "DBA 롤 보유 일반 계정 ${V_NROW}개: $(short "$V_ROWS") → 관리자 권한이 꼭 필요한 계정인지 확인(불필요 시 REVOKE DBA)"
 elif [ -n "$e4$V_ERR" ]; then rep D-04 MAN "조회 실패(${e4:-$V_ERR}) → 권한 있는 계정으로 재점검하거나 수동 확인"
-else rep D-04 GOOD "SYS/SYSTEM·Oracle 관리 계정 외 관리자 권한(DBA 롤·SYSDBA·WITH ADMIN OPTION) 보유 계정 없음"; fi
+else rep D-04 GOOD "가이드 제외 대상·Oracle 내장(관리) 계정 외 관리자 권한(DBA 롤·SYSDBA·WITH ADMIN OPTION) 보유 계정 없음"; fi
 
 # D-05 비밀번호 재사용 제약 — 둘 다 UNLIMITED(제약 없음) 또는 둘 다 숫자인데 가이드 최소값(REUSE_MAX 10회·REUSE_TIME 365일) 미만
 #   (한쪽만 UNLIMITED 이면 Oracle 에서는 재사용 자체가 불가 → 제약 적용으로 봄)
@@ -342,15 +358,15 @@ elif [ -r /proc ]; then
   else rep D-07 GOOD "Oracle/리스너 프로세스 모두 root 아닌 계정으로 구동:$u7"; fi
 else rep D-07 MAN "/proc 조회 불가 → DBMS 가 root 아닌 계정으로 구동되는지 확인"; fi
 
-# D-08 안전한 암호화 알고리즘 — 잠기지 않은 계정의 12C(SHA-2) 검증자 + sqlnet.ora ALLOWED_LOGON_VERSION_SERVER
-viol "SELECT username||'('||password_versions||')' FROM dba_users WHERE authentication_type='PASSWORD' AND account_status NOT LIKE '%LOCKED%' AND password_versions IS NOT NULL AND password_versions NOT LIKE '%12C%' ORDER BY 1;"
+# D-08 안전한 암호화 알고리즘 — 비밀번호 계정 전체(가이드 쿼리: dba_users)의 12C(SHA-2) 검증자 + sqlnet.ora ALLOWED_LOGON_VERSION_SERVER
+viol "SELECT username||'('||password_versions||')' FROM dba_users WHERE authentication_type='PASSWORD' AND password_versions IS NOT NULL AND password_versions NOT LIKE '%12C%' ORDER BY 1;"
 alv=""; [ "$IS_REMOTE" = 0 ] && [ -n "$TNSADM" ] && alv=$(conf_val "$TNSADM/sqlnet.ora" 'SQLNET\.ALLOWED_LOGON_VERSION_SERVER')
 ev8="sqlnet.ora SQLNET.ALLOWED_LOGON_VERSION_SERVER=${alv:-미설정(12c R2 이상 기본 12)}"
 weak8=0; case "$alv" in [0-9]|1[01]) weak8=1;; esac
 if [ "$V_NROW" -gt 0 ] || [ "$weak8" = 1 ]; then
-  rep D-08 VULN "$( [ "$V_NROW" -gt 0 ] && echo "12C(SHA-2) 검증자 없는 잠금 해제 계정 ${V_NROW}건: $(short "$V_ROWS")" || echo "구 버전 해시(10G/11G) 로그온 허용")" "$ev8 → ALLOWED_LOGON_VERSION_SERVER=12 이상 설정 후 비밀번호 재설정"
+  rep D-08 VULN "$( [ "$V_NROW" -gt 0 ] && echo "12C(SHA-2) 검증자 없는 비밀번호 계정 ${V_NROW}건: $(short "$V_ROWS")" || echo "구 버전 해시(10G/11G) 로그온 허용")" "$ev8 → sqlnet.ora SQLNET.ALLOWED_LOGON_VERSION_SERVER=12, SQLNET.ALLOWED_LOGON_VERSION_CLIENT=12 설정(SHA-256 이상 암호화 알고리즘 적용)"
 elif [ -n "$V_ERR" ]; then rep D-08 MAN "조회 실패($V_ERR) → 권한 있는 계정으로 재점검" "$ev8"
-else rep D-08 GOOD "잠금 해제된 비밀번호 계정 모두 12C(SHA-2) 검증자 사용" "$ev8"; fi
+else rep D-08 GOOD "비밀번호 계정 모두 12C(SHA-2) 검증자 사용" "$ev8"; fi
 
 # D-09 로그인 실패 잠금 — 실제 적용 프로파일의 FAILED_LOGIN_ATTEMPTS 가 UNLIMITED 또는 기준 초과
 _fa=$(eff FAILED_LOGIN_ATTEMPTS)
@@ -369,8 +385,8 @@ elif [ -f "$TNSADM/sqlnet.ora" ]; then
   inv10=$(conf_val "$TNSADM/sqlnet.ora" 'TCP\.INVITED_NODES')
   if [ "$vn10" = 1 ] && [ -n "$inv10" ]; then rep D-10 GOOD "sqlnet.ora TCP.VALIDNODE_CHECKING=yes + INVITED_NODES=$(short "$inv10") → 지정 IP만 접속 허용"
   elif [ "$vn10" = 1 ]; then rep D-10 VULN "sqlnet.ora TCP.VALIDNODE_CHECKING=yes 이나 TCP.INVITED_NODES 미설정 → 허용 IP 목록 없음(EXCLUDED_NODES 만으로는 지정 IP만 허용이 아님)"
-  else rep D-10 VULN "$TNSADM/sqlnet.ora 에 TCP.VALIDNODE_CHECKING=yes 미설정(주석 제외) → DB 접속 IP 제한 없음(INVITED_NODES 설정 권장, 방화벽/보안그룹 제한은 별도 확인)"; fi
-else rep D-10 VULN "$TNSADM 에 sqlnet.ora 없음 → 접속 노드 제한 미적용(sqlnet.ora INVITED_NODES 설정 권장, 방화벽/보안그룹 제한은 별도 확인)"; fi
+  else rep D-10 VULN "$TNSADM/sqlnet.ora 에 TCP.VALIDNODE_CHECKING=yes 미설정(주석 제외) → DB 접속 IP 제한 없음(sqlnet.ora 에 tcp.validnode_checking=yes, tcp.invited_nodes 지정 후 리스너 재시작)"; fi
+else rep D-10 VULN "$TNSADM 에 sqlnet.ora 없음 → 접속 노드 제한 미적용(sqlnet.ora 에 tcp.validnode_checking=yes, tcp.invited_nodes 지정 후 리스너 재시작)"; fi
 
 # D-11 시스템 테이블 접근 제한 — 가이드 쿼리(EXECUTE 제외·PUBLIC·기본 롤·DBA 보유자 제외) + Oracle 관리 계정/롤 제외, 나오면 취약
 viol "SELECT grantee||':'||privilege||' ON '||owner||'.'||table_name FROM dba_tab_privs WHERE (owner='SYS' OR table_name LIKE 'DBA\_%' ESCAPE '\\') AND privilege<>'EXECUTE' AND grantee NOT IN ('PUBLIC','AQ_ADMINISTRATOR_ROLE','AQ_USER_ROLE','AURORA\$JIS\$UTILITY\$','OSE\$HTTP\$ADMIN','TRACESVR','CTXSYS','DBA','DELETE_CATALOG_ROLE','EXECUTE_CATALOG_ROLE','EXP_FULL_DATABASE','GATHER_SYSTEM_STATISTICS','HS_ADMIN_ROLE','IMP_FULL_DATABASE','LOGSTDBY_ADMINISTRATOR','MDSYS','ODM','OEM_MONITOR','OLAPSYS','ORDSYS','OUTLN','RECOVERY_CATALOG_OWNER','SELECT_CATALOG_ROLE','SNMPAGENT','SYSTEM','WKSYS','WKUSER','WMSYS','WM_ADMIN_ROLE','XDB','LBACSYS','PERFSTAT','XDBADMIN') AND grantee NOT IN $MU AND grantee NOT IN $MR AND grantee NOT IN $DBAH ORDER BY 1;"
@@ -382,8 +398,8 @@ if ver_ge 12 2; then rep D-12 NA "Oracle ${DB_VER} — 12c Release 2 이후 리�
 elif [ "$IS_REMOTE" = 1 ]; then rep D-12 MAN "원격 접속 점검 → DB 서버의 listener.ora 리스너 비밀번호(PASSWORDS_) 설정 확인"
 elif [ -n "$TNSADM" ] && [ -f "$TNSADM/listener.ora" ]; then
   if conf_has "$TNSADM/listener.ora" '^[[:space:]]*PASSWORDS_'; then rep D-12 GOOD "listener.ora 에 리스너 비밀번호(PASSWORDS_) 설정"
-  else rep D-12 MAN "listener.ora 에 PASSWORDS_ 미설정 — Oracle 10g 이후 로컬 OS 인증이 기본이라 원격 관리 미허용 시 위험 낮음, 원격 관리 정책 확인"; fi
-else rep D-12 MAN "listener.ora 미확인 → 리스너 원격 관리 허용 시 비밀번호 설정 여부 확인(로컬 인증만 사용 시 해당 없음)"; fi
+  else rep D-12 VULN "listener.ora 에 리스너 비밀번호(PASSWORDS_<리스너명>) 미설정 → 리스너 비밀번호 설정"; fi
+else rep D-12 MAN "listener.ora 미확인 → listener.ora 의 PASSWORDS_<리스너명> 설정 여부 확인"; fi
 
 # D-13 ODBC/OLE-DB (Windows 전용)
 rep D-13 NA "점검 대상이 Windows OS(제어판 ODBC 데이터 원본)로 한정 → Oracle/리눅스 대상 아님"
@@ -408,7 +424,7 @@ else
 $_list
 EOF
   if [ "$n14" -eq 0 ]; then rep D-14 MAN "주요 파일 경로 확인 불가(ORACLE_HOME/TNS_ADMIN/SQL 조회) → orapw·spfile·init.ora·listener.ora·데이터 파일 권한(일반 사용자 쓰기 불가) 확인"
-  elif [ -n "$bad14" ]; then rep D-14 VULN "일반 사용자(그룹/기타) 쓰기 권한이 있는 주요 파일/디렉터리:$(short "$bad14") → 쓰기 권한 제거(orapw·spfile·init.ora 640, 디렉터리 755 이하)"
+  elif [ -n "$bad14" ]; then rep D-14 VULN "일반 사용자(그룹/기타) 쓰기 권한이 있는 주요 파일/디렉터리:$(short "$bad14") → 일반 사용자 수정(쓰기) 권한 제거(가이드 기준값: init.ora·init<SID>.ora 640, 디렉터리 755 등)"
   else rep D-14 GOOD "주요 설정·비밀번호·데이터 파일/디렉터리 ${n14}개 점검: 일반 사용자 쓰기 권한 없음"; fi
 fi
 
@@ -495,8 +511,8 @@ EOF
   if { [ "${_up:-0}" -gt 0 ] 2>/dev/null; } || { [ "${_tr:-NONE}" != NONE ] && [ "${_op:-0}" -gt 0 ] 2>/dev/null; }; then ok26="${ok26:+$ok26 / }$_d"
   else bad26="${bad26:+$bad26 / }$_d"; fi
 done
-if [ -n "$ok26" ] && [ -z "$bad26" ] && [ -z "$err26" ]; then rep D-26 GOOD "$ok26" "감사 로그 보관·백업 정책 수립 여부는 인터뷰로 확인"
-elif [ -n "$bad26" ] && [ -z "$ok26" ] && [ -z "$err26" ]; then rep D-26 VULN "감사 설정 없음: $bad26 → AUDIT SESSION WHENEVER NOT SUCCESSFUL 또는 Unified 감사 정책(ORA_LOGON_FAILURES 등) 활성화"
+if [ -n "$ok26" ] && [ -z "$bad26" ] && [ -z "$err26" ]; then rep D-26 MAN "감사 설정 적용: $ok26" "감사 기록 정책·백업 정책 수립 여부는 인터뷰로 확인"
+elif [ -n "$bad26" ] && [ -z "$ok26" ] && [ -z "$err26" ]; then rep D-26 VULN "감사 설정 없음: $bad26 → 감사 로그 저장 정책 수립·적용(AUDIT_TRAIL=DB 설정 후 AUDIT SESSION WHENEVER NOT SUCCESSFUL 등 감사 설정)"
 else rep D-26 MAN ${ok26:+"감사 적용: $ok26"} ${bad26:+"감사 없음: $bad26"} ${err26:+"조회 실패: $err26"} "→ 컨테이너별 감사 정책 적용 여부 확인"; fi
 
 #==============================================================================
