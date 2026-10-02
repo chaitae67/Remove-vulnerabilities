@@ -76,13 +76,25 @@ def collect_creds(provider, args):
         # 키를 안 주면 boto3 기본 체인(CloudShell/EC2 역할/env/~/.aws)을 사용
         ak = args.access_key or _env("AWS_ACCESS_KEY_ID")
         sk = args.secret_key or _env("AWS_SECRET_ACCESS_KEY")
+        profile = args.profile or ""
+        # 리전: --region > 환경변수 > `aws configure`(~/.aws/config 의 해당/기본 프로필) 자동.
+        # 특정 리전을 하드코딩하지 않는다 — 어느 계정이든 configure 된 리전을 그대로 따라간다.
+        # (aws configure 가 저장하는 리전은 환경변수가 아니라 config 파일이라, boto3 세션에
+        #  맡겨야 읽힌다. 셋 다 없으면 빈 값 → 아래 main 에서 안내 후 중단.)
+        region = args.region or _env("AWS_REGION", "AWS_DEFAULT_REGION") or ""
+        if not region:
+            try:
+                import boto3
+                region = boto3.session.Session(profile_name=profile or None).region_name or ""
+            except Exception:
+                region = ""
         creds = {
             "access_key": ak, "secret_key": sk,
             "session_token": args.session_token or _env("AWS_SESSION_TOKEN"),
-            "profile": args.profile or "",
-            "region": args.region or _env("AWS_REGION", "AWS_DEFAULT_REGION") or "ap-northeast-2",
+            "profile": profile,
+            "region": region,
         }
-        creds["mode"] = "key" if ak else ("profile" if creds["profile"] else "env")
+        creds["mode"] = "key" if ak else ("profile" if profile else "env")
         return creds
     if p == "azure":
         # 비우면 DefaultAzureCredential(az login / Cloud Shell / 관리 ID) 사용
@@ -119,7 +131,14 @@ def _base_name(os_label, out_path):
         root, ext = os.path.splitext(out_path)
         return root if ext.lower() in (".xlsx", ".csv") else out_path
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    return os.path.join(os.getcwd(), f"cloud_{(os_label or 'result').upper()}_{stamp}")
+    # 기본 저장 위치: 리포지토리의 reports_out/ (서버 fleet 보고서와 같은 폴더).
+    # 생성 실패(권한 등) 시 현재 폴더로 폴백. -o 로 다른 경로를 주면 그대로 따른다.
+    out_dir = os.path.join(SCRIPT_DIR, "reports_out")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        out_dir = os.getcwd()
+    return os.path.join(out_dir, f"cloud_{(os_label or 'result').upper()}_{stamp}")
 
 
 def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True, target=None):
@@ -249,7 +268,16 @@ def main():
         sys.exit(f"[!] {cloud_check.label(provider)} 진단 SDK 미설치 → pip install {pkg}")
 
     creds = collect_creds(provider, args)
-    print(f"\n[*] {cloud_check.label(provider)} 진단 시작 …")
+    if provider == "aws" and not creds.get("region"):
+        sys.exit("[!] AWS 리전을 확인할 수 없습니다. 다음 중 하나로 지정하세요:\n"
+                 "    · aws configure  (Default region name 설정)\n"
+                 "    · 환경변수 AWS_DEFAULT_REGION=ap-southeast-2\n"
+                 "    · 옵션 --region ap-southeast-2")
+    if provider == "aws":
+        print(f"\n[*] {cloud_check.label(provider)} 진단 시작 … (리전: {creds['region']}"
+              f"{', 전 리전' if args.all_regions else ''})")
+    else:
+        print(f"\n[*] {cloud_check.label(provider)} 진단 시작 …")
     try:
         report = cloud_check.run(provider, creds)
     except RuntimeError as e:

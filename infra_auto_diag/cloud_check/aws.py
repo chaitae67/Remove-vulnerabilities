@@ -1020,11 +1020,12 @@ def _virtual_resource(rep, ctx):
             rep.good("3.3", "네트워크 ACL(기본 NACL·서브넷 미연결 포함)에 모든 트래픽 허용 규칙 없음")
     safe(rep, "3.3", c33)
 
-    # 3.4 라우팅 테이블 ANY — 가이드: 라우팅 테이블 내 ANY 정책이 설정되어 있으면 취약.
-    #   비고: 게이트웨이 및 아웃바운드 통신이 필요한 경우 ANY 허용은 양호 처리 가능
-    #   → 대상이 게이트웨이인 ANY 경로는 양호, 그 외 대상(피어링·인스턴스·ENI·엔드포인트 등)의 ANY 경로는 취약
+    # 3.4 라우팅 테이블 ANY — 가이드 판단기준: 라우팅 테이블 내 ANY(0.0.0.0/0·::/0) 정책이
+    #   설정되어 있으면 취약. (비고: 게이트웨이·아웃바운드 통신이 필요한 경우 양호 처리 '가능'
+    #   하나, 이는 업무 필요성 확인이 전제인 재량 예외이므로 자동 판정에서는 보수적으로 취약으로
+    #   보고하고, 게이트웨이 대상 여부는 근거에 표기해 검토 시 양호로 조정할 수 있게 한다.)
     def c34():
-        bad, ok = [], []
+        gw, nongw = [], []
         for r in regions:
             for rt in _pages(sess.client("ec2", region_name=r), "describe_route_tables", "RouteTables"):
                 rid = rt["RouteTableId"]
@@ -1035,14 +1036,14 @@ def _virtual_resource(rep, ctx):
                     tgt = _route_target(route)
                     label = (f"{rid}({r}) {dst} → {tgt}"
                              + (" [blackhole]" if route.get("State") == "blackhole" else ""))
-                    (ok if tgt.startswith(_GATEWAY_TARGETS) else bad).append(label)
-        exc = (["가이드 비고(게이트웨이·아웃바운드 통신)에 따라 양호 처리한 게이트웨이 대상 ANY 경로:"] + ok
-               if ok else [])
-        if bad:
-            rep.vuln("3.4", ["게이트웨이가 아닌 대상으로 설정된 ANY 경로:"] + bad + exc,
-                     sorted({b.split("(")[0] for b in bad}))
-        elif ok:
-            rep.good("3.4", exc)
+                    (gw if tgt.startswith(_GATEWAY_TARGETS) else nongw).append(label)
+        if gw or nongw:
+            ev = ["라우팅 테이블에 ANY(0.0.0.0/0·::/0) 경로가 존재 — 가이드 판단기준상 취약:"]
+            if nongw:
+                ev += ["· 게이트웨이가 아닌 대상(피어링·인스턴스·ENI·엔드포인트 등):"] + nongw
+            if gw:
+                ev += ["· 게이트웨이 대상(IGW/NAT/VGW/TGW 등) — 업무상 필요하면 검토 후 양호 조정 가능:"] + gw
+            rep.vuln("3.4", ev, sorted({x.split("(")[0] for x in nongw + gw}))
         else:
             rep.good("3.4", "ANY(0.0.0.0/0·::/0) 라우팅 규칙 없음")
     safe(rep, "3.4", c34)
@@ -1380,16 +1381,33 @@ def _operation_mgmt(rep, ctx):
                 ls = _listeners(ctx, cli, lb["LoadBalancerArn"])
                 protos = {li["Protocol"] for li in ls}
                 secure = [li for li in ls if li["Protocol"] in ("HTTPS", "TLS")]
+                # HTTP 리스너는 기본작업이 'HTTPS 리다이렉트'일 때만 암호화로 인정한다.
+                # 대상그룹 전달 등 평문으로 트래픽을 흘리는 HTTP 리스너는, 같은 LB 에 HTTPS
+                # 리스너가 함께 있어도 통신구간 미암호화 경로이므로 취약으로 잡는다.
+                http_plain = []
+                for li in ls:
+                    if li["Protocol"] != "HTTP":
+                        continue
+                    is_redirect = any(
+                        a.get("Type") == "redirect"
+                        and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
+                        for a in li.get("DefaultActions", []))
+                    if not is_redirect:
+                        http_plain.append(f"{name} HTTP:{li['Port']} (평문 전달 — HTTPS 리다이렉트 아님)")
                 redirect = any(
                     li["Protocol"] == "HTTP" and any(
-                        a["Type"] == "redirect" and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
+                        a.get("Type") == "redirect"
+                        and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
                         for a in li.get("DefaultActions", []))
                     for li in ls)
                 if not secure and not redirect:
                     if typ == "network":
                         unclear.append(f"{name} 리스너={sorted(protos)} (TCP/UDP 패스스루 — 백엔드 TLS 확인 필요)")
                     else:
-                        plain.append(f"{name} 리스너={sorted(protos)}")
+                        plain.append(f"{name} 리스너={sorted(protos)} (암호화 리스너 없음)")
+                elif http_plain:
+                    # 암호화 리스너는 있으나 평문 HTTP 전달 리스너가 공존 → 그 경로가 취약
+                    plain.extend(http_plain)
                 for li in secure:
                     pol = li.get("SslPolicy") or ""
                     old = _ssl_protocols(ctx, cli, pol) & {"TLSv1", "TLSv1.1"} if pol else set()
@@ -1596,6 +1614,13 @@ def _operation_mgmt(rep, ctx):
                         mark(at["access_logs.s3.bucket"], "ELB 액세스 로그")
             except Exception:
                 notes.append(f"ELB 조회 불가({r})")
+            try:
+                for dc in sess.client("config", region_name=r).describe_delivery_channels().get(
+                        "DeliveryChannels", []):
+                    if dc.get("s3BucketName"):
+                        mark(dc["s3BucketName"], "AWS Config 로그")
+            except Exception:
+                pass  # Config 미사용/권한 없음 — 보조 신호라 조용히 생략
         for n in names:
             if "log" in n.lower() or "trail" in n.lower():
                 mark(n, "이름에 log/trail 포함")
