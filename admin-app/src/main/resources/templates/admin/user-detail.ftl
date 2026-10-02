@@ -27,6 +27,7 @@
                 <label>이메일<input name="email" type="email" value="${user.email?html}" required></label>
                 <label>연락처<input name="phone" value="${(user.phone!'')?html}"></label>
                 <label>포인트 잔액<input name="pointBalance" type="number" min="0" step="1" value="${user.pointBalance?c}" required></label>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <div class="form-actions">
                     <button class="button" type="submit">저장</button>
                 </div>
@@ -43,6 +44,7 @@
                             <option value="ADMIN"<#if user.role?string == 'ADMIN'> selected</#if>>ADMIN (관리자)</option>
                         </select>
                     </label>
+                    <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                     <div class="form-actions">
                         <button class="button button-outline" type="submit">권한 변경</button>
                     </div>

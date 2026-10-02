@@ -22,6 +22,7 @@
             <form action="/admin/procedures/import" method="post" enctype="multipart/form-data" class="stack-form">
                 <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <input name="file" type="file" accept=".xml" required>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <button class="button" type="submit">XML 등록</button>
             </form>
         </div>
@@ -37,6 +38,7 @@
                     <div><strong><a href="/admin/procedures/${procedure.id}">${procedure.name?html}</a></strong><span>${procedure.category?html} · ${numbers.formatInteger(procedure.price)}원</span></div>
                     <form action="/admin/procedures/${procedure.id}/delete" method="post" onsubmit="return confirm('이 패키지를 삭제하시겠습니까?');">
                         <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
+                        <input name="adminPassword" type="password" autocomplete="current-password" placeholder="관리자 비밀번호" required>
                         <button class="button button-danger button-small" type="submit">삭제</button>
                     </form>
                 </li>
@@ -70,7 +72,7 @@
                 <#list orders as order>
                 <li>
                     <strong><a href="/admin/payments/${order.id}">${order.orderNumber?html}</a></strong>
-                    <span>${order.buyer.name?html} · ${order.procedureProduct.name?html} · ${numbers.formatInteger(order.amount)}원 · ${order.pointsUsed}P 사용 · ${fmt.statusLabel(order.status?string)}</span>
+                    <span>${order.buyerName?html} · ${order.procedureName?html} · ${numbers.formatInteger(order.amount)}원 · ${fmt.statusLabel(order.status?string)}</span>
                 </li>
                 </#list>
             </ul>

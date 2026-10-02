@@ -12,11 +12,17 @@ import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PaymentService {
+
+    private static final Set<String> ALLOWED_METHODS = Set.of("CARD", "BANK_TRANSFER", "KAKAO_PAY");
 
     private final PaymentOrderRepository paymentOrderRepository;
     private final CouponService couponService;
@@ -38,11 +44,14 @@ public class PaymentService {
         ProcedureProduct procedureProduct,
         String method,
         int quantity,
-        BigDecimal price,
         int usePoints,
         String couponCode,
-        LocalDate reservationDate
+        LocalDate reservationDate,
+        String cardNumber,
+        String cardExpiry,
+        String cardPassword
     ) {
+        validatePaymentCredentials(method, cardNumber, cardExpiry, cardPassword);
         Coupon coupon = couponCode == null || couponCode.isBlank() ? null : couponService.findByCode(couponCode);
         if (quantity < 1) {
             throw new IllegalArgumentException("수량은 1개 이상이어야 합니다.");
@@ -60,7 +69,8 @@ public class PaymentService {
             throw new IllegalArgumentException("이미 사용한 쿠폰입니다.");
         }
 
-        BigDecimal unitPrice = price != null ? price : procedureProduct.getPrice();
+        // PV-13: 결제 단가는 클라이언트 입력이 아니라 서버에 저장된 시술 정가만 사용한다(금액 변조 방지).
+        BigDecimal unitPrice = procedureProduct.getPrice();
         BigDecimal originalAmount = unitPrice.multiply(BigDecimal.valueOf(quantity));
         int couponDiscount = coupon == null ? 0 : coupon.getDiscountAmount();
         BigDecimal payableBeforePoints = originalAmount.subtract(BigDecimal.valueOf(couponDiscount)).max(BigDecimal.ZERO);
@@ -90,6 +100,46 @@ public class PaymentService {
         order.setPaidAt(LocalDateTime.now());
         order.setReservationDate(reservationDate);
         return paymentOrderRepository.save(order);
+    }
+
+    private void validatePaymentCredentials(String method, String cardNumber, String cardExpiry, String cardPassword) {
+        if (!ALLOWED_METHODS.contains(method)) {
+            throw new IllegalArgumentException("지원하지 않는 결제 수단입니다.");
+        }
+        if (!"CARD".equals(method)) {
+            return;
+        }
+        String digits = cardNumber == null ? "" : cardNumber.replaceAll("[^0-9]", "");
+        if (digits.length() < 13 || digits.length() > 19 || !passesLuhn(digits)) {
+            throw new IllegalArgumentException("카드번호를 다시 확인해 주세요.");
+        }
+        if (cardPassword == null || !cardPassword.matches("\\d{2}")) {
+            throw new IllegalArgumentException("카드 비밀번호 앞 2자리를 입력해 주세요.");
+        }
+        try {
+            YearMonth expiry = YearMonth.parse(cardExpiry, DateTimeFormatter.ofPattern("MM/yy"));
+            if (expiry.isBefore(YearMonth.now())) {
+                throw new IllegalArgumentException("카드 유효기간이 만료되었습니다.");
+            }
+        } catch (DateTimeParseException | NullPointerException exception) {
+            throw new IllegalArgumentException("카드 유효기간을 MM/YY 형식으로 입력해 주세요.");
+        }
+        // 카드번호·유효기간·비밀번호는 검증 후 즉시 폐기하며 DB나 로그에 저장하지 않는다.
+    }
+
+    private boolean passesLuhn(String digits) {
+        int sum = 0;
+        boolean doubleDigit = false;
+        for (int i = digits.length() - 1; i >= 0; i--) {
+            int value = digits.charAt(i) - '0';
+            if (doubleDigit) {
+                value *= 2;
+                if (value > 9) value -= 9;
+            }
+            sum += value;
+            doubleDigit = !doubleDigit;
+        }
+        return sum % 10 == 0;
     }
 
     public PaymentOrder findByOrderNumber(String orderNumber) {

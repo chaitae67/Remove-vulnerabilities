@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  고객 IIS/ARR 사이트의 기존 web.config에 병합한다. 기존 reverse-proxy rules를 덮어쓰지 않는다.
+  IL-05: IIS/ARR 제품 헤더 제거, AE-19: 외부 XFF를 ALB가 추가한 마지막 주소로 정규화.
+-->
+<configuration>
+  <system.webServer>
+    <httpProtocol>
+      <customHeaders>
+        <remove name="X-Powered-By" />
+      </customHeaders>
+    </httpProtocol>
+    <security>
+      <requestFiltering removeServerHeader="true" />
+    </security>
+    <rewrite>
+      <rules>
+        <rule name="Canonicalize X-Forwarded-For from ALB" stopProcessing="false">
+          <match url=".*" />
+          <conditions>
+            <add input="{HTTP_X_FORWARDED_FOR}" pattern="(?:^|.*,)[ ]*([^, ]+)[ ]*$" />
+          </conditions>
+          <serverVariables>
+            <set name="HTTP_X_FORWARDED_FOR" value="{C:1}" />
+            <set name="HTTP_X_REAL_IP" value="{C:1}" />
+            <set name="HTTP_FORWARDED" value="" />
+          </serverVariables>
+          <action type="None" />
+        </rule>
+      </rules>
+      <outboundRules rewriteBeforeCache="true">
+        <rule name="Clear ARR X-Powered-By header">
+          <match serverVariable="RESPONSE_X_POWERED_BY" pattern=".+" />
+          <action type="Rewrite" value="" />
+        </rule>
+        <rule name="Clear Server header">
+          <match serverVariable="RESPONSE_SERVER" pattern=".+" />
+          <action type="Rewrite" value="" />
+        </rule>
+      </outboundRules>
+    </rewrite>
+  </system.webServer>
+</configuration>

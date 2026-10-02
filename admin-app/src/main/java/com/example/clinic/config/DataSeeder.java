@@ -13,16 +13,21 @@ import com.example.clinic.repository.NoticeRepository;
 import com.example.clinic.repository.ProcedureProductRepository;
 import com.example.clinic.repository.QnaPostRepository;
 import com.example.clinic.repository.ReviewRepository;
+import com.example.clinic.security.PasswordPolicy;
 import java.math.BigDecimal;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 @Configuration
+@Profile("local")
 public class DataSeeder {
 
     @Bean
+    @Order(0)
     CommandLineRunner seedData(
         AppUserRepository userRepository,
         ProcedureProductRepository procedureRepository,
@@ -32,11 +37,20 @@ public class DataSeeder {
         PasswordEncoder passwordEncoder,
         CouponRepository couponRepository
     ) {
+        // BF-09/IA-10: 추측 가능한 기본 비밀번호 대신 정책을 만족하는 값을 사용하고,
+        //              운영 환경에서는 환경변수로 재정의한다.
+        String adminPassword = System.getenv("SEED_ADMIN_PASSWORD");
+        String userPassword = System.getenv("SEED_USER_PASSWORD");
+        if (adminPassword == null || adminPassword.isBlank() || userPassword == null || userPassword.isBlank()) {
+            throw new IllegalStateException("local 프로필은 SEED_ADMIN_PASSWORD와 SEED_USER_PASSWORD가 필요합니다.");
+        }
+        PasswordPolicy.requireStrong(adminPassword, "admin");
+        PasswordPolicy.requireStrong(userPassword, "user");
         return args -> {
             AppUser admin = userRepository.findByUsername("admin").orElseGet(() -> {
                 AppUser user = new AppUser();
                 user.setUsername("admin");
-                user.setPassword(passwordEncoder.encode("admin1234"));
+                user.setPassword(passwordEncoder.encode(adminPassword));
                 user.setName("관리자");
                 user.setEmail("admin@clinic.local");
                 user.setPhone("02-0000-0000");
@@ -48,7 +62,7 @@ public class DataSeeder {
             AppUser member = userRepository.findByUsername("user").orElseGet(() -> {
                 AppUser user = new AppUser();
                 user.setUsername("user");
-                user.setPassword(passwordEncoder.encode("user1234"));
+                user.setPassword(passwordEncoder.encode(userPassword));
                 user.setName("테스트회원");
                 user.setEmail("user@clinic.local");
                 user.setPhone("010-1234-5678");

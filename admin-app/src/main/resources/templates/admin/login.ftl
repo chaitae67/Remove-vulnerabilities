@@ -20,6 +20,7 @@
             <div class="flash success">로그아웃되었습니다.</div>
         </#if>
         <form action="/login" method="post" class="stack-form">
+            <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <label>아이디<input type="text" name="username" autocomplete="username" required></label>
             <label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label>
             <button class="button" type="submit">관리자 로그인</button>

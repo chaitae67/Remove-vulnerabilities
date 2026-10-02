@@ -20,14 +20,14 @@
     <#if message??><div class="flash success">${message}</div></#if>
     <section class="listing-content">
         <form action="/reviews/search" method="get" class="search-form listing-search">
-            <input type="text" name="keyword" value="${keyword!}" placeholder="제목으로 검색">
+            <input type="text" name="keyword" value="${(keyword!'')}" placeholder="제목으로 검색">
             <button type="submit" class="button">검색</button>
         </form>
         <ul class="table-list editorial-list review-editorial-list">
             <#list reviews as review>
             <li>
                 <span class="list-index">${review?index + 1}</span>
-                <a class="list-title" href="/reviews/${review.id}">${review.title}<small>고객님의 솔직한 경험을 확인해 보세요.</small></a>
+                <a class="list-title" href="/reviews/${review.id?c}">${review.title}<small>고객님의 솔직한 경험을 확인해 보세요.</small></a>
                 <span class="review-stars">${strings.repeat("★", review.rating)}</span>
                 <#if review.procedureProduct??><span class="list-category">${review.procedureProduct.name}</span></#if>
                 <time>${temporals.format(review.createdAt, 'yyyy.MM.dd')}</time>

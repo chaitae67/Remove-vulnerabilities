@@ -68,13 +68,21 @@ public class AuthController {
         @RequestParam String email,
         Model model
     ) {
-        String tempPassword = userService.issueTemporaryPassword(username, email);
-        if (tempPassword == null) {
-            model.addAttribute("error", "아이디와 이메일이 일치하는 계정을 찾을 수 없습니다.");
-            return "auth/forgot-password";
+        // PR-12: 비밀번호 자체를 전송하지 않고 일회용·30분 만료 토큰 링크만 발송한다.
+        // 계정 존재 여부와 메일 발송 성공 여부는 동일한 응답으로 감춘다.
+        String token = userService.issuePasswordResetToken(username, email);
+        if (token != null) {
+            try {
+                emailService.send(email, "[제로데이클리닉] 비밀번호 재설정 안내",
+                    "아래 링크는 30분 동안 한 번만 사용할 수 있습니다.\n"
+                    + baseUrl + "/reset-password?token="
+                    + java.net.URLEncoder.encode(token, java.nio.charset.StandardCharsets.UTF_8));
+            } catch (Exception ignored) {
+                // 메일 발송 실패 여부도 응답으로 노출하지 않는다.
+            }
         }
-        model.addAttribute("message", "임시 비밀번호가 발급되었습니다. 아래 비밀번호로 로그인 후 반드시 변경해 주세요.");
-        model.addAttribute("tempPassword", tempPassword);
+        model.addAttribute("message",
+            "입력하신 정보와 일치하는 계정이 있다면 등록된 이메일로 재설정 링크를 발송했습니다.");
         return "auth/forgot-password";
     }
 

@@ -44,8 +44,11 @@ public class PaymentController {
     public String pay(
         @PathVariable Long procedureId,
         @RequestParam String method,
+        @RequestParam String accountPassword,
+        @RequestParam(required = false) String cardNumber,
+        @RequestParam(required = false) String cardExpiry,
+        @RequestParam(required = false) String cardPassword,
         @RequestParam int quantity,
-        @RequestParam(required = false) java.math.BigDecimal price,
         @RequestParam(defaultValue = "0") int usePoints,
         @RequestParam(required = false) String couponCode,
         @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate reservationDate,
@@ -55,7 +58,11 @@ public class PaymentController {
         AppUser buyer = userService.findByUsername(principal.getName());
         ProcedureProduct procedure = procedureService.findById(procedureId);
         try {
-            PaymentOrder order = paymentService.createPaidOrder(buyer, procedure, method, quantity, price, usePoints, couponCode, reservationDate);
+            userService.verifyPassword(principal.getName(), accountPassword);
+            // PV-13: 가격은 서버가 결정하므로 클라이언트가 보낸 price는 사용하지 않는다.
+            PaymentOrder order = paymentService.createPaidOrder(
+                buyer, procedure, method, quantity, usePoints, couponCode, reservationDate,
+                cardNumber, cardExpiry, cardPassword);
             return "redirect:/payments/success/" + order.getOrderNumber();
         } catch (IllegalArgumentException ex) {
             redirectAttributes.addFlashAttribute("error", ex.getMessage());

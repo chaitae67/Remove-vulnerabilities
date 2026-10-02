@@ -14,13 +14,11 @@
         <h1>비밀번호 찾기</h1>
         <#if error??><div class="flash error">${error}</div></#if>
         <#if message??><div class="flash success">${message}</div></#if>
-        <#if resetLink??><div class="flash success">재설정 링크: <a href="${resetLink}">${resetLink}</a></div></#if>
-        <#if tempPassword??><div class="flash success">임시 비밀번호: <strong>${tempPassword}</strong></div></#if>
         <form action="/forgot-password" method="post" class="stack-form">
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input name="username" placeholder="아이디" required>
             <input name="email" type="email" placeholder="가입 시 등록한 이메일" required>
-            <button class="button" type="submit">임시 비밀번호 발급</button>
+            <button class="button" type="submit">비밀번호 재설정 링크 발송</button>
         </form>
     </section>
 </main>

@@ -14,12 +14,11 @@
         <h1>${(!review??)?then('후기 작성', '후기 수정')}</h1>
         <form id="review-form" class="stack-form" action="<#if !review??>/reviews<#else>/reviews/${review.id}/edit</#if>" method="post" enctype="multipart/form-data">
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
-            <#if !review??><input type="hidden" name="writerId" value="${currentUserId}"></#if>
             <input name="title" placeholder="제목" required value="<#if formTitle??>${formTitle}<#elseif review??>${review.title}</#if>">
             <select name="procedureProductId">
                 <option value="">시술 선택 안 함</option>
                 <#list products as product>
-                <option value="${product.id}"<#if (formProcedureProductId?? && formProcedureProductId == product.id) || (!formProcedureProductId?? && review?? && review.procedureProduct?? && review.procedureProduct.id == product.id)> selected</#if>>${product.name}</option>
+                <option value="${product.id?c}"<#if (formProcedureProductId?? && formProcedureProductId == product.id) || (!formProcedureProductId?? && review?? && review.procedureProduct?? && review.procedureProduct.id == product.id)> selected</#if>>${product.name}</option>
                 </#list>
             </select>
             <select name="rating" required>
@@ -44,20 +43,11 @@
             </div>
         </form>
     </section>
-    <section class="panel reference-link-panel">
-        <p class="eyebrow">Reference Link</p>
-        <h2>참고 링크 미리보기</h2>
-        <p class="muted">후기에 첨부할 시술 정보나 참고 페이지 주소를 입력하면 내용을 미리 확인할 수 있습니다.</p>
-        <form class="stack-form" action="/support/link-preview" method="get">
-            <input name="url" type="url" placeholder="https://example.com/참고-링크" required>
-            <button class="button secondary" type="submit">링크 미리보기</button>
-        </form>
-    </section>
     <#if !review??><section id="review-preview-section" class="panel"<#if !(preview?? || previewError??)> hidden</#if>>
         <p class="eyebrow">Review Card Preview</p>
         <article class="review-preview-card">
             <div class="review-preview-head">
-                <h2 id="review-preview-title">${formTitle!}</h2>
+                <h2 id="review-preview-title">${(formTitle!'')}</h2>
                 <span id="review-preview-rating" class="state">${strings.repeat("★", formRating!0)}</span>
             </div>
             <#if previewError??><div class="flash danger">${previewError}</div></#if>
@@ -68,49 +58,6 @@
     </#if>
 </main>
 <div><#include "/fragments/footer.ftl"></div>
-<#if !review??><script>
-(() => {
-    const form = document.getElementById('review-form');
-    const button = document.getElementById('review-preview-button');
-    const photos = document.getElementById('review-photos');
-    const section = document.getElementById('review-preview-section');
-    const titlePreview = document.getElementById('review-preview-title');
-    const ratingPreview = document.getElementById('review-preview-rating');
-    const contentPreview = document.getElementById('review-preview-content');
-    const imagePreview = document.getElementById('review-preview-images');
-    let objectUrls = [];
-
-    button.addEventListener('click', () => {
-        const title = form.elements.title;
-        const rating = form.elements.rating;
-        const content = form.elements.content;
-        if (!title.value.trim() || !rating.value || !content.value.trim()) {
-            form.reportValidity();
-            return;
-        }
-
-        titlePreview.textContent = title.value;
-        ratingPreview.textContent = '★'.repeat(Number(rating.value));
-        contentPreview.textContent = content.value;
-        objectUrls.forEach(URL.revokeObjectURL);
-        objectUrls = [];
-        imagePreview.replaceChildren();
-
-        Array.from(photos.files).filter(file =>
-            file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(file.name)
-        ).forEach(file => {
-            const url = URL.createObjectURL(file);
-            objectUrls.push(url);
-            const image = document.createElement('img');
-            image.src = url;
-            image.alt = file.name;
-            imagePreview.appendChild(image);
-        });
-
-        section.hidden = false;
-        section.scrollIntoView({behavior: 'smooth', block: 'start'});
-    });
-})();
-</script></#if>
+<#if !review??><script src="/js/review-preview.js" defer></script></#if>
 </body>
 </html>

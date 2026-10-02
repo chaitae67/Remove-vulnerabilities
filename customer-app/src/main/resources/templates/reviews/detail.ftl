@@ -13,7 +13,7 @@
     <article class="panel article">
         <p class="eyebrow">Review</p>
         <h1>${review.title}</h1>
-        <p class="muted">${review.writer.name} · ${temporals.format(review.createdAt, 'yyyy.MM.dd HH:mm')}</p>
+        <p class="muted">${maskedWriter} · ${temporals.format(review.createdAt, 'yyyy.MM.dd HH:mm')}</p>
         <p>
             <span>${strings.repeat("★", review.rating)}</span>
             <#if review.procedureProduct??><span class="tag">${review.procedureProduct.name}</span></#if>
@@ -23,7 +23,7 @@
         <div class="attachments">
             <h2>첨부 사진</h2>
             <#list review.attachments as file>
-            <a href="/uploads/reviews/${file.storedFilename}" target="_blank"><#if file.originalFilename?contains(".")>${file.originalFilename?substring(0, file.originalFilename?last_index_of("."))}<#else>${file.originalFilename}</#if></a>
+            <a href="/reviews/${review.id?c}/attachments/${file.id?c}" download><#if file.originalFilename?contains(".")>${file.originalFilename?substring(0, file.originalFilename?last_index_of("."))}<#else>${file.originalFilename}</#if></a>
             </#list>
         </div>
         </#if>
@@ -31,8 +31,8 @@
         <div class="actions">
             <a class="button button-outline" href="/reviews">목록</a>
             <#if canManage>
-            <a class="button button-outline" href="/reviews/${review.id}/edit">수정</a>
-            <form action="/reviews/${review.id}/delete" method="post">
+            <a class="button button-outline" href="/reviews/${review.id?c}/edit">수정</a>
+            <form action="/reviews/${review.id?c}/delete" method="post">
                 <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <button class="button button-danger" type="submit">삭제</button>
             </form>

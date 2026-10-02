@@ -2,9 +2,8 @@ package com.example.clinic.controller;
 
 import java.security.Principal;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.Map;
 
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Controller;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -26,7 +25,7 @@ import com.example.clinic.domain.Role;
 import com.example.clinic.service.ProcedureService;
 import com.example.clinic.service.ReviewService;
 import com.example.clinic.service.UserService;
-import com.example.clinic.service.TemplatePreviewService;
+import com.example.clinic.util.PrivacyMasker;
 
 @Controller
 public class ReviewController {
@@ -34,18 +33,26 @@ public class ReviewController {
     private final ReviewService reviewService;
     private final UserService userService;
     private final ProcedureService procedureService;
-    private final TemplatePreviewService templatePreviewService;
 
     public ReviewController(
         ReviewService reviewService,
         UserService userService,
-        ProcedureService procedureService,
-        TemplatePreviewService templatePreviewService
+        ProcedureService procedureService
     ) {
         this.reviewService = reviewService;
         this.userService = userService;
         this.procedureService = procedureService;
-        this.templatePreviewService = templatePreviewService;
+    }
+
+    // IN-11: 후기의 소유자(작성자) 또는 관리자만 수정/삭제할 수 있는지 검증한다.
+    private void assertCanManage(Review review, Principal principal) {
+        AppUser viewer = principal == null ? null : userService.findByUsername(principal.getName());
+        boolean admin = viewer != null && viewer.getRole() == Role.ADMIN;
+        boolean owner = viewer != null && review.getWriter() != null
+            && review.getWriter().getUsername().equals(viewer.getUsername());
+        if (!admin && !owner) {
+            throw new AccessDeniedException("후기를 수정하거나 삭제할 권한이 없습니다.");
+        }
     }
 
     @GetMapping("/reviews")
@@ -73,38 +80,28 @@ public class ReviewController {
         Principal principal,
         Model model
     ) {
-        AppUser viewer = userService.findByUsername(principal.getName());
-        Map<String, Object> variables = new HashMap<>();
-        variables.put("authorName", viewer.getName());
-        variables.put("title", title);
-        variables.put("rating", rating);
-
+        // CI-01: 사용자 입력을 템플릿으로 평가(SSTI)하지 않고 입력 원문을 전달한다.
         model.addAttribute("products", procedureService.findActiveProcedures());
         model.addAttribute("formTitle", title);
         model.addAttribute("formContent", content);
         model.addAttribute("formRating", rating);
         model.addAttribute("formProcedureProductId", procedureProductId);
-        try {
-            model.addAttribute("preview", templatePreviewService.render(content, variables));
-        } catch (Exception exception) {
-            model.addAttribute("previewError", exception.getMessage());
-        }
+        model.addAttribute("preview", content);
         return "reviews/form";
     }
 
-    // writerId is trusted directly from the request instead of the authenticated session,
-    // so anyone can post a review as any user simply by supplying their id.
+    // IN-11/PV-13: 작성자는 요청 파라미터(writerId)가 아니라 인증된 세션에서 결정한다.
     @PostMapping("/reviews")
     public String create(
         @RequestParam String title,
         @RequestParam String content,
         @RequestParam int rating,
         @RequestParam(required = false) Long procedureProductId,
-        @RequestParam Long writerId,
         @RequestParam(required = false) MultipartFile[] photos,
+        Principal principal,
         RedirectAttributes redirectAttributes
     ) {
-        AppUser writer = userService.findById(writerId);
+        AppUser writer = userService.findByUsername(principal.getName());
         Review review = reviewService.create(title, content, rating, procedureProductId, writer, photos);
         redirectAttributes.addFlashAttribute("message", "후기가 등록되었습니다.");
         return "redirect:/reviews/" + review.getId();
@@ -118,6 +115,7 @@ public class ReviewController {
         boolean owner = viewer != null && review.getWriter().getUsername().equals(viewer.getUsername());
         model.addAttribute("review", review);
         model.addAttribute("canManage", admin || owner);
+        model.addAttribute("maskedWriter", owner ? review.getWriter().getName() : PrivacyMasker.name(review.getWriter().getName()));
         return "reviews/detail";
     }
 
@@ -130,24 +128,19 @@ public class ReviewController {
         ReviewAttachment attachment = reviewService.findAttachment(review, attachmentId);
         Resource resource = reviewService.loadAttachment(attachment);
         return ResponseEntity.ok()
-            .contentType(resolveMediaType(attachment.getContentType()))
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .header("X-Content-Type-Options", "nosniff")
             .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                 .filename(attachment.getOriginalFilename(), StandardCharsets.UTF_8)
                 .build().toString())
             .body(resource);
     }
 
-    private MediaType resolveMediaType(String contentType) {
-        try {
-            return contentType == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(contentType);
-        } catch (IllegalArgumentException ex) {
-            return MediaType.APPLICATION_OCTET_STREAM;
-        }
-    }
-
     @GetMapping("/reviews/{id}/edit")
-    public String editForm(@PathVariable Long id, Model model) {
-        model.addAttribute("review", reviewService.findById(id));
+    public String editForm(@PathVariable Long id, Principal principal, Model model) {
+        Review review = reviewService.findById(id);
+        assertCanManage(review, principal);
+        model.addAttribute("review", review);
         model.addAttribute("products", procedureService.findActiveProcedures());
         return "reviews/form";
     }
@@ -160,15 +153,18 @@ public class ReviewController {
         @RequestParam int rating,
         @RequestParam(required = false) Long procedureProductId,
         @RequestParam(required = false) MultipartFile[] photos,
+        Principal principal,
         RedirectAttributes redirectAttributes
     ) {
+        assertCanManage(reviewService.findById(id), principal);
         reviewService.update(id, title, content, rating, procedureProductId, photos);
         redirectAttributes.addFlashAttribute("message", "후기가 수정되었습니다.");
         return "redirect:/reviews/" + id;
     }
 
     @PostMapping("/reviews/{id}/delete")
-    public String delete(@PathVariable Long id, RedirectAttributes redirectAttributes) {
+    public String delete(@PathVariable Long id, Principal principal, RedirectAttributes redirectAttributes) {
+        assertCanManage(reviewService.findById(id), principal);
         reviewService.delete(id);
         redirectAttributes.addFlashAttribute("message", "후기가 삭제되었습니다.");
         return "redirect:/reviews";

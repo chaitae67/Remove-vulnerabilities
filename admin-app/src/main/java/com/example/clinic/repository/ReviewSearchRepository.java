@@ -15,19 +15,12 @@ public class ReviewSearchRepository {
     @PersistenceContext
     private EntityManager em;
 
-    @SuppressWarnings("unchecked")
     public List<Review> searchByTitle(String keyword) {
-        String term = normalizeKeyword(keyword);
-        String jpql = "SELECT r FROM Review r WHERE r.title LIKE '%" + term + "%' ORDER BY r.createdAt DESC";
-        return em.createQuery(jpql).getResultList();
-    }
-
-    private String normalizeKeyword(String keyword) {
-        String value = keyword == null ? "" : keyword.trim();
-        String lower = value.toLowerCase();
-        if ((lower.contains(" or ") && lower.contains("1=1")) || lower.contains("--") || lower.contains("/*")) {
-            return value.replace("'", "").replace("-", "").replace("/", "").replace("*", "");
-        }
-        return value;
+        // SI-02: 파라미터 바인딩을 사용하여 SQL(JPQL) 인젝션을 차단한다.
+        String term = keyword == null ? "" : keyword.trim();
+        return em.createQuery(
+                "SELECT r FROM Review r WHERE r.title LIKE :term ORDER BY r.createdAt DESC", Review.class)
+            .setParameter("term", "%" + term + "%")
+            .getResultList();
     }
 }

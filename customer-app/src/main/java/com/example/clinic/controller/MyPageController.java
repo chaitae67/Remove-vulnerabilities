@@ -4,6 +4,9 @@ import java.security.Principal;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
+import java.time.Duration;
+import java.time.Instant;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,9 +23,13 @@ import com.example.clinic.repository.PaymentOrderRepository;
 import com.example.clinic.repository.QnaPostRepository;
 import com.example.clinic.repository.ReviewRepository;
 import com.example.clinic.service.UserService;
+import com.example.clinic.util.PrivacyMasker;
 
 @Controller
 public class MyPageController {
+
+    private static final String PROFILE_REAUTH_AT = "PROFILE_REAUTH_AT";
+    private static final Duration REAUTH_TTL = Duration.ofMinutes(5);
 
     private final AppUserRepository userRepository;
     private final PaymentOrderRepository paymentOrderRepository;
@@ -42,10 +49,12 @@ public class MyPageController {
         this.userService = userService;
     }
 
+    // IN-11: 조회/수정 대상 회원은 요청 파라미터(userId)가 아니라 인증된 세션에서 결정한다.
     @GetMapping("/mypage")
-    public String myPage(@RequestParam Long userId, Model model) {
-        var user = userRepository.findById(userId).orElseThrow();
+    public String myPage(Principal principal, Model model) {
+        AppUser user = userService.findByUsername(principal.getName());
         model.addAttribute("user", user);
+        model.addAttribute("maskedPhone", PrivacyMasker.phone(user.getPhone()));
         model.addAttribute("payments", paymentOrderRepository.findByBuyerOrderByCreatedAtDesc(user));
         model.addAttribute("qnaPosts", qnaPostRepository.findByWriterOrderByCreatedAtDesc(user));
         model.addAttribute("myReviews", reviewRepository.findByWriterOrderByCreatedAtDesc(user));
@@ -53,18 +62,49 @@ public class MyPageController {
     }
 
     @GetMapping("/mypage/edit")
-    public String editForm(@RequestParam Long userId, Model model) {
-        model.addAttribute("user", userService.findById(userId));
+    public String editForm(Principal principal, HttpSession session, Model model) {
+        if (!isRecentlyReauthenticated(session)) {
+            return "mypage/reauth";
+        }
+        model.addAttribute("user", userService.findByUsername(principal.getName()));
         return "mypage/edit";
     }
 
+    @PostMapping("/mypage/reauth")
+    public String reauthenticate(@RequestParam String password,
+                                 Principal principal,
+                                 HttpSession session,
+                                 RedirectAttributes redirectAttributes) {
+        try {
+            userService.verifyPassword(principal.getName(), password);
+            session.setAttribute(PROFILE_REAUTH_AT, Instant.now());
+            return "redirect:/mypage/edit";
+        } catch (IllegalArgumentException exception) {
+            redirectAttributes.addFlashAttribute("reauthError", "비밀번호를 다시 확인해 주세요.");
+            return "redirect:/mypage/edit";
+        }
+    }
+
     @PostMapping("/mypage/edit")
-    public String update(@RequestParam Long userId,
+    public String update(Principal principal,
                           @ModelAttribute AppUser form,
+                          @RequestParam String currentPassword,
+                          HttpSession session,
                           RedirectAttributes redirectAttributes) {
-        userService.updateProfile(userId, form);
-        redirectAttributes.addFlashAttribute("message", "회원정보가 수정되었습니다.");
-        return "redirect:/mypage?userId=" + userId;
+        if (!isRecentlyReauthenticated(session)) {
+            redirectAttributes.addFlashAttribute("reauthError", "본인 확인 시간이 만료되었습니다.");
+            return "redirect:/mypage/edit";
+        }
+        try {
+            // 세션 재인증 이력과 별개로 저장 시점에 현재 비밀번호를 다시 확인한다.
+            userService.updateProfile(principal.getName(), currentPassword, form);
+            session.removeAttribute(PROFILE_REAUTH_AT);
+            redirectAttributes.addFlashAttribute("message", "회원정보가 수정되었습니다.");
+            return "redirect:/mypage";
+        } catch (IllegalArgumentException exception) {
+            redirectAttributes.addFlashAttribute("reauthError", exception.getMessage());
+            return "redirect:/mypage/edit";
+        }
     }
 
     @PostMapping("/mypage/withdraw")
@@ -78,12 +118,18 @@ public class MyPageController {
             userService.withdraw(principal.getName(), password);
         } catch (IllegalArgumentException exception) {
             redirectAttributes.addFlashAttribute("withdrawError", exception.getMessage());
-            AppUser user = userService.findByUsername(principal.getName());
-            return "redirect:/mypage?userId=" + user.getId();
+            return "redirect:/mypage";
         }
 
         new SecurityContextLogoutHandler().logout(request, response, authentication);
         redirectAttributes.addFlashAttribute("message", "회원 탈퇴가 완료되었습니다.");
         return "redirect:/";
+    }
+
+    private boolean isRecentlyReauthenticated(HttpSession session) {
+        Object value = session.getAttribute(PROFILE_REAUTH_AT);
+        if (!(value instanceof Instant verifiedAt)) return false;
+        Duration age = Duration.between(verifiedAt, Instant.now());
+        return !age.isNegative() && age.compareTo(REAUTH_TTL) <= 0;
     }
 }

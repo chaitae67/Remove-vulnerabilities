@@ -1,6 +1,25 @@
 server:
   port: ${SERVER_PORT:8081}
-  forward-headers-strategy: framework
+  # AE-19/AU-20/SN-17: 신뢰 프록시 체인을 Tomcat RemoteIpValve에서 역방향으로
+  # 해석하여, 외부 사용자가 X-Forwarded-For의 첫 값을 위조해 관리자 허용 IP로
+  # 가장하는 것을 차단한다. WEB/ALB에서도 외부 전달 헤더를 정규화해야 한다.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:native}
+  # EP-04/IL-05: 애플리케이션 서버 제품명을 응답 헤더에 추가하지 않는다.
+  server-header: ""
+  # EP-04/IL-05: 오류 응답에 스택트레이스/예외/상세 메시지를 노출하지 않는다.
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-exception: false
+    include-binding-errors: never
+  servlet:
+    session:
+      timeout: 30m
+      # IS-16/CC-18/SN-17: 세션 쿠키를 HttpOnly·Secure·SameSite로 보호한다.
+      cookie:
+        http-only: true
+        secure: true
+        same-site: strict
 
 spring:
   application:
@@ -12,7 +31,7 @@ spring:
   datasource:
     url: ${ORACLE_URL:jdbc:oracle:thin:@localhost:1521/FREEPDB1}
     username: ${ORACLE_USERNAME:clinic}
-    password: ${ORACLE_PASSWORD:clinic}
+    password: ${ORACLE_PASSWORD:}
     driver-class-name: oracle.jdbc.OracleDriver
   mail:
     host: smtp.gmail.com
@@ -31,7 +50,8 @@ spring:
   freemarker:
     suffix: .ftl
     settings:
-      api_builtin_enabled: "true"
+      # CI-01: ?api 빌트인은 Java 객체 API 노출로 악용될 수 있어 비활성화한다.
+      api_builtin_enabled: "false"
       # ?url 빌트인은 출력 인코딩이 지정되어 있지 않으면 예외를 던진다.
       # (회원 검색 결과의 ?keyword=... 링크, 의무기록 다운로드 링크에서 사용)
       output_encoding: UTF-8
@@ -46,13 +66,28 @@ spring:
     open-in-view: false
 
 app:
-  base-url: ${APP_BASE_URL:http://localhost:8081}
-  admin-login-secret: ${ADMIN_LOGIN_SECRET:clinic-admin-login}
+  base-url: ${APP_BASE_URL:https://www.zerodayclinic.p-e.kr}
+  security:
+    require-https: ${REQUIRE_HTTPS:true}
+    # BF-09: 기존 테스트 계정 비밀번호를 운영 배포 시 한 번만 교체하는 안전장치.
+    rotate-passwords-on-startup: ${ROTATE_PASSWORDS_ON_STARTUP:false}
+    rotation-admin-password: ${ROTATE_ADMIN_PASSWORD:}
+    rotation-user-password: ${ROTATE_USER_PASSWORD:}
+  admin:
+    # AE-19: 운영에서는 사내망/VPN 대역을 ADMIN_ALLOWED_NETWORKS로 반드시 지정한다.
+    allowed-networks: ${ADMIN_ALLOWED_NETWORKS:127.0.0.1/32,::1/128}
   mail-from-name: ${MAIL_FROM_NAME:zeroday_clinic}
-  upload-dir: ${APP_UPLOAD_DIR:uploads}
+  # WEB-24: 업로드/의무기록 저장 경로를 시스템/프로그램 영역과 분리된 전용 경로로 사용한다.
+  #   기존 상대경로("uploads"/"records")는 프로세스 작업 디렉터리(JDK bin 등)나 파일시스템 루트로
+  #   해석될 수 있어, 사용자 홈 하위의 별도 데이터 경로로 기본값을 변경했다.
+  #   운영에서는 APP_UPLOAD_DIR / APP_RECORDS_DIR 로 전용 경로를 지정하고 서비스 계정만 접근하도록 제한한다.
+  upload-dir: ${APP_UPLOAD_DIR:${user.home}/zeroday-clinic/uploads}
+  records-dir: ${APP_RECORDS_DIR:${user.home}/zeroday-clinic/records}
+  # FD-15: 파일명 대신 HMAC 식별자를 사용한다. 운영에서는 반드시 영속적인 32바이트 이상 난수를 주입한다.
+  records-download-key: ${RECORD_DOWNLOAD_KEY:}
   chatbot:
     ai:
-      enabled: ${OLLAMA_ENABLED:true}
+      enabled: ${OLLAMA_ENABLED:false}
       model: ${OLLAMA_MODEL:gemma3:1b}
       endpoint: ${OLLAMA_CHAT_URL:http://localhost:11434/api/chat}
 
@@ -60,6 +95,11 @@ app:
 # 로컬에서는 고객 앱(8081)과 함께 띄울 수 있도록 8082를 쓴다. (운영은 WAS가 분리되어 8081 유지)
 server:
   port: ${SERVER_PORT:8082}
+  # 로컬(HTTP) 환경에서는 Secure 쿠키를 사용하지 않아야 세션이 유지된다.
+  servlet:
+    session:
+      cookie:
+        secure: false
 
 spring:
   config:
@@ -78,3 +118,8 @@ spring:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: update
+app:
+  security:
+    require-https: false
+  admin:
+    allowed-networks: 0.0.0.0/0,::/0

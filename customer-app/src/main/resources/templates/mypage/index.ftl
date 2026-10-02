@@ -20,8 +20,8 @@
         <div class="profile-monogram">${user.name?substring(0, 1)}</div>
         <p class="eyebrow">Member Profile</p>
         <h2>${user.name}</h2>
-        <dl><div><dt>아이디</dt><dd>${user.username}</dd></div><div><dt>이메일</dt><dd>${user.email}</dd></div><div><dt>연락처</dt><dd>${user.phone!'-'}</dd></div></dl>
-        <a class="profile-edit-link" href="/mypage/edit?userId=${user.id}">회원정보 수정 <span>→</span></a>
+        <dl><div><dt>아이디</dt><dd>${user.username}</dd></div><div><dt>이메일</dt><dd>${user.email}</dd></div><div><dt>연락처</dt><dd>${maskedPhone}</dd></div></dl>
+        <a class="profile-edit-link" href="/mypage/edit">회원정보 수정 <span>→</span></a>
       </aside>
       <div class="mypage-main">
         <div class="mypage-summary">
@@ -37,7 +37,7 @@
         <ul class="board-list">
             <#list payments as payment>
             <li>
-                <a class="payment-detail-link" href="/payments/${payment.orderNumber}">${payment.procedureProduct.name}<small>${payment.orderNumber}</small></a>
+                <a class="payment-detail-link" href="/payments/${payment.orderNumber?url}">${payment.procedureProduct.name}<small>${payment.orderNumber}</small></a>
                 <span>${numbers.formatInteger(payment.amount)}원</span>
                 <span class="state">${payment.status}</span>
                 <time>${temporals.format(payment.createdAt, 'yyyy-MM-dd HH:mm')}</time>
@@ -59,7 +59,7 @@
         <ul class="board-list">
             <#list qnaPosts as post>
             <li>
-                <a href="/qna/${post.id}">${post.title}</a>
+                <a href="/qna/${post.id?c}">${post.title}</a>
                 <span class="state">${post.answered?then('답변완료', '답변대기')}</span>
                 <time>${temporals.format(post.createdAt, 'yyyy-MM-dd')}</time>
             </li>
@@ -80,7 +80,7 @@
         <ul class="board-list">
             <#list myReviews as review>
             <li>
-                <a href="/reviews/${review.id}">${review.title}</a>
+                <a href="/reviews/${review.id?c}">${review.title}</a>
                 <span class="state">${strings.repeat("★", review.rating)}</span>
                 <time>${temporals.format(review.createdAt, 'yyyy-MM-dd')}</time>
             </li>

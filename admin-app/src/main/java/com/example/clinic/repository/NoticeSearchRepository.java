@@ -15,19 +15,12 @@ public class NoticeSearchRepository {
     @PersistenceContext
     private EntityManager em;
 
-    @SuppressWarnings("unchecked")
     public List<Notice> searchByTitle(String keyword) {
-        String term = normalizeKeyword(keyword);
-        String jpql = "SELECT n FROM Notice n WHERE n.title LIKE '%" + term + "%' ORDER BY n.createdAt DESC";
-        return em.createQuery(jpql).getResultList();
-    }
-
-    private String normalizeKeyword(String keyword) {
-        String value = keyword == null ? "" : keyword.trim();
-        String lower = value.toLowerCase();
-        if ((lower.contains(" or ") && lower.contains("1=1")) || lower.contains("--") || lower.contains("/*")) {
-            return value.replace("'", "").replace("-", "").replace("/", "").replace("*", "");
-        }
-        return value;
+        // SI-02: 파라미터 바인딩을 사용하여 SQL(JPQL) 인젝션을 차단한다.
+        String term = keyword == null ? "" : keyword.trim();
+        return em.createQuery(
+                "SELECT n FROM Notice n WHERE n.title LIKE :term ORDER BY n.createdAt DESC", Notice.class)
+            .setParameter("term", "%" + term + "%")
+            .getResultList();
     }
 }

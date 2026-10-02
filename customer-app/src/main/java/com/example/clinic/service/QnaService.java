@@ -20,6 +20,7 @@ import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.QnaAttachment;
 import com.example.clinic.domain.QnaPost;
 import com.example.clinic.repository.QnaPostRepository;
+import com.example.clinic.security.SecureFileValidator;
 
 @Service
 public class QnaService {
@@ -100,17 +101,19 @@ public class QnaService {
             .orElseThrow(() -> new IllegalArgumentException("첨부파일을 찾을 수 없습니다."));
     }
 
+    // FU-14: 실행 가능한 스크립트/HTML 등을 차단하기 위한 허용 확장자 화이트리스트.
     private QnaAttachment store(MultipartFile file) {
         try {
             Files.createDirectories(qnaUploadPath);
             String original = StringUtils.cleanPath(file.getOriginalFilename() == null ? "attachment" : file.getOriginalFilename());
-            String extension = "";
-            int extensionIndex = original.lastIndexOf('.');
-            if (extensionIndex >= 0) {
-                extension = original.substring(extensionIndex);
+            String extension = SecureFileValidator.validate(file, 10L * 1024 * 1024);
+            // FU-14: 원본 파일명을 그대로 쓰지 않고 임의의 안전한 파일명으로 저장한다(경로 순회/덮어쓰기 방지).
+            String stored = UUID.randomUUID().toString().replace("-", "") + "." + extension;
+            Path target = qnaUploadPath.resolve(stored).normalize();
+            if (!target.startsWith(qnaUploadPath)) {
+                throw new IllegalArgumentException("잘못된 파일 경로입니다.");
             }
-            String stored = original;
-            file.transferTo(qnaUploadPath.resolve(stored));
+            file.transferTo(target);
 
             QnaAttachment attachment = new QnaAttachment();
             attachment.setOriginalFilename(original);
@@ -122,4 +125,5 @@ public class QnaService {
             throw new IllegalStateException("첨부파일 저장 중 오류가 발생했습니다.", ex);
         }
     }
+
 }

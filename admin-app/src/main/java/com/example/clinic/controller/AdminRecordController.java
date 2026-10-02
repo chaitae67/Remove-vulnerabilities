@@ -1,17 +1,22 @@
 package com.example.clinic.controller;
 
-import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.security.Principal;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.stream.Stream;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import com.example.clinic.security.SecureFileValidator;
+import com.example.clinic.service.AdminReauthenticationService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -22,51 +27,51 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 /**
- * 의무기록 / 동의서 다운로드.
- *
- * (실습용) 다운로드가 파일명을 그대로 받아 records 디렉터리에 resolve 하므로
- * 경로 정규화·격리 검사가 없다. 예) /admin/records/download?file=../application.yml
- * 처럼 상위 경로를 주면 records 밖의 파일도 읽힌다(경로 순회 / LFI).
+ * 의무기록 / 동의서 업로드·다운로드.
+ * FD-15/FU-14/XS-06: 파일명 정규화·격리 검사, 확장자 화이트리스트, 항상 첨부(attachment)
+ * 다운로드를 적용하여 경로 순회·악성 파일 업로드·저장형 XSS를 차단한다.
  */
 @Controller
 public class AdminRecordController {
 
+    // FU-14: 의무기록/동의서로 허용할 확장자.
     private final Path recordsPath;
+    private final byte[] downloadKey;
+    private final AdminReauthenticationService reauthenticationService;
 
-    public AdminRecordController(@Value("${app.records-dir:records}") String recordsDir) {
+    public AdminRecordController(@Value("${app.records-dir:records}") String recordsDir,
+                                 @Value("${app.records-download-key:}") String configuredKey,
+                                 AdminReauthenticationService reauthenticationService) {
         this.recordsPath = Path.of(recordsDir).toAbsolutePath().normalize();
-    }
-
-    @PostConstruct
-    void seedSampleRecords() throws IOException {
-        Files.createDirectories(recordsPath);
-        writeIfAbsent("consent_홍길동_지방흡입.txt",
-            "[수술 동의서]\n환자: 홍길동\n시술: 바디라인 지방흡입\n동의일: 2026-08-21\n주치의: 김원장\n특이사항: 국소마취, 수술 전 혈액검사 정상.\n");
-        writeIfAbsent("record_김영희_윤곽상담.txt",
-            "[진료 기록]\n환자: 김영희\n방문일: 2026-08-30\n상담: 얼굴 윤곽 비대칭 진단, 비수술 옵션 우선 안내.\n처방: 없음 / 재상담 2주 후.\n");
-    }
-
-    private void writeIfAbsent(String name, String content) throws IOException {
-        Path target = recordsPath.resolve(name);
-        if (!Files.exists(target)) {
-            Files.writeString(target, content, StandardCharsets.UTF_8);
+        this.reauthenticationService = reauthenticationService;
+        if (configuredKey == null || configuredKey.isBlank()) {
+            this.downloadKey = new byte[32];
+            new SecureRandom().nextBytes(this.downloadKey);
+        } else {
+            byte[] keyBytes = configuredKey.getBytes(StandardCharsets.UTF_8);
+            if (keyBytes.length < 32) {
+                throw new IllegalArgumentException("RECORD_DOWNLOAD_KEY는 32바이트 이상이어야 합니다.");
+            }
+            this.downloadKey = keyBytes;
         }
     }
 
     @GetMapping("/admin/records")
     public String list(Model model) throws IOException {
         Files.createDirectories(recordsPath);
-        List<String> files = new ArrayList<>();
+        List<RecordFile> files = new ArrayList<>();
         try (Stream<Path> paths = Files.list(recordsPath)) {
             paths.filter(Files::isRegularFile)
                 .map(path -> path.getFileName().toString())
                 .sorted(Comparator.naturalOrder())
+                .map(name -> new RecordFile(fileId(name), name))
                 .forEach(files::add);
         }
         model.addAttribute("files", files);
@@ -74,56 +79,99 @@ public class AdminRecordController {
     }
 
     /**
-     * 의무기록/동의서 업로드. (실습용) 업로드 파일명(originalFilename)을 그대로 resolve 해서
-     * 저장하므로 경로 정규화·격리·확장자 검사가 없다. 예) 파일명을 ../../foo.jsp 로 주면
-     * records 밖에 임의 파일을 쓸 수 있다(경로 순회 업로드 / 임의 파일 업로드).
+     * 의무기록/동의서 업로드.
+     * FU-14: 확장자 화이트리스트 + 파일명 정규화 + 업로드 디렉터리 격리 검사로
+     * 경로 순회 및 실행 가능 파일 업로드를 차단한다.
      */
     @PostMapping("/admin/records/upload")
-    public String upload(@RequestParam("file") MultipartFile file, RedirectAttributes redirectAttributes) {
+    public String upload(@RequestParam("file") MultipartFile file,
+                         @RequestParam String adminPassword,
+                         Principal principal,
+                         RedirectAttributes redirectAttributes) {
         try {
-            String name = file.getOriginalFilename();
-            Files.createDirectories(recordsPath);
-            Path target = recordsPath.resolve(name);
-            try (InputStream in = file.getInputStream()) {
-                Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+            reauthenticationService.verify(principal, adminPassword);
+            String original = org.springframework.util.StringUtils.cleanPath(
+                file.getOriginalFilename() == null ? "" : file.getOriginalFilename());
+            // 경로 구분자/상위 경로 차단
+            if (original.isBlank() || original.contains("/") || original.contains("\\") || original.contains("..")) {
+                redirectAttributes.addFlashAttribute("error", "올바르지 않은 파일명입니다.");
+                return "redirect:/admin/records";
             }
-            redirectAttributes.addFlashAttribute("message", "업로드되었습니다: " + name);
+            SecureFileValidator.validate(file, 10L * 1024 * 1024);
+            Files.createDirectories(recordsPath);
+            Path target = recordsPath.resolve(original).normalize();
+            if (!target.startsWith(recordsPath)) {
+                redirectAttributes.addFlashAttribute("error", "올바르지 않은 파일 경로입니다.");
+                return "redirect:/admin/records";
+            }
+            if (Files.exists(target)) {
+                redirectAttributes.addFlashAttribute("error", "같은 이름의 파일이 이미 존재합니다.");
+                return "redirect:/admin/records";
+            }
+            try (InputStream in = file.getInputStream()) {
+                Files.copy(in, target);
+            }
+            redirectAttributes.addFlashAttribute("message", "업로드되었습니다: " + original);
         } catch (Exception e) {
-            redirectAttributes.addFlashAttribute("error", "업로드 실패: " + e.getMessage());
+            redirectAttributes.addFlashAttribute("error", "업로드에 실패했습니다.");
         }
         return "redirect:/admin/records";
     }
 
-    @GetMapping("/admin/records/download")
-    public ResponseEntity<Resource> download(@RequestParam("file") String file) {
+    @GetMapping("/admin/records/download/{id}")
+    public ResponseEntity<Resource> download(@PathVariable String id) {
         try {
-            // (실습용) 정규화/격리 검사 없이 그대로 resolve → 경로 순회 가능
-            Path filePath = recordsPath.resolve(file);
+            if (id == null || !id.matches("[0-9a-f]{64}")) {
+                return ResponseEntity.badRequest().build();
+            }
+            Path filePath;
+            try (Stream<Path> paths = Files.list(recordsPath)) {
+                filePath = paths.filter(Files::isRegularFile)
+                    .filter(path -> java.security.MessageDigest.isEqual(
+                        fileId(path.getFileName().toString()).getBytes(StandardCharsets.US_ASCII),
+                        id.getBytes(StandardCharsets.US_ASCII)))
+                    .findFirst().orElse(null);
+            }
+            if (filePath == null || !filePath.normalize().startsWith(recordsPath)) return ResponseEntity.notFound().build();
             Resource resource = new UrlResource(filePath.toUri());
             if (!resource.exists() || !resource.isReadable()) {
                 return ResponseEntity.notFound().build();
             }
             String name = filePath.getFileName().toString();
-            String lower = name.toLowerCase();
-            // (실습용) HTML/SVG 등 브라우저에서 실행되는 파일은 inline 으로 서빙해 그대로 실행되게 하고
-            // (악성 파일 업로드 / 저장형 XSS), 그 외(txt·png 등)는 원래대로 다운로드(attachment) 한다.
-            boolean executable = lower.endsWith(".html") || lower.endsWith(".htm")
-                || lower.endsWith(".xhtml") || lower.endsWith(".svg");
-            MediaType mediaType;
-            ContentDisposition disposition;
-            if (executable) {
-                mediaType = lower.endsWith(".svg") ? MediaType.valueOf("image/svg+xml") : MediaType.TEXT_HTML;
-                disposition = ContentDisposition.inline().filename(name, StandardCharsets.UTF_8).build();
-            } else {
-                mediaType = MediaType.APPLICATION_OCTET_STREAM;
-                disposition = ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build();
-            }
+            // XS-06/FU-14: 항상 첨부(attachment)·octet-stream·nosniff로 내려 브라우저 실행을 방지한다.
             return ResponseEntity.ok()
-                .contentType(mediaType)
-                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header("X-Content-Type-Options", "nosniff")
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                    ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build().toString())
                 .body(resource);
         } catch (MalformedURLException ex) {
             throw new IllegalArgumentException("파일을 불러올 수 없습니다.", ex);
+        } catch (IOException ex) {
+            throw new IllegalStateException("파일 목록을 확인할 수 없습니다.", ex);
         }
+    }
+
+    private String fileId(String filename) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(downloadKey, "HmacSHA256"));
+            return HexFormat.of().formatHex(mac.doFinal(filename.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.GeneralSecurityException exception) {
+            throw new IllegalStateException("다운로드 식별자를 생성할 수 없습니다.", exception);
+        }
+    }
+
+    public static final class RecordFile {
+        private final String id;
+        private final String name;
+
+        private RecordFile(String id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public String getId() { return id; }
+        public String getName() { return name; }
     }
 }

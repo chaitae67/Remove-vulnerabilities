@@ -19,15 +19,15 @@
 
     <section class="content-band admin-detail-grid">
         <div class="panel">
-            <h2>결제 정보 수정</h2>
+            <h2>예약 정보 수정</h2>
             <#if order.status?string == 'CANCELED'>
             <p class="muted-box">환불된 결제 건은 수정할 수 없습니다.</p>
             <#else>
             <form action="/admin/payments/${order.id}" method="post" class="stack-form">
                 <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
-                <label>결제 금액 (원)<input name="amount" type="number" min="0" step="1" value="${order.amount?string.computer}" required></label>
-                <label>결제 수단<input name="method" value="${(order.method!'')?html}"></label>
-                <label>예약 날짜<input name="reservationDate" type="date" value="<#if order.reservationDate??>${temporals.format(order.reservationDate, 'yyyy-MM-dd')}</#if>"></label>
+                <p class="muted-box">승인된 결제의 금액과 결제수단은 변경할 수 없습니다.</p>
+                <label>예약 날짜<input name="reservationDate" type="date" value="<#if order.reservationDate??>${temporals.format(order.reservationDate, 'yyyy-MM-dd')}</#if>" required></label>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <div class="form-actions">
                     <button class="button" type="submit">저장</button>
                 </div>
@@ -38,6 +38,7 @@
             <form action="/admin/payments/${order.id}/refund" method="post" class="danger-form" onsubmit="return confirm('환불 처리하시겠습니까? 사용 포인트는 반환되고 적립 포인트는 회수됩니다.');">
                 <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <p class="muted">환불 시 사용 포인트 ${numbers.formatInteger(order.pointsUsed)}P는 돌려주고, 적립 포인트 ${numbers.formatInteger(order.earnedPoints)}P는 회수합니다.</p>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <button class="button button-danger" type="submit">환불 처리</button>
             </form>
             </#if>

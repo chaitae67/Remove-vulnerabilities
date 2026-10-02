@@ -18,14 +18,10 @@
         }
     }
 
-    function appendMessage(text, type, renderHtml = false) {
+    function appendMessage(text, type) {
         const message = document.createElement('div');
         message.className = `chatbot-message ${type}`;
-        if (renderHtml) {
-            message.innerHTML = text;
-        } else {
-            message.textContent = text;
-        }
+        message.textContent = text;
         messages.appendChild(message);
         messages.scrollTop = messages.scrollHeight;
         return message;
@@ -92,13 +88,13 @@
             }
 
             const data = await response.json();
-            const formattedAnswer = formatAssistantAnswer(data.answer);
-            const modeLabel = data.mode === 'AI'
-                ? '<small class="chatbot-mode">AI 답변</small>'
-                : data.mode === 'GUIDE'
-                    ? '<small class="chatbot-mode">빠른 안내</small>'
-                    : '<small class="chatbot-mode fallback">기본 안내 · Ollama 연결 안 됨</small>';
-            loading.innerHTML = `${modeLabel}${formattedAnswer}`;
+            const modeLabel = document.createElement('small');
+            modeLabel.className = data.mode === 'FALLBACK' ? 'chatbot-mode fallback' : 'chatbot-mode';
+            modeLabel.textContent = data.mode === 'AI' ? 'AI 답변' : data.mode === 'GUIDE'
+                ? '빠른 안내' : '기본 안내 · Ollama 연결 안 됨';
+            const answer = document.createElement('span');
+            answer.textContent = String(data.answer || '');
+            loading.replaceChildren(modeLabel, answer);
             loading.classList.remove('loading');
         } catch (error) {
             loading.textContent = '일시적으로 답변을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
