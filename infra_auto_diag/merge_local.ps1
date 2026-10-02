@@ -19,7 +19,10 @@ Set-Location $here
 function Have($c) { $null -ne (Get-Command $c -ErrorAction SilentlyContinue) }
 if (-not (Have aws)) { Write-Host "[!] aws CLI not found. Install it or run 'aws configure' first."; exit 1 }
 $py = if (Have python) { "python" } elseif (Have py) { "py" } else { Write-Host "[!] python not found."; exit 1 }
-if (-not (Test-Path "make_reports.py")) { Write-Host "[!] run this from the infra_auto_diag folder (make_reports.py not found)."; exit 1 }
+# make_reports.py(전체 리포) 가 있으면 그걸, 없으면 자체완결형 makereport_all.py 로 폴백
+$reportTool = if (Test-Path "make_reports.py") { "make_reports.py" } `
+  elseif (Test-Path "makereport_all.py") { "makereport_all.py" } `
+  else { Write-Host "[!] make_reports.py / makereport_all.py 둘 다 없음 (infra_auto_diag 폴더나 makereport_all.py 가 있는 폴더에서 실행)."; exit 1 }
 
 New-Item -ItemType Directory -Force -Path $Csv, $Out | Out-Null
 
@@ -36,9 +39,14 @@ try {
   else { $mapPath = $null; Write-Host "[!] no EC2 Name tags found (using hostnames)" }
 } catch { Write-Host "[!] could not build EC2 Name map (using hostnames): $_"; $mapPath = $null }
 
-Write-Host "[*] building reports with make_reports.py ..."
-if ($mapPath -and (Test-Path $mapPath)) { & $py make_reports.py $Csv -o $Out --hostmap $mapPath }
-else { & $py make_reports.py $Csv -o $Out }
+Write-Host "[*] building reports with $reportTool ..."
+if ($reportTool -eq "make_reports.py") {
+  if ($mapPath -and (Test-Path $mapPath)) { & $py make_reports.py $Csv -o $Out --hostmap $mapPath }
+  else { & $py make_reports.py $Csv -o $Out }
+} else {
+  # makereport_all.py 는 템플릿 내장 자체완결형. 출력은 reports_out/ 기본(-o/--hostmap 미지원)
+  & $py makereport_all.py $Csv
+}
 if ($LASTEXITCODE -ne 0) { Write-Host "[!] report build failed"; exit 1 }
 
 if ($Upload) {
