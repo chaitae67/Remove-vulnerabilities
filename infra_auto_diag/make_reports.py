@@ -314,13 +314,26 @@ def main():
     ap.add_argument("--hostmap", help="IP→EC2 Name 매핑 JSON({\"10.0.2.203\":\"web-adm1\"}) — 진단대상 이름을 Name 으로")
     args = ap.parse_args()
 
-    if args.hostmap and os.path.exists(args.hostmap):     # IP→EC2 Name (merge_local 이 생성)
+    # IP→EC2 Name 맵: --hostmap 로 받거나, 없으면 입력폴더/현재폴더에서 hostmap.json 을 자동 탐색
+    # (플래그를 안 줘도 서버이름이 OS 호스트명(ip-10-0-0-5)으로 되돌아가지 않게 한다)
+    hm_path = args.hostmap if (args.hostmap and os.path.exists(args.hostmap)) else None
+    if not hm_path:
+        cand = []
+        for p in args.inputs:
+            d = p if os.path.isdir(p) else os.path.dirname(os.path.abspath(p))
+            cand.append(os.path.join(d, "hostmap.json"))
+        cand.append(os.path.join(os.getcwd(), "hostmap.json"))
+        seen, cand = set(), [c for c in cand if not (c in seen or seen.add(c))]
+        hm_path = next((c for c in cand if os.path.exists(c)), None)
+        if hm_path:
+            print(f"[*] 호스트맵 자동 탐지: {hm_path}")
+    if hm_path:
         try:
-            with open(args.hostmap, encoding="utf-8-sig") as f:
+            with open(hm_path, encoding="utf-8-sig") as f:
                 HOSTMAP.update({str(k): str(v) for k, v in json.load(f).items() if v})
             print(f"[*] 호스트맵 {len(HOSTMAP)}개 적용(IP→EC2 Name)")
         except Exception as e:  # noqa: BLE001
-            print(f"  [!] 호스트맵 무시({args.hostmap}): {e}")
+            print(f"  [!] 호스트맵 무시({hm_path}): {e}")
 
     # 입력 파일 수집(폴더면 그 안의 csv/json)
     files = []

@@ -2,12 +2,19 @@
 # ASCII-only so it parses under any PowerShell/encoding. Report file names inside are still Korean.
 #
 # Run on the analyst PC (has python + lxml + this repo). From the infra_auto_diag folder:
-#   powershell -ExecutionPolicy Bypass -File merge_local.ps1           # pull from S3 + build reports
-#   powershell -ExecutionPolicy Bypass -File merge_local.ps1 -Upload   # also push reports back to S3
-#   powershell -ExecutionPolicy Bypass -File merge_local.ps1 -Out myfolder
+#   powershell -ExecutionPolicy Bypass -File merge_local.ps1                    # pull from S3 + build reports
+#   powershell -ExecutionPolicy Bypass -File merge_local.ps1 -Upload            # also push reports back to S3
+#   powershell -ExecutionPolicy Bypass -File merge_local.ps1 -AwsProfile demo   # use a specific CLI profile/account
+#   powershell -ExecutionPolicy Bypass -File merge_local.ps1 -Region ap-southeast-2
+#
+# The S3 bucket and the EC2 Name lookup both follow whatever account the creds point at, so
+# switching AWS accounts no longer breaks the "show the EC2 Name as the server name" step.
 #
 param(
-  [string]$S3Base = "s3://vuln-lab-backup/infra-auto-diag",
+  [string]$S3Base,                   # full s3://bucket/prefix (default: auto-detect from the active account)
+  [string]$Bucket,                   # just the bucket name (prefix stays .../infra-auto-diag)
+  [string]$Region,                   # region for the EC2 Name lookup (default: the account's regions)
+  [string]$AwsProfile,               # AWS CLI profile / account to use for every aws call
   [string]$Csv    = "csv_files",     # local folder to sync CSVs into
   [string]$Out    = "reports_out",   # local folder for generated xlsx (ASCII name)
   [switch]$Upload                    # also upload the reports to S3 reports/
@@ -15,6 +22,10 @@ param(
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
+
+# common args applied to every aws call (profile if given)
+$awsG = @()
+if ($AwsProfile) { $awsG += @("--profile", $AwsProfile) }
 
 function Have($c) { $null -ne (Get-Command $c -ErrorAction SilentlyContinue) }
 if (-not (Have aws)) { Write-Host "[!] aws CLI not found. Install it or run 'aws configure' first."; exit 1 }
