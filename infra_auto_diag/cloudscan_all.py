@@ -192,11 +192,8 @@ def _base_name(os_label, out_path):
     return os.path.join(out_dir, f"cloud_{(os_label or 'result').upper()}_{stamp}")
 
 
-def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True, target=None):
-    """CSV(항상, 설치 불필요) + 다중시트 보고서 XLSX(openpyxl 있으면) 저장, 경로 목록 반환."""
-    base = _base_name(os_label, out_path)
-    saved = []
-    # 1) CSV — 표준 라이브러리, 한글 깨짐 방지(utf-8-sig). 설치 없이도 항상 저장.
+def _save_csv(provider, base, results, target=None):
+    """CSV 저장(표준 라이브러리, utf-8-sig). 저장 경로 반환."""
     import csv
     csv_path = base + ".csv"
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -212,20 +209,32 @@ def save_results(provider, os_label, host, results, out_path=None, want_xlsx=Tru
             w.writerow([r.get("code", ""), r.get("title", ""), r.get("importance", ""),
                         verdict, " / ".join(r.get("evidence", [])),
                         " / ".join(r.get("resources", []))])
-    saved.append(csv_path)
-    # 2) 보고서 XLSX — 공식 CSP 양식(5시트+3차트) 채우기 우선, 안 되면 코드 생성 폴백
+    return csv_path
+
+
+def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True, target=None):
+    """보고서 XLSX(공식 양식) 저장. xlsx 가 만들어지면 CSV 는 남기지 않고, xlsx 생성 불가(또는 --no-excel)일 때만 CSV 로 폴백. 경로 목록 반환."""
+    base = _base_name(os_label, out_path)
+    saved = []
+    # 1) 보고서 XLSX — 공식 CSP 양식(5시트+3차트) 채우기 우선, 안 되면 코드 생성 폴백
+    xlsx_ok = False
     if want_xlsx:
         xlsx = base + ".xlsx"
-        if not _fill_cloud_template(provider, host, os_label, results, xlsx, target):
+        if _fill_cloud_template(provider, host, os_label, results, xlsx, target):
+            saved.append(xlsx)
+            xlsx_ok = True
+        else:
             try:
                 import cloud_check.report as _rep
                 saved.append(_rep.build_report(provider, host, results, xlsx))
+                xlsx_ok = True
             except ImportError:
-                pass  # openpyxl 미설치 → CSV 로 충분
+                pass  # openpyxl 미설치 → CSV 로 폴백
             except Exception as e:  # noqa: BLE001
                 print(f"    (엑셀 보고서 생성 실패: {type(e).__name__}: {e} → CSV 로 저장됨)")
-        else:
-            saved.append(xlsx)
+    # 2) CSV — xlsx 를 못 만들었을 때만(또는 --no-excel) 폴백 저장
+    if not xlsx_ok:
+        saved.append(_save_csv(provider, base, results, target))
     return saved
 
 
@@ -295,7 +304,7 @@ def main():
     ap.add_argument("provider", choices=["aws", "azure", "gcp", "naver"], help="점검 대상 CSP")
     ap.add_argument("-o", "--output", help="저장 경로(확장자 제외 기본명). 기본: 현재 폴더에 cloud_<CSP>_<시각>")
     ap.add_argument("--json", dest="json_out", help="결과를 JSON 으로 저장(openpyxl 없는 곳에서 뽑아, PC 에서 make_report 로 xlsx 생성용)")
-    ap.add_argument("--no-excel", action="store_true", help="xlsx 저장 생략(CSV 는 항상 저장)")
+    ap.add_argument("--no-excel", action="store_true", help="xlsx 저장 생략(대신 CSV 저장)")
     ap.add_argument("--all-regions", action="store_true", help="AWS 전 리전 스캔(기본은 지정 리전만 → 빠름)")
     # 공통/개별 자격증명
     ap.add_argument("--access-key"); ap.add_argument("--secret-key")
@@ -361,14 +370,14 @@ def main():
                        _f, ensure_ascii=False)
         print(f"[+] JSON 저장: {args.json_out}  (PC 에서: python make_report.py {provider} --result {args.json_out})")
 
-    # 저장: CSV(항상) + 보고서 XLSX(openpyxl 있으면)
+    # 저장: 보고서 XLSX(공식 양식). 만들 수 없으면 CSV 로 폴백
     paths = save_results(provider, os_label, host, results, args.output, want_xlsx=not args.no_excel,
                          target=target)
     print()
     for pth in paths:
         print(f"[+] 저장: {pth}")
     if not any(p.endswith(".xlsx") for p in paths) and not args.no_excel:
-        print("    (xlsx 보고서는 openpyxl 이 없어 생략 — CSV 를 열거나 pip install openpyxl 후 재실행)")
+        print("    (xlsx 보고서는 openpyxl/lxml 이 없어 생략 — CSV 로 저장됨. pip install openpyxl lxml 후 재실행하면 xlsx 로 저장)")
     print("[*] 완료")
 
 
