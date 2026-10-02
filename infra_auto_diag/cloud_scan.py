@@ -125,20 +125,42 @@ def collect_creds(provider, args):
 
 
 # ------------------------------------------------------------------ 결과 저장
-def _base_name(os_label, out_path):
-    """저장 파일 기본 경로(확장자 제외). 한글/특수문자 없는 ASCII 이름 → 쉘 다운로드 호환."""
-    if out_path:
-        root, ext = os.path.splitext(out_path)
-        return root if ext.lower() in (".xlsx", ".csv") else out_path
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    # 기본 저장 위치: 리포지토리의 reports_out/ (서버 fleet 보고서와 같은 폴더).
-    # 생성 실패(권한 등) 시 현재 폴더로 폴백. -o 로 다른 경로를 주면 그대로 따른다.
+def _reports_dir():
+    """기본 저장 폴더 reports_out/ (리포지토리, 서버 fleet 보고서와 같은 폴더). 실패 시 현재 폴더."""
     out_dir = os.path.join(SCRIPT_DIR, "reports_out")
     try:
         os.makedirs(out_dir, exist_ok=True)
     except Exception:
         out_dir = os.getcwd()
-    return os.path.join(out_dir, f"cloud_{(os_label or 'result').upper()}_{stamp}")
+    return out_dir
+
+
+def _safe_name(s):
+    """파일명에 쓸 수 없는 문자를 _ 로. (make_reports 의 _safe 와 같은 취지)"""
+    import re
+    return re.sub(r"[^0-9A-Za-z._-]", "_", str(s or "")).strip("_") or "x"
+
+
+def _report_base(provider, host, target, out_path):
+    """보고서 xlsx 기본 경로(확장자 제외). make_reports 와 같은 공식 이름:
+    (자동화진단)클라우드_서버_취약점진단_결과보고서_<CSP>_<계정>_<YYMMDDHHMM>"""
+    if out_path:
+        root, ext = os.path.splitext(out_path)
+        return root if ext.lower() in (".xlsx", ".csv") else out_path
+    stamp = datetime.datetime.now().strftime("%y%m%d%H%M")
+    csp = (provider or "result").upper()
+    acct = _safe_name((target or {}).get("account") or host or csp)
+    name = f"(자동화진단)클라우드_서버_취약점진단_결과보고서_{csp}_{acct}_{stamp}"
+    return os.path.join(_reports_dir(), name)
+
+
+def _csv_base(provider, out_path):
+    """CSV 폴백 기본 경로(확장자 제외). ASCII 이름(cloud_<CSP>_<시각>) → 쉘 다운로드·make_reports 인식 호환."""
+    if out_path:
+        root, ext = os.path.splitext(out_path)
+        return root if ext.lower() in (".xlsx", ".csv") else out_path
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    return os.path.join(_reports_dir(), f"cloud_{(provider or 'result').upper()}_{stamp}")
 
 
 def _save_csv(provider, base, results, target=None):
@@ -163,12 +185,11 @@ def _save_csv(provider, base, results, target=None):
 
 def save_results(provider, os_label, host, results, out_path=None, want_xlsx=True, target=None):
     """보고서 XLSX(공식 양식) 저장. xlsx 가 만들어지면 CSV 는 남기지 않고, xlsx 생성 불가(또는 --no-excel)일 때만 CSV 로 폴백. 경로 목록 반환."""
-    base = _base_name(os_label, out_path)
     saved = []
-    # 1) 보고서 XLSX — 공식 CSP 양식(5시트+3차트) 채우기 우선, 안 되면 코드 생성 폴백
+    # 1) 보고서 XLSX — make_reports 와 같은 공식 이름. 공식 CSP 양식 채우기 우선, 안 되면 코드 생성 폴백
     xlsx_ok = False
     if want_xlsx:
-        xlsx = base + ".xlsx"
+        xlsx = _report_base(provider, host, target, out_path) + ".xlsx"
         if _fill_cloud_template(provider, host, os_label, results, xlsx, target):
             saved.append(xlsx)
             xlsx_ok = True
@@ -181,9 +202,9 @@ def save_results(provider, os_label, host, results, out_path=None, want_xlsx=Tru
                 pass  # openpyxl 미설치 → CSV 로 폴백
             except Exception as e:  # noqa: BLE001
                 print(f"    (엑셀 보고서 생성 실패: {type(e).__name__}: {e} → CSV 로 저장됨)")
-    # 2) CSV — xlsx 를 못 만들었을 때만(또는 --no-excel) 폴백 저장
+    # 2) CSV — xlsx 를 못 만들었을 때만(또는 --no-excel) 폴백 저장(ASCII 이름)
     if not xlsx_ok:
-        saved.append(_save_csv(provider, base, results, target))
+        saved.append(_save_csv(provider, _csv_base(provider, out_path), results, target))
     return saved
 
 
