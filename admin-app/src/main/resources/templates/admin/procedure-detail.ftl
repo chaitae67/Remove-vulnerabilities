@@ -27,6 +27,7 @@
                 <label>요약<input name="summary" value="${procedure.summary?html}" maxlength="160"></label>
                 <label>상세 설명<textarea name="description" rows="6" maxlength="1000">${procedure.description?html}</textarea></label>
                 <label class="check"><input type="checkbox" name="active" value="true"<#if procedure.active> checked</#if>> 판매중으로 노출</label>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <div class="form-actions">
                     <button class="button" type="submit">저장</button>
                 </div>

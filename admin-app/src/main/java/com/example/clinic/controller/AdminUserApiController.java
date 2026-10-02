@@ -3,6 +3,7 @@ package com.example.clinic.controller;
 import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.Role;
 import com.example.clinic.service.UserService;
+import com.example.clinic.util.PrivacyMasker;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.springframework.stereotype.Controller;
@@ -32,7 +33,7 @@ public class AdminUserApiController {
         if (role != null) {
             users = users.stream().filter(user -> user.getRole() == role).toList();
         }
-        model.addAttribute("users", users);
+        model.addAttribute("users", users.stream().map(UserListItem::from).toList());
         model.addAttribute("keyword", keyword);
         model.addAttribute("role", role);
         model.addAttribute("totalCount", allUsers.size());
@@ -66,12 +67,50 @@ public class AdminUserApiController {
         static UserSummaryResponse from(AppUser user) {
             return new UserSummaryResponse(
                 user.getId(),
-                user.getUsername(),
-                user.getName(),
+                PrivacyMasker.username(user.getUsername()),
+                PrivacyMasker.name(user.getName()),
                 user.getRole(),
                 user.getPointBalance()
             );
         }
+    }
+
+    public static final class UserListItem {
+        private final Long id;
+        private final String username;
+        private final String name;
+        private final String email;
+        private final String phone;
+        private final Role role;
+        private final int pointBalance;
+        private final LocalDateTime createdAt;
+
+        private UserListItem(Long id, String username, String name, String email, String phone,
+                             Role role, int pointBalance, LocalDateTime createdAt) {
+            this.id = id;
+            this.username = username;
+            this.name = name;
+            this.email = email;
+            this.phone = phone;
+            this.role = role;
+            this.pointBalance = pointBalance;
+            this.createdAt = createdAt;
+        }
+
+        static UserListItem from(AppUser user) {
+            return new UserListItem(user.getId(), PrivacyMasker.username(user.getUsername()),
+                PrivacyMasker.name(user.getName()), PrivacyMasker.email(user.getEmail()),
+                PrivacyMasker.phone(user.getPhone()), user.getRole(), user.getPointBalance(), user.getCreatedAt());
+        }
+
+        public Long getId() { return id; }
+        public String getUsername() { return username; }
+        public String getName() { return name; }
+        public String getEmail() { return email; }
+        public String getPhone() { return phone; }
+        public Role getRole() { return role; }
+        public int getPointBalance() { return pointBalance; }
+        public LocalDateTime getCreatedAt() { return createdAt; }
     }
 
     public record UserDetailResponse(

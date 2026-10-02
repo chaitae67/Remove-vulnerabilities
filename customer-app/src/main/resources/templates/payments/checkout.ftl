@@ -15,7 +15,8 @@
         <h1>${procedure.name}</h1>
         <p>${procedure.summary}</p>
         <strong class="price">${numbers.formatInteger(procedure.price)}원</strong>
-        <form id="payment-form" class="stack-form" action="/payments/checkout/${procedure.id}" method="post">
+        <form id="payment-form" class="stack-form" action="/payments/checkout/${procedure.id?c}" method="post"
+              data-unit-price="${procedure.price?c}">
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input name="quantity" type="hidden" value="1">
 
@@ -35,73 +36,38 @@
                 <option value="${coupon.code}" data-discount="${coupon.discountAmount?c}">${coupon.name} (${numbers.formatInteger(coupon.discountAmount)}원)</option>
                 </#list>
             </select>
-            <select name="method" required>
+            <label for="paymentMethod">결제 수단</label>
+            <select id="paymentMethod" name="method" required>
                 <option value="CARD">신용카드</option>
                 <option value="BANK_TRANSFER">무통장입금</option>
                 <option value="KAKAO_PAY">간편결제</option>
             </select>
-            <input placeholder="카드번호 입력" value="4242-4242-4242-4242">
+            <fieldset id="cardFields">
+                <legend>카드 인증</legend>
+                <label for="cardNumber">카드번호</label>
+                <input id="cardNumber" name="cardNumber" inputmode="numeric" autocomplete="cc-number"
+                       placeholder="숫자 13~19자리" maxlength="23">
+                <label for="cardExpiry">유효기간</label>
+                <input id="cardExpiry" name="cardExpiry" inputmode="numeric" autocomplete="cc-exp"
+                       placeholder="MM/YY" maxlength="5">
+                <label for="cardPassword">카드 비밀번호 앞 2자리</label>
+                <input id="cardPassword" name="cardPassword" type="password" inputmode="numeric"
+                       autocomplete="off" pattern="[0-9]{2}" maxlength="2" placeholder="앞 2자리">
+            </fieldset>
+            <label for="accountPassword">계정 비밀번호 재확인</label>
+            <input id="accountPassword" name="accountPassword" type="password"
+                   autocomplete="current-password" required>
             <dl class="summary-list">
                 <div><dt>상품 금액</dt><dd id="subtotal">0원</dd></div>
                 <div><dt>총 할인 금액</dt><dd id="discount-display">0원</dd></div>
                 <div><dt>결제 금액</dt><dd id="total">0원</dd></div>
             </dl>
 
-            <input id="price" name="price" type="hidden" value="${procedure.price?c}">
-            <input id="discountAmount" name="discountAmount" type="hidden" value="0">
             <button class="button" type="submit">결제 완료</button>
         </form>
     </section>
 </main>
 <div><#include "/fragments/footer.ftl"></div>
-<#noparse>
-<script>
-    const priceInput = document.getElementById('price');
-    const paymentForm = document.getElementById('payment-form');
-    const couponInput = document.getElementById('couponCode');
-    const discountInput = document.getElementById('discountAmount');
-    const pointsInput = document.getElementById('usePoints');
-    const pointsError = document.getElementById('points-error');
-    const toNumber = value => Number(String(value || 0).replace(/,/g, '')) || 0;
-
-    function formatWon(value) {
-        const amount = Number(String(value || 0).replace(/,/g, ''));
-        return `${Number.isFinite(amount) ? amount.toLocaleString('ko-KR') : '0'}원`;
-    }
-
-    function updateAmount() {
-        const price = toNumber(priceInput.value);
-        const discount = toNumber(discountInput.value);
-        const points = toNumber(pointsInput.value);
-        const maxPoints = toNumber(pointsInput.max);
-        const subtotal = price;
-        const pointsExceeded = points > maxPoints;
-
-        pointsInput.setCustomValidity(pointsExceeded ? '보유 포인트보다 많은 포인트를 사용할 수 없습니다.' : '');
-        pointsError.hidden = !pointsExceeded;
-
-        document.getElementById('subtotal').textContent = formatWon(subtotal);
-        document.getElementById('discount-display').textContent = formatWon(discount + points);
-        document.getElementById('total').textContent = formatWon(Math.max(0, subtotal - discount - points));
-    }
-
-    couponInput.addEventListener('change', () => {
-        const option = couponInput.options[couponInput.selectedIndex];
-        discountInput.value = option.dataset.discount || 0;
-        updateAmount();
-    });
-
-    pointsInput.addEventListener('input', updateAmount);
-    paymentForm.addEventListener('submit', event => {
-        updateAmount();
-        if (!paymentForm.checkValidity()) {
-            event.preventDefault();
-            pointsInput.reportValidity();
-        }
-    });
-
-    updateAmount();
-</script>
-</#noparse>
+<script src="/js/payment-checkout.js" defer></script>
 </body>
 </html>

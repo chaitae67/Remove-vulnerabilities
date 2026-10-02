@@ -16,7 +16,9 @@
         <form action="/register" method="post" class="stack-form">
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
             <input name="username" placeholder="아이디" required>
-            <input name="password" type="password" placeholder="비밀번호" required minlength="6">
+            <input name="password" type="password" placeholder="비밀번호 (영문·숫자·특수문자 포함 10자 이상)" required
+                   minlength="10" pattern="(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{10,}"
+                   title="영문, 숫자, 특수문자를 모두 포함하여 10자 이상 입력하세요.">
             <input name="name" placeholder="성함" required>
             <input name="email" type="email" placeholder="이메일" required>
             <input name="phone" placeholder="휴대전화번호">

@@ -13,11 +13,10 @@
         <p class="eyebrow">My Page</p>
         <h1>회원정보 수정</h1>
         <p class="muted">${user.name}님, 정보를 최신 상태로 유지해 주세요.</p>
+        <#if reauthError??><div class="flash error">${reauthError}</div></#if>
 
         <form action="/mypage/edit" method="post" class="stack-form profile-form">
             <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
-            <input type="hidden" name="userId" value="${user.id}">
-
             <label class="field">
                 <span>아이디</span>
                 <input type="text" value="${user.username}" disabled>
@@ -35,7 +34,7 @@
 
             <label class="field">
                 <span>연락처</span>
-                <input type="text" name="phone" value="${user.phone!}" placeholder="010-0000-0000">
+                <input type="text" name="phone" value="${(user.phone!'')}" placeholder="010-0000-0000">
             </label>
 
             <label class="field">
@@ -43,8 +42,13 @@
                 <input type="password" name="password" placeholder="변경하지 않으려면 비워 두세요" autocomplete="new-password">
             </label>
 
+            <label class="field">
+                <span>현재 비밀번호 재확인</span>
+                <input type="password" name="currentPassword" autocomplete="current-password" required>
+            </label>
+
             <div class="profile-actions">
-                <a class="button button-outline" href="/mypage?userId=${user.id}">취소</a>
+                <a class="button button-outline" href="/mypage">취소</a>
                 <button class="button" type="submit">저장하기</button>
             </div>
         </form>

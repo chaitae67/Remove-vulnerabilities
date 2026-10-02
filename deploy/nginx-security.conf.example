@@ -1,0 +1,147 @@
+# 운영 환경에 맞게 도메인, 인증서 경로, upstream 주소, 사내망 대역을 변경한다.
+# APP_UPLOAD_DIR/APP_RECORDS_DIR는 Nginx document root 밖에 두며 이 파일에서도 직접 접근을 차단한다.
+#
+# 인터넷 ALB -> Nginx 구조에서는 아래 3개 지시자를 http 블록에 활성화하고,
+# set_real_ip_from에는 인터넷 ALB가 실제로 사용하는 서브넷 CIDR만 각각 지정한다.
+# 0.0.0.0/0, VPC 전체 또는 임의의 사설망 전체를 신뢰하지 않는다.
+# set_real_ip_from <INTERNET_ALB_SUBNET_CIDR_1>;
+# set_real_ip_from <INTERNET_ALB_SUBNET_CIDR_2>;
+# real_ip_header X-Forwarded-For;
+# real_ip_recursive on;
+
+limit_req_zone $binary_remote_addr zone=customer_login:10m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=customer_sensitive:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=admin_login:10m rate=3r/m;
+limit_req_zone $binary_remote_addr zone=admin_actions:10m rate=30r/m;
+
+upstream clinic_customer {
+    server 127.0.0.1:8081;
+}
+
+upstream clinic_admin {
+    server 127.0.0.1:8082;
+}
+
+server {
+    listen 80;
+    server_name www.example.com admin.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name www.example.com;
+
+    ssl_certificate /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    # Ubuntu 기본 Nginx는 server_tokens off만으로 "Server: nginx"가 남는다.
+    # libnginx-mod-http-headers-more-filter 모듈을 로드한 뒤 헤더 자체를 제거한다.
+    more_clear_headers Server;
+    client_max_body_size 10m;
+    autoindex off;
+    proxy_hide_header Server;
+    proxy_hide_header X-Powered-By;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location ~ ^/(uploads|records)(/|$) { return 404; }
+    location /admin { return 404; }
+    location = /login {
+        limit_req zone=customer_login burst=5 nodelay;
+        include proxy_params;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_pass http://clinic_customer;
+    }
+
+    # 고객 서버의 공지는 읽기 전용이다. 요청 경로 변조로 POST를 보내도 WEB 계층에서 거부한다.
+    location ~ ^/notices(?:/.*)?$ {
+        limit_except GET HEAD { deny all; }
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_pass http://clinic_customer;
+    }
+
+    location ~ ^/(register|forgot-password|reset-password|consultations|payments|qna|reviews|api/chat)(/|$) {
+        limit_req zone=customer_sensitive burst=10 nodelay;
+        limit_except GET HEAD POST { deny all; }
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_pass http://clinic_customer;
+    }
+
+    location / {
+        limit_except GET HEAD POST { deny all; }
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_pass http://clinic_customer;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name admin.example.com;
+
+    ssl_certificate /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    more_clear_headers Server;
+    client_max_body_size 10m;
+    autoindex off;
+    proxy_hide_header Server;
+    proxy_hide_header X-Powered-By;
+
+    # 예시 대역이다. 운영 사내망/VPN의 실제 CIDR로 교체한다.
+    allow 10.20.0.0/16;
+    deny all;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+
+    location ~ ^/(uploads|records)(/|$) { return 404; }
+    location = /login {
+        limit_req zone=admin_login burst=3 nodelay;
+        include proxy_params;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_pass http://clinic_admin;
+    }
+
+    location /admin/ {
+        limit_req zone=admin_actions burst=10 nodelay;
+        limit_except GET HEAD POST { deny all; }
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_pass http://clinic_admin;
+    }
+
+    location / {
+        limit_except GET HEAD POST { deny all; }
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_pass http://clinic_admin;
+    }
+}

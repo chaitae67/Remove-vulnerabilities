@@ -38,12 +38,14 @@
                 <label>희망 날짜<input name="preferredDate" type="date" value="<#if consultation.preferredDate??>${temporals.format(consultation.preferredDate, 'yyyy-MM-dd')}</#if>"></label>
                 <label>상담 내용<textarea name="message" rows="5">${(consultation.message!'')?html}</textarea></label>
                 <label>특이사항 (관리자 메모)<textarea name="adminNote" rows="4" placeholder="응대 내역, 주의사항 등을 기록하세요.">${(consultation.adminNote!'')?html}</textarea></label>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <div class="form-actions">
                     <button class="button" type="submit">저장</button>
                 </div>
             </form>
             <form action="/admin/consultations/${consultation.id}/delete" method="post" class="danger-form" onsubmit="return confirm('이 상담 신청을 삭제하시겠습니까? 되돌릴 수 없습니다.');">
                 <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <button class="button button-danger" type="submit">상담 신청 삭제</button>
             </form>
         </div>

@@ -48,7 +48,7 @@
                     <td>${item.phone?html}</td>
                     <td>${item.area?html}<small class="muted"> · ${item.preferredContact?html}</small></td>
                     <td><#if item.preferredDate??><time>${temporals.format(item.preferredDate, 'yyyy.MM.dd')}</time><#else><span class="muted">-</span></#if></td>
-                    <td><#if item.adminNote?has_content><span class="state">메모</span><#else><span class="muted">-</span></#if></td>
+                    <td><#if item.hasAdminNote><span class="state">메모</span><#else><span class="muted">-</span></#if></td>
                     <td><time>${temporals.format(item.createdAt, 'yyyy.MM.dd HH:mm')}</time></td>
                     <td class="cell-action"><a href="/admin/consultations/${item.id}">상세 &rsaquo;</a></td>
                 </tr>

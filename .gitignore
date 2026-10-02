@@ -27,3 +27,6 @@ infra_auto_diag/결과보고서_출력/
 결과보고서_출력/
 infra_auto_diag/reports_out/
 reports_out/
+
+# Prebuilt release artifacts are kept locally; publish separately as release assets.
+/release-assets/

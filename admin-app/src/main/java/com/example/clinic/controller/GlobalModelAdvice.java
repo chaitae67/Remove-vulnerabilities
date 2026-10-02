@@ -5,7 +5,6 @@ import java.util.Map;
 
 import org.springframework.security.core.Authentication;
 import org.springframework.security.web.csrf.CsrfToken;
-import org.springframework.security.web.csrf.DefaultCsrfToken;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ModelAttribute;
 
@@ -50,11 +49,13 @@ public class GlobalModelAdvice {
     }
 
     @ModelAttribute("_csrf")
-    public CsrfToken csrfToken(CsrfToken token) {
-        if (token != null) {
-            return token;
+    public CsrfToken csrfToken(HttpServletRequest request) {
+        Object token = request.getAttribute(CsrfToken.class.getName());
+        if (token instanceof CsrfToken csrfToken) {
+            return csrfToken;
         }
-        return new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "csrf-disabled");
+        // 필터가 403/405/429 응답을 이미 만든 뒤의 오류 디스패치에는 토큰이 없을 수 있다.
+        return null;
     }
 
     @ModelAttribute("param")

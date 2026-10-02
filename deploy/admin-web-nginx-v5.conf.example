@@ -1,0 +1,55 @@
+# 현재 구조 전용 예제:
+# Internet ALB -> 이 Nginx WEB -> internal-in-alb-1262980660...:443 -> admin WAS
+#
+# 사전 조건:
+#   sudo apt-get update
+#   sudo apt-get install -y libnginx-mod-http-headers-more-filter
+#   nginx -V와 /etc/nginx/modules-enabled에서 headers-more 모듈 로드를 확인한다.
+
+# 인터넷 ALB가 실제 사용하는 서브넷 CIDR만 입력한다. VPC 전체나 0.0.0.0/0은 금지한다.
+set_real_ip_from <INTERNET_ALB_SUBNET_CIDR_1>;
+set_real_ip_from <INTERNET_ALB_SUBNET_CIDR_2>;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+server {
+    listen 80 default_server;
+    server_name _;
+
+    server_tokens off;
+    more_clear_headers Server;
+    more_clear_headers X-Powered-By;
+    autoindex off;
+
+    # real_ip 처리 후의 실제 관리자 공인 IP/VPN만 허용한다.
+    allow <ADMIN_PUBLIC_IP>/32;
+    allow <ADMIN_VPN_CIDR>;
+    deny all;
+
+    location = /health {
+        access_log off;
+        default_type text/plain;
+        return 200 'ok';
+    }
+
+    location / {
+        limit_except GET HEAD POST { deny all; }
+
+        proxy_pass https://internal-in-alb-1262980660.ap-northeast-2.elb.amazonaws.com:443;
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name internal-in-alb-1262980660.ap-northeast-2.elb.amazonaws.com;
+
+        proxy_set_header Host admin.zerodayclinic.p-e.kr;
+        proxy_set_header X-Forwarded-Host admin.zerodayclinic.p-e.kr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+
+        proxy_hide_header Server;
+        proxy_hide_header X-Powered-By;
+        proxy_redirect ~^https?://admin\.zerodayclinic\.p-e\.kr(:\d+)?/(.*)$ https://admin.zerodayclinic.p-e.kr/$2;
+    }
+}

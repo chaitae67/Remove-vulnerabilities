@@ -38,7 +38,7 @@
                 <#list posts as post>
                 <tr data-href="/admin/qna/${post.id}">
                     <td><a class="cell-link" href="/admin/qna/${post.id}">${post.title?html}</a></td>
-                    <td>${post.writer.name?html}</td>
+                    <td>${post.writerName?html}</td>
                     <td><#if post.privatePost><span class="state status-canceled">비공개</span><#else><span class="state">공개</span></#if></td>
                     <td><#if post.answered><span class="state status-paid">답변완료</span><#else><span class="state status-ready">대기</span></#if></td>
                     <td><time>${temporals.format(post.createdAt, 'yyyy.MM.dd')}</time></td>

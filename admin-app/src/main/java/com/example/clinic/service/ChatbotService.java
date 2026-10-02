@@ -41,14 +41,8 @@ public class ChatbotService {
     }
 
     private String capabilityAnswer() {
-        return """
-            <p>아래 항목을 편하게 물어보세요.</p>
-            <div class="chatbot-topic-grid">
-                <span>시술·가격</span><span>최근 공지</span><span>포인트 사용</span>
-                <span>쿠폰·할인</span><span>상담·Q&amp;A</span><span>결제 방법</span>
-                <span>주소·전화</span><span>로그인·마이페이지</span>
-            </div>
-            """;
+        return "아래 항목을 편하게 물어보세요. 시술·가격, 최근 공지, 포인트 사용, "
+            + "쿠폰·할인, 상담·Q&A, 결제 방법, 주소·전화, 로그인·마이페이지";
     }
 
     private String ruleBasedAnswer(String message) {
@@ -85,7 +79,7 @@ public class ChatbotService {
             return "상단 메뉴에서 회원가입 또는 로그인할 수 있습니다. 로그인 후 마이페이지에서 회원정보, 결제 내역, Q&A와 후기를 확인할 수 있습니다.";
         }
 
-        return "입력한 질문 <strong>" + message.strip() + "</strong>은 이해하지 못했습니다. "
+        return "입력한 질문 '" + message.strip() + "'은 이해하지 못했습니다. "
             + "시술 가격, 공지사항, 상담, 결제, 포인트 또는 쿠폰에 대해 질문해 주세요.";
     }
 
@@ -96,8 +90,7 @@ public class ChatbotService {
         return """
             당신은 제로데이클리닉의 한국어 AI 안내 챗봇입니다.
             답변은 핵심만 2~3문장으로 짧고 친절하게 작성하세요.
-            사용자가 목록을 요청한 경우에만 <ul><li>를 사용하고, 강조는 <strong> HTML만 사용하세요.
-            Markdown의 **, #, ``` 기호는 사용하지 마세요.
+            HTML과 Markdown을 사용하지 말고 일반 텍스트로만 답하세요.
             사용자가 어떤 도움을 받을 수 있는지 물으면 시술·가격, 최근 공지, 포인트, 쿠폰·할인,
             상담·Q&A, 결제 방법, 주소·전화, 로그인·마이페이지를 안내하세요.
             의료 진단이나 처방을 요구받으면 의료진 상담이 필요하다고 안내하세요.

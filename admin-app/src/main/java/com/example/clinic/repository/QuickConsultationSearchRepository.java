@@ -12,16 +12,19 @@ public class QuickConsultationSearchRepository {
     @PersistenceContext
     private EntityManager em;
 
-    /** 교육용 취약점: 상담 검색어를 Native SQL에 직접 연결한다. */
+    /** SI-02: 상담 검색어를 바인딩 파라미터로 처리하여 SQL 인젝션을 차단한다. */
     @SuppressWarnings("unchecked")
     public List<QuickConsultation> search(String keyword) {
+        String term = "%" + (keyword == null ? "" : keyword.trim()) + "%";
         String sql = "SELECT id, name, phone, area, preferred_contact, preferred_date, message, "
             + "admin_note, privacy_agreed, created_at "
             + "FROM quick_consultation "
-            + "WHERE name LIKE '%" + keyword + "%' "
-            + "OR phone LIKE '%" + keyword + "%' "
-            + "OR area LIKE '%" + keyword + "%' "
+            + "WHERE name LIKE ?1 "
+            + "OR phone LIKE ?1 "
+            + "OR area LIKE ?1 "
             + "ORDER BY created_at DESC";
-        return em.createNativeQuery(sql, QuickConsultation.class).getResultList();
+        return em.createNativeQuery(sql, QuickConsultation.class)
+            .setParameter(1, term)
+            .getResultList();
     }
 }

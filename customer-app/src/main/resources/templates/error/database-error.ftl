@@ -6,10 +6,8 @@
     <title>Error</title>
 </head>
 <body>
-<h1>Database Error</h1>
-<p>There was an unexpected error while processing the database request.</p>
-<p><strong>Exception:</strong> <span>${exceptionType}</span></p>
-<#if sqlState??><p><strong>SQL State:</strong> <span>${sqlState}</span></p></#if>
-<#if errorCode??><p><strong>Error Code:</strong> <span>${errorCode}</span></p></#if>
+<h1>일시적인 오류가 발생했습니다</h1>
+<p>요청을 처리하는 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.</p>
+<p><a href="/">홈으로 돌아가기</a></p>
 </body>
 </html>

@@ -4,7 +4,9 @@ import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.Role;
 import com.example.clinic.repository.AppUserRepository;
 import com.example.clinic.repository.AdminUserSearchRepository;
+import com.example.clinic.security.PasswordPolicy;
 import jakarta.transaction.Transactional;
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -17,6 +19,11 @@ public class UserService {
     private final AppUserRepository userRepository;
     private final AdminUserSearchRepository userSearchRepository;
     private final PasswordEncoder passwordEncoder;
+    private final SecureRandom secureRandom = new SecureRandom();
+
+    private void validatePasswordPolicy(String rawPassword, String username) {
+        PasswordPolicy.requireStrong(rawPassword, username);
+    }
 
     public UserService(
         AppUserRepository userRepository,
@@ -36,6 +43,7 @@ public class UserService {
         if (userRepository.existsByEmail(email)) {
             throw new IllegalArgumentException("이미 가입된 이메일입니다.");
         }
+        validatePasswordPolicy(rawPassword, username);
 
         AppUser user = new AppUser();
         user.setUsername(username);
@@ -126,11 +134,7 @@ public class UserService {
         user.setName(form.getName());
         user.setEmail(form.getEmail());
         user.setPhone(form.getPhone());
-        // 폼 화면에는 role 입력란이 없지만, AppUser 엔티티를 통째로 바인딩 받다 보니
-        // 요청 파라미터에 role 값이 같이 오면 그대로 반영된다.
-        if (form.getRole() != null) {
-            user.setRole(form.getRole());
-        }
+        // IN-11: 권한(role)은 프로필 수정 시 요청 값으로 변경하지 않는다(권한 상승 방지).
         return userRepository.save(user);
     }
 
@@ -141,7 +145,10 @@ public class UserService {
             return null;
         }
         AppUser user = found.get();
-        String token = String.valueOf(System.currentTimeMillis());
+        // PR-12: 예측 가능한 값(시각) 대신 암호학적으로 안전한 난수 토큰을 사용한다.
+        byte[] bytes = new byte[32];
+        secureRandom.nextBytes(bytes);
+        String token = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         user.setResetToken(token);
         user.setResetTokenExpiresAt(LocalDateTime.now().plusMinutes(30));
         return token;
@@ -154,6 +161,7 @@ public class UserService {
         if (user.getResetTokenExpiresAt() == null || user.getResetTokenExpiresAt().isBefore(LocalDateTime.now())) {
             throw new IllegalArgumentException("유효하지 않거나 만료된 링크입니다.");
         }
+        validatePasswordPolicy(newPassword, user.getUsername());
         user.setPassword(passwordEncoder.encode(newPassword));
         user.setResetToken(null);
         user.setResetTokenExpiresAt(null);

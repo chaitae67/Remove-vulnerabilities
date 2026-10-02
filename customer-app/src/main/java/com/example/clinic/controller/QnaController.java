@@ -2,8 +2,6 @@ package com.example.clinic.controller;
 
 import java.security.Principal;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.Map;
 
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -26,23 +24,20 @@ import com.example.clinic.domain.QnaAttachment;
 import com.example.clinic.domain.Role;
 import com.example.clinic.service.QnaService;
 import com.example.clinic.service.UserService;
-import com.example.clinic.service.TemplatePreviewService;
+import com.example.clinic.util.PrivacyMasker;
 
 @Controller
 public class QnaController {
 
     private final QnaService qnaService;
     private final UserService userService;
-    private final TemplatePreviewService templatePreviewService;
 
     public QnaController(
         QnaService qnaService,
-        UserService userService,
-        TemplatePreviewService templatePreviewService
+        UserService userService
     ) {
         this.qnaService = qnaService;
         this.userService = userService;
-        this.templatePreviewService = templatePreviewService;
     }
 
     @GetMapping("/qna")
@@ -65,21 +60,13 @@ public class QnaController {
         Principal principal,
         Model model
     ) {
-        AppUser viewer = userService.findByUsername(principal.getName());
-        Map<String, Object> variables = new HashMap<>();
-        variables.put("authorName", viewer.getName());
-        variables.put("title", title);
-        variables.put("phone", phone == null ? "" : phone);
-
+        // CI-01: 사용자 입력을 템플릿으로 평가(SSTI)하지 않고, 입력 원문을 그대로 전달한다.
+        // 화면 출력 시 FreeMarker HTML 자동 이스케이프로 XSS도 함께 차단된다.
         model.addAttribute("formTitle", title);
         model.addAttribute("formContent", content);
         model.addAttribute("formPhone", phone);
         model.addAttribute("formPrivatePost", privatePost);
-        try {
-            model.addAttribute("preview", templatePreviewService.render(content, variables));
-        } catch (Exception exception) {
-            model.addAttribute("previewError", exception.getMessage());
-        }
+        model.addAttribute("preview", content);
         return "qna/form";
     }
 
@@ -109,6 +96,7 @@ public class QnaController {
         model.addAttribute("canReadPrivate", !post.isPrivatePost() || admin || owner);
         model.addAttribute("canAnswer", admin);
         model.addAttribute("canManage", admin || owner);
+        model.addAttribute("maskedWriter", owner ? post.getWriter().getName() : PrivacyMasker.name(post.getWriter().getName()));
         return "qna/detail";
     }
 
@@ -124,13 +112,6 @@ public class QnaController {
         qnaService.delete(id);
         redirectAttributes.addFlashAttribute("message", "상담 글이 삭제되었습니다.");
         return "redirect:/qna";
-    }
-
-    @PostMapping("/qna/{id}/answer")
-    public String answer(@PathVariable Long id, @RequestParam String answer, RedirectAttributes redirectAttributes) {
-        qnaService.answer(id, answer);
-        redirectAttributes.addFlashAttribute("message", "답변이 등록되었습니다.");
-        return "redirect:/qna/" + id;
     }
 
     @GetMapping("/qna/{postId}/attachments/{attachmentId}")
@@ -149,18 +130,12 @@ public class QnaController {
         QnaAttachment attachment = qnaService.findAttachment(post, attachmentId);
         Resource resource = qnaService.loadAttachment(attachment.getStoredFilename());
         return ResponseEntity.ok()
-            .contentType(resolveMediaType(attachment.getContentType()))
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .header("X-Content-Type-Options", "nosniff")
             .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                 .filename(attachment.getOriginalFilename(), StandardCharsets.UTF_8)
                 .build().toString())
             .body(resource);
     }
 
-    private MediaType resolveMediaType(String contentType) {
-        try {
-            return contentType == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(contentType);
-        } catch (IllegalArgumentException ex) {
-            return MediaType.APPLICATION_OCTET_STREAM;
-        }
-    }
 }

@@ -1,6 +1,8 @@
 package com.example.clinic.controller;
 
 import com.example.clinic.service.ProcedureService;
+import com.example.clinic.service.AdminReauthenticationService;
+import java.security.Principal;
 import java.math.BigDecimal;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -14,9 +16,11 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 public class AdminProcedureController {
 
     private final ProcedureService procedureService;
+    private final AdminReauthenticationService reauthenticationService;
 
-    public AdminProcedureController(ProcedureService procedureService) {
+    public AdminProcedureController(ProcedureService procedureService, AdminReauthenticationService reauthenticationService) {
         this.procedureService = procedureService;
+        this.reauthenticationService = reauthenticationService;
     }
 
     @GetMapping("/admin/procedures")
@@ -41,9 +45,12 @@ public class AdminProcedureController {
         @RequestParam(required = false) String description,
         @RequestParam BigDecimal price,
         @RequestParam(defaultValue = "false") boolean active,
+        @RequestParam String adminPassword,
+        Principal principal,
         RedirectAttributes redirectAttributes
     ) {
         try {
+            reauthenticationService.verify(principal, adminPassword);
             procedureService.update(id, name, category, summary, description, price, active);
             redirectAttributes.addFlashAttribute("message", "시술/상담 패키지가 수정되었습니다.");
         } catch (IllegalArgumentException e) {

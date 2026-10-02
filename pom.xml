@@ -7,7 +7,10 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.3.5</version>
+        <!-- WEB-25: EOL(지원 종료)된 3.3.x 대신 지원 중인 3.5.x 최신 패치로 상향.
+             (부모 BOM이 내장 Tomcat/Spring Security/FreeMarker 등도 함께 최신 패치로 올려준다.
+              빌드 시 사용 가능한 최신 3.5.x 패치 버전으로 조정하십시오.) -->
+        <version>3.5.16</version>
         <relativePath/>
     </parent>
 

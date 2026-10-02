@@ -19,12 +19,14 @@
     <section class="content-band admin-detail-grid">
         <div class="panel">
             <h2>쿠폰 발급</h2>
-            <#-- (실습용) 발급 요청을 GET 으로 보내는 폼. CSRF 토큰이 없다. -->
-            <form action="/admin/coupons/issue" method="get" class="stack-form">
+            <#if error??><div class="flash error">${error?html}</div></#if>
+            <form action="/admin/coupons/issue" method="post" class="stack-form">
+                <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <label>쿠폰 코드<input name="code" placeholder="EVENT2026" required></label>
                 <label>쿠폰명<input name="name" value="이벤트 쿠폰"></label>
                 <label>할인 금액 (원)<input name="discountAmount" type="number" value="10000"></label>
                 <label>만료일<input name="expiresAt" type="date"></label>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <div class="form-actions">
                     <button class="button" type="submit">쿠폰 발급</button>
                 </div>

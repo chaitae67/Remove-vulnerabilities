@@ -4,6 +4,7 @@ import com.example.clinic.domain.AppUser;
 import com.example.clinic.domain.Role;
 import com.example.clinic.service.PaymentService;
 import com.example.clinic.service.UserService;
+import com.example.clinic.service.AdminReauthenticationService;
 import java.security.Principal;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -18,10 +19,13 @@ public class AdminUserController {
 
     private final UserService userService;
     private final PaymentService paymentService;
+    private final AdminReauthenticationService reauthenticationService;
 
-    public AdminUserController(UserService userService, PaymentService paymentService) {
+    public AdminUserController(UserService userService, PaymentService paymentService,
+                               AdminReauthenticationService reauthenticationService) {
         this.userService = userService;
         this.paymentService = paymentService;
+        this.reauthenticationService = reauthenticationService;
     }
 
     @GetMapping("/admin/users/{id}")
@@ -39,9 +43,12 @@ public class AdminUserController {
         @RequestParam String email,
         @RequestParam(required = false) String phone,
         @RequestParam(defaultValue = "0") int pointBalance,
+        @RequestParam String adminPassword,
+        Principal principal,
         RedirectAttributes redirectAttributes
     ) {
         try {
+            reauthenticationService.verify(principal, adminPassword);
             userService.updateByAdmin(id, name, email, phone, pointBalance);
             redirectAttributes.addFlashAttribute("message", "회원 정보가 수정되었습니다.");
         } catch (IllegalArgumentException e) {
@@ -54,10 +61,12 @@ public class AdminUserController {
     public String changeRole(
         @PathVariable Long id,
         @RequestParam Role role,
+        @RequestParam String adminPassword,
         Principal principal,
         RedirectAttributes redirectAttributes
     ) {
         try {
+            reauthenticationService.verify(principal, adminPassword);
             userService.changeRole(id, role, principal == null ? null : principal.getName());
             redirectAttributes.addFlashAttribute(
                 "message",

@@ -22,7 +22,7 @@
         <ul class="table-list">
             <#list posts as post>
             <li>
-                <a href="/qna/${post.id}">${post.privatePost?then('비공개 상담글입니다', post.title)}</a>
+                <a href="/qna/${post.id?c}">${post.privatePost?then('비공개 상담글입니다', post.title)}</a>
                 <span>${post.answered?then('답변완료', '대기')}</span>
                 <time>${temporals.format(post.createdAt, 'yyyy.MM.dd')}</time>
             </li>

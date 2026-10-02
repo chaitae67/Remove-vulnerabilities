@@ -14,7 +14,7 @@
     <section class="page-title">
         <p class="eyebrow">PAYMENTS</p>
         <h1>결제 관리</h1>
-        <p>결제 건을 클릭하면 상세 화면에서 금액·예약일을 수정하거나 환불 처리할 수 있습니다.</p>
+        <p>결제 건을 클릭하면 상세 화면에서 예약일을 수정하거나 환불 처리할 수 있습니다. 승인 금액과 결제수단은 변경할 수 없습니다.</p>
     </section>
 
     <section class="content-band">
@@ -41,8 +41,8 @@
                 <#list orders as order>
                 <tr data-href="/admin/payments/${order.id}">
                     <td><a class="cell-link" href="/admin/payments/${order.id}">${order.orderNumber?html}</a></td>
-                    <td><a class="cell-link" href="/admin/users/${order.buyer.id}">${order.buyer.name?html}</a></td>
-                    <td>${order.procedureProduct.name?html}</td>
+                    <td><a class="cell-link" href="/admin/users/${order.buyerId?c}">${order.buyerName?html}</a></td>
+                    <td>${order.procedureName?html}</td>
                     <td><strong>${numbers.formatInteger(order.amount)}원</strong></td>
                     <td><span class="state ${fmt.statusClass(order.status?string)}">${fmt.statusLabel(order.status?string)}</span></td>
                     <td><#if order.reservationDate??><time>${temporals.format(order.reservationDate, 'yyyy.MM.dd')}</time><#else><span class="muted">-</span></#if></td>

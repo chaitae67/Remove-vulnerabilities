@@ -100,17 +100,26 @@ public class QnaService {
             .orElseThrow(() -> new IllegalArgumentException("첨부파일을 찾을 수 없습니다."));
     }
 
+    // FU-14: 실행 가능한 스크립트/HTML 등을 차단하기 위한 허용 확장자 화이트리스트.
+    private static final java.util.Set<String> ALLOWED_EXTENSIONS = java.util.Set.of(
+        "jpg", "jpeg", "png", "gif", "webp", "bmp", "pdf", "hwp", "hwpx",
+        "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "zip"
+    );
+
     private QnaAttachment store(MultipartFile file) {
         try {
             Files.createDirectories(qnaUploadPath);
             String original = StringUtils.cleanPath(file.getOriginalFilename() == null ? "attachment" : file.getOriginalFilename());
-            String extension = "";
-            int extensionIndex = original.lastIndexOf('.');
-            if (extensionIndex >= 0) {
-                extension = original.substring(extensionIndex);
+            String extension = extractExtension(original);
+            if (extension.isEmpty() || !ALLOWED_EXTENSIONS.contains(extension)) {
+                throw new IllegalArgumentException("허용되지 않는 파일 형식입니다. (허용: 이미지·문서 파일)");
             }
-            String stored = UUID.randomUUID() + extension;
-            file.transferTo(qnaUploadPath.resolve(stored));
+            String stored = UUID.randomUUID().toString().replace("-", "") + "." + extension;
+            Path target = qnaUploadPath.resolve(stored).normalize();
+            if (!target.startsWith(qnaUploadPath)) {
+                throw new IllegalArgumentException("잘못된 파일 경로입니다.");
+            }
+            file.transferTo(target);
 
             QnaAttachment attachment = new QnaAttachment();
             attachment.setOriginalFilename(original);
@@ -121,5 +130,13 @@ public class QnaService {
         } catch (IOException ex) {
             throw new IllegalStateException("첨부파일 저장 중 오류가 발생했습니다.", ex);
         }
+    }
+
+    private String extractExtension(String filename) {
+        int index = filename.lastIndexOf('.');
+        if (index < 0 || index == filename.length() - 1) {
+            return "";
+        }
+        return filename.substring(index + 1).toLowerCase(java.util.Locale.ROOT);
     }
 }

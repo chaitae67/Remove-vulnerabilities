@@ -21,7 +21,8 @@
             <h2>진료기록 / 동의서 업로드</h2>
             <form action="/admin/records/upload" method="post" enctype="multipart/form-data" class="stack-form">
                 <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
-                <input type="file" name="file" required>
+                <input type="file" name="file" accept=".pdf,.txt,.jpg,.jpeg,.png,.gif,.webp" required>
+                <label>관리자 비밀번호 재확인<input name="adminPassword" type="password" autocomplete="current-password" required></label>
                 <div class="form-actions">
                     <button class="button" type="submit">업로드</button>
                 </div>
@@ -46,8 +47,8 @@
                 <tbody>
                 <#list files as file>
                 <tr>
-                    <td>${file?html}</td>
-                    <td class="cell-action"><a href="/admin/records/download?file=${file?url}">다운로드 &rsaquo;</a></td>
+                    <td>${file.name?html}</td>
+                    <td class="cell-action"><a href="/admin/records/download/${file.id?html}">다운로드 &rsaquo;</a></td>
                 </tr>
                 </#list>
                 </tbody>

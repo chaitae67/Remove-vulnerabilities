@@ -20,6 +20,7 @@ import com.example.clinic.domain.Review;
 import com.example.clinic.domain.ReviewAttachment;
 import com.example.clinic.repository.ProcedureProductRepository;
 import com.example.clinic.repository.ReviewRepository;
+import com.example.clinic.security.SecureFileValidator;
 
 @Service
 public class ReviewService {
@@ -110,17 +111,20 @@ public class ReviewService {
         }
     }
 
+    // FU-14: 후기 첨부는 이미지 파일만 허용한다(실행 가능한 파일 차단).
     private ReviewAttachment store(MultipartFile file) {
         try {
             Files.createDirectories(reviewUploadPath);
             String original = StringUtils.cleanPath(file.getOriginalFilename() == null ? "attachment" : file.getOriginalFilename());
-            String extension = "";
-            int extensionIndex = original.lastIndexOf('.');
-            if (extensionIndex >= 0) {
-                extension = original.substring(extensionIndex);
+            String extension = SecureFileValidator.validate(file, 5L * 1024 * 1024);
+            if (extension.equals("pdf") || extension.equals("txt")) throw new IllegalArgumentException("후기에는 이미지 파일만 첨부할 수 있습니다.");
+            // FU-14: 원본 파일명 대신 임의의 안전한 파일명으로 저장한다.
+            String stored = UUID.randomUUID().toString().replace("-", "") + "." + extension;
+            Path target = reviewUploadPath.resolve(stored).normalize();
+            if (!target.startsWith(reviewUploadPath)) {
+                throw new IllegalArgumentException("잘못된 파일 경로입니다.");
             }
-            String stored = original;
-            file.transferTo(reviewUploadPath.resolve(stored));
+            file.transferTo(target);
 
             ReviewAttachment attachment = new ReviewAttachment();
             attachment.setOriginalFilename(original);

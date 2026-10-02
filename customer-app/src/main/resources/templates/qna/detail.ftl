@@ -13,7 +13,7 @@
     <article class="panel article">
         <p class="eyebrow">Online Q&A</p>
         <h1>${(post.privatePost && !canReadPrivate)?then('비공개 상담글입니다', post.title)}</h1>
-        <p class="muted">${post.writer.name} · ${temporals.format(post.createdAt, 'yyyy.MM.dd HH:mm')}</p>
+        <p class="muted">${maskedWriter} · ${temporals.format(post.createdAt, 'yyyy.MM.dd HH:mm')}</p>
 
         <#if canReadPrivate>
         <div class="article-body">${post.content}</div>
@@ -21,14 +21,14 @@
         <div class="attachments">
             <h2>첨부파일</h2>
             <#list post.attachments as file>
-            <a href="/qna/${post.id}/attachments/${file.id}" download>${file.originalFilename}</a>
+            <a href="/qna/${post.id?c}/attachments/${file.id?c}" download>${file.originalFilename}</a>
             </#list>
         </div>
         </#if>
         <#if post.answered>
         <section class="answer-box">
             <span class="tag">답변완료</span>
-            <p>${post.answer!}</p>
+            <p>${(post.answer!'')}</p>
         </section>
         <#else>
         <section class="answer-box muted-box">
@@ -53,7 +53,7 @@
         <div class="actions">
             <a class="button button-outline" href="/qna">목록</a>
             <#if canManage>
-            <form action="/qna/${post.id}/delete" method="post">
+            <form action="/qna/${post.id?c}/delete" method="post">
                 <input type="hidden" name="${_csrf.parameterName}" value="${_csrf.token}">
                 <button class="button button-danger" type="submit">삭제</button>
             </form>
