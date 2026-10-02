@@ -322,15 +322,17 @@ else
 fi
 
 # D-04 관리자 권한 최소화 — 가이드 쿼리: DBA 롤 없이 SYSDBA 또는 WITH ADMIN OPTION 시스템 권한 보유(나오면 취약)
-#   WITH ADMIN OPTION 제외 대상은 가이드 Step 2 쿼리 목록 그대로(SYS, SYSTEM, AQ_ADMINISTRATOR_ROLE, DBA, 원문에 잘려 인쇄된
-#   MDSYS·LBACSYS·SCHEDULER_ADMIN·WMSYS) + DBA 롤 보유자
-viol "SELECT username||'(SYSDBA)' FROM v\$pwfile_users WHERE sysdba='TRUE' AND username NOT IN ('SYS','INTERNAL') AND username NOT IN $DBAH UNION ALL SELECT grantee||'('||privilege||' WITH ADMIN OPTION)' FROM dba_sys_privs WHERE admin_option='YES' AND grantee NOT IN ('SYS','SYSTEM','AQ_ADMINISTRATOR_ROLE','DBA','MDSYS','LBACSYS','SCHEDULER_ADMIN','WMSYS') AND grantee NOT IN $DBAH ORDER BY 1;"
+#   WITH ADMIN OPTION 제외 대상: 가이드 Step 2 쿼리 목록(SYS, SYSTEM, AQ_ADMINISTRATOR_ROLE, DBA, 원문에 잘려 인쇄된
+#   MDSYS·LBACSYS·SCHEDULER_ADMIN·WMSYS) + DBA 롤 보유자.
+#   가이드 목록은 모두 Oracle 설치 시 생성되는 내장 계정·롤이므로, 같은 성격인 Oracle 관리 계정·롤
+#   (12c 이상 ORACLE_MAINTAINED='Y', 11g 는 기본 목록 $MU/$MR)도 제외한다 — 버전별로 늘어난 내장 계정을 가이드 의도대로 반영.
+viol "SELECT username||'(SYSDBA)' FROM v\$pwfile_users WHERE sysdba='TRUE' AND username NOT IN ('SYS','INTERNAL') AND username NOT IN $DBAH UNION ALL SELECT grantee||'('||privilege||' WITH ADMIN OPTION)' FROM dba_sys_privs WHERE admin_option='YES' AND grantee NOT IN ('SYS','SYSTEM','AQ_ADMINISTRATOR_ROLE','DBA','MDSYS','LBACSYS','SCHEDULER_ADMIN','WMSYS') AND grantee NOT IN $MU AND grantee NOT IN $MR AND grantee NOT IN $DBAH ORDER BY 1;"
 r4="$V_ROWS"; n4=$V_NROW; e4="$V_ERR"
 viol "SELECT grantee FROM dba_role_privs WHERE granted_role='DBA' AND grantee NOT IN ('SYS','SYSTEM') AND grantee NOT IN $MU AND grantee NOT IN $MR ORDER BY 1;"
 if [ "$n4" -gt 0 ]; then rep D-04 VULN "DBA 롤 없이 관리자 권한(SYSDBA/WITH ADMIN OPTION) 보유 ${n4}건: $(short "$r4") → 불필요 권한 회수" ${V_ROWS:+"DBA 롤 보유 일반 계정: $(short "$V_ROWS")"}
 elif [ "$V_NROW" -gt 0 ]; then rep D-04 MAN "DBA 롤 보유 일반 계정 ${V_NROW}개: $(short "$V_ROWS") → 관리자 권한이 꼭 필요한 계정인지 확인(불필요 시 REVOKE DBA)"
 elif [ -n "$e4$V_ERR" ]; then rep D-04 MAN "조회 실패(${e4:-$V_ERR}) → 권한 있는 계정으로 재점검하거나 수동 확인"
-else rep D-04 GOOD "가이드 제외 대상 외 관리자 권한(DBA 롤·SYSDBA·WITH ADMIN OPTION) 보유 계정 없음"; fi
+else rep D-04 GOOD "가이드 제외 대상·Oracle 내장(관리) 계정 외 관리자 권한(DBA 롤·SYSDBA·WITH ADMIN OPTION) 보유 계정 없음"; fi
 
 # D-05 비밀번호 재사용 제약 — 둘 다 UNLIMITED(제약 없음) 또는 둘 다 숫자인데 가이드 최소값(REUSE_MAX 10회·REUSE_TIME 365일) 미만
 #   (한쪽만 UNLIMITED 이면 Oracle 에서는 재사용 자체가 불가 → 제약 적용으로 봄)
