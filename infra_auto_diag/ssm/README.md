@@ -21,7 +21,7 @@ aws s3 cp kisa_all_check.ps1 s3://vuln-lab-backup/infra-auto-diag/tools/
 aws ec2 create-tags --resources i-0640686af1bcd3002 i-096b9c4090b81f0f0 --tags Key=AutoDiag,Value=windows
 # Linux 3대 (web-adm, bastion, was-adm)
 aws ec2 create-tags --resources i-0aab5eedc40f006e0 i-00243f310ea543f2d i-07a6c1b4525770b10 --tags Key=AutoDiag,Value=linux
-# db(Amazon Linux 2)는 SSM 온보딩 후 추가:  --resources <db-id> --tags Key=AutoDiag,Value=linux
+# db(Amazon Linux 2)는 linux 가 아니라 db 태그 → 아래 AutoDiag-DBMS 절 참고
 ```
 
 ## 3) SSM 문서 등록 (1회, 이후 수정 시 update-document)
@@ -60,8 +60,8 @@ powershell -ExecutionPolicy Bypass -File merge_local.ps1        # S3 results/ �
 
 이 환경의 Oracle 은 **도커 컨테이너(`oracle-xe`, Oracle XE 21c)** 안에서 돌고 **호스트엔 sqlplus 가 없다.**
 그래서 문서가 호스트에서 **`docker exec` 로 컨테이너 안에 들어가** `db_oracle_check.sh` 를 실행한다.
-컨테이너 안 **OS 인증(`/ as sysdba`)** 을 쓰므로 **비밀번호가 필요 없다**(Parameter Store 불필요). 인프라 점검은
-DB 호스트의 파일순회가 무거워 제외한다(그래서 db 는 Oracle 점검만 → DBMS 보고서).
+컨테이너 안 **OS 인증(`/ as sysdba`)** 을 쓰므로 **비밀번호가 필요 없다**(Parameter Store 불필요). 인프라 점검도
+함께 한다(`kisa_all_check.ps1 --only infra`, U-26 /dev 순회 수정 후 bash 4.2 에서도 안전). 결과는 리눅스 보고서와 DBMS 보고서로 나뉜다.
 
 준비(1회):
 ```powershell
