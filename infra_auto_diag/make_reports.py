@@ -22,6 +22,7 @@ CSV/JSON 을 한 폴더에 모아 놓고 실행하면, 파일명으로 종류를
   · 같은 호스트(클라우드는 계정)를 다시 스캔하면 최신 스캔으로 교체(누적).
   · 내용이 바뀌면 그 시각의 새 파일이 생기고 옛 파일은 그대로 남는다(이력 보존). 내용이 같으면 새로 안 만든다.
     최신본 기록은 출력 폴더의 .report_version.json 에 종류별로 남는다(터미널엔 이번 최신 파일만 표시).
+  · 끝에 대상별 양호/취약/인터뷰 개수 요약 표를 출력한다.
 
 사용:
   python make_reports.py                        # 현재 폴더(하위 폴더 포함) → ./reports_out/
@@ -43,6 +44,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 for _s in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
@@ -99,6 +101,7 @@ REPORT_NAME = {
 }
 MANIFEST = ".report_version.json"       # 출력 폴더에 저장: 종류별 최신 버전·내용 서명 기록(ASCII 이름)
 HOSTMAP = {}                            # IP → EC2 Name 매핑(--hostmap 로 주입). 보고서 진단대상 이름을 Name 으로.
+SUMMARY = []                            # 요약 표용: 진단 대상(중복 제거 후 최신 스캔) (fill_kind, tpl_key, sv)
 
 
 def _safe(s):
@@ -248,13 +251,12 @@ def _one_report(fill_kind, tpl_key, files, out_dir, meta, manifest):
         idk = _identity(fill_kind, sv)
         if idk in best and ts < best[idk][1]:
             continue
-        if idk in best:
-            print(f"  [=] {sv.get('host') or sv.get('account')} 중복 → 최신 스캔으로 교체")
         best[idk] = (sv, ts)
     servers = [v[0] for v in sorted(best.values(),
                                     key=lambda x: (str(x[0].get("host", "")),
                                                    str(x[0].get("sw", "")),
                                                    str(x[0].get("account", ""))))]
+    SUMMARY.extend((fill_kind, tpl_key, sv) for sv in servers)
 
     tpl = MR._find_template(tpl_key, None)
     if not tpl:
@@ -302,6 +304,55 @@ def _one_report(fill_kind, tpl_key, files, out_dir, meta, manifest):
     return outs
 
 
+KIND_ORDER = ["linux", "windows", "web", "dbms", "cloud"]
+KIND_LABEL = {"linux": "Linux", "windows": "Windows", "web": "WEB", "dbms": "DBMS"}
+
+
+def _dw(s):
+    """콘솔 표시 폭(한글 등 전각 문자는 2칸) — 표 칸 맞춤용."""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+
+
+def _print_summary():
+    """진단 대상(중복 제거 후 최신 스캔)별 양호/취약 개수를 AWS CLI 표 스타일로 출력.
+    양식 수용량 초과로 엑셀에서 빠진 대상(예: IIS 2대째)도 진단 결과이므로 표에는 포함한다."""
+    rows = []
+    for fk, tk, sv in sorted(SUMMARY, key=lambda x: KIND_ORDER.index(x[0]) if x[0] in KIND_ORDER else 9):
+        st = [r.get("final") or r.get("status") for r in sv.get("results", [])]
+        good, bad = st.count("양호"), st.count("취약")
+        kind = tk.upper() if fk == "cloud" else KIND_LABEL.get(fk, fk)
+        if sv.get("sw"):
+            kind += f"({sv['sw']})"
+        rows.append([kind, str(sv.get("host") or sv.get("account") or "-"), str(sv.get("ip") or "-"),
+                     str(good), str(bad), str(st.count("인터뷰 필요")), str(len(st)),
+                     f"{good * 100 / (good + bad):.1f}%" if good + bad else "-"])
+    if not rows:
+        return
+    headers = ["구분", "호스트", "IP", "양호", "취약", "인터뷰", "합계", "양호율"]
+    widths = [max(_dw(h), *(_dw(r[i]) for r in rows)) + 4 for i, h in enumerate(headers)]
+
+    def line(cells, center_from):          # center_from 번째 칸부터 가운데 정렬, 앞쪽은 왼쪽 정렬
+        out = []
+        for i, (c, w) in enumerate(zip(cells, widths)):
+            gap = w - _dw(c)
+            left = gap // 2 if i >= center_from else 2
+            out.append(" " * left + c + " " * (gap - left))
+        return "|" + "|".join(out) + "|"
+
+    sep = "+" + "+".join("-" * w for w in widths) + "+"
+    title, inner = "진단 결과 요약", len(sep) - 2
+    gap = inner - _dw(title)
+    print()
+    print("-" * len(sep))
+    print("|" + " " * (gap // 2) + title + " " * (gap - gap // 2) + "|")
+    print(sep)
+    print(line(headers, 0))
+    print(sep)
+    for r in rows:
+        print(line(r, 3))
+    print(sep)
+
+
 def main():
     ap = argparse.ArgumentParser(description="폴더 안 진단 결과(CSV/JSON) → 결과보고서 일괄 변환")
     ap.add_argument("inputs", nargs="*", default=["."],
@@ -323,7 +374,8 @@ def main():
             d = p if os.path.isdir(p) else os.path.dirname(os.path.abspath(p))
             cand.append(os.path.join(d, "hostmap.json"))
         cand.append(os.path.join(os.getcwd(), "hostmap.json"))
-        seen, cand = set(), [c for c in cand if not (c in seen or seen.add(c))]
+        seen = set()
+        cand = [c for c in cand if not (c in seen or seen.add(c))]
         hm_path = next((c for c in cand if os.path.exists(c)), None)
         if hm_path:
             print(f"[*] 호스트맵 자동 탐지: {hm_path}")
@@ -379,6 +431,7 @@ def main():
     for u in unknown:
         print(f"  [?] 종류 모름(건너뜀): {os.path.basename(u)}  — --kind 로 지정하세요")
     print(f"[*] 완료: 보고서 {len(made)}개 생성")
+    _print_summary()
 
 
 if __name__ == "__main__":
