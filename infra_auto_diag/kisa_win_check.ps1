@@ -331,14 +331,17 @@ else { Rep "W-17" "하드디스크 기본 공유 제거" "VULN" @("AutoShareServ
 #     NetMeeting RDS(mnmsrvc), Portable Media Serial Number(WmdmPmSN), Print Spooler, Remote Registry, Simple TCP/IP(simptcp),
 #     UPnP Device Host(upnphost), Wireless Zero Configuration(WZCSVC/WlanSvc)  + 기존 점검 대상(SharedAccess/Telnet/SNMPTRAP/Fax/SSDPSRV/RemoteAccess)
 #   가이드 조건: TrkWks/TrkSvr 는 AD(도메인) 미구성 시, Print Spooler 는 연결된 프린터가 없을 때만 불필요 → 조건 밖이면 판정 제외(참고 표기)
-#   Cryptographic Services(CryptSvc)는 가이드 목록에 조건 없이 있어 판정 포함.
+#   Cryptographic Services(CryptSvc)는 목록에 있으나, 가이드 목록 하단 단서(p.203: 필수 서비스는 시스템 영향을 고려해 Microsoft 권고
+#   가이드에 따라 적용)에 따라 Microsoft 서비스 비활성화 지침상 '사용 안 함 금지'(Windows Update·서명 확인 필수, OS 가 자동 재시작)인
+#   Windows Server 2016 이상(빌드 14393+)에서는 필수 서비스로 보고 판정 제외(근거 표기)
 #   Automatic Updates(수동/WSUS 패치 시)·DHCP Client(고정 IP 단독 시스템)·DNS Client(DNS 서버 아님, IPSEC 시 필요)는
 #   가이드가 조건을 단 서비스이고 조건 충족 여부를 시스템 상태로 확정할 수 없어 판정 제외
 #   ※ 서비스명 정확 일치 + Win32 서비스만 인정 (Get-Service -Name Browser 는 표시 이름이 'Browser' 인 커널 드라이버 bowser 도 반환 → 제외)
 $risky = @("Alerter","ClipSrv","Browser","TrkWks","TrkSvr","WerSvc","ERSvc","hidserv","ImapiService","Irmon","Messenger","mnmsrvc","WmdmPmSN",
            "Spooler","RemoteRegistry","simptcp","upnphost","WZCSVC","WlanSvc",
            "SharedAccess","TlntSvr","Telnet","SNMPTRAP","Fax","SSDPSRV","RemoteAccess","CryptSvc")
-$running = @(); $cond18 = @()
+$running = @(); $cond18 = @(); $ms18 = @()
+$build18 = [int]((Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).BuildNumber)
 foreach ($n in $risky) {
     $s = @(Get-Service -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $n -and "$($_.ServiceType)" -notmatch 'Driver' }) | Select-Object -First 1
     if (-not $s -or $s.Status -ne "Running") { continue }
@@ -348,9 +351,10 @@ foreach ($n in $risky) {
                      "$($_.PortName)" -notmatch '^(PORTPROMPT:|nul:|XPSPort:|SHRFAX:|FILE:)$' -and "$($_.Name)" -notmatch 'Microsoft (Print to PDF|XPS Document Writer)|^Fax$|OneNote' })
         if ($prn18.Count -gt 0) { $cond18 += "Spooler(연결된 프린터 $($prn18.Count)개 - 필요 서비스)"; continue }
     }
+    if ($n -eq "CryptSvc" -and $build18 -ge 14393) { $ms18 += "CryptSvc(Microsoft 서비스 비활성화 지침상 '사용 안 함 금지' - Windows Update·서명 확인 필수, 빌드 $build18)"; continue }
     $running += $n
 }
-$cond18Ev = @($cond18 | ForEach-Object { "판정 제외(가이드 조건상 필요): $_" })
+$cond18Ev = @($cond18 | ForEach-Object { "판정 제외(가이드 조건상 필요): $_" }) + @($ms18 | ForEach-Object { "판정 제외(가이드 단서 - Microsoft 권고상 필수 서비스): $_" })
 if ($running.Count -eq 0) { Rep "W-18" "불필요한 서비스 제거" "GOOD" (@("가이드 목록의 불필요 서비스(Alerter/Browser/Spooler/RemoteRegistry/TrkWks/upnphost/WerSvc 등) 미실행") + $cond18Ev) }
 else { Rep "W-18" "불필요한 서비스 제거" "VULN" (@("실행 중인 불필요 서비스: $($running -join ', ') → 미사용 시 중지/사용 안 함") + $cond18Ev) }
 
