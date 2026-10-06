@@ -273,3 +273,24 @@ resource "aws_iam_user_group_membership" "vuln_lab_app_user" {
   user   = aws_iam_user.vuln_lab_app_user.name
   groups = [aws_iam_group.audit.name]
 }
+
+# =============================================================================
+# IAM 계정 비밀번호 정책 (계정 단위 설정 - 계정 전체 IAM 사용자에 적용)
+#   팀이 클라우드 진단 1.10(패스워드 정책) 조치로 설정한 값. 라이브와 동일.
+#   ※ 바꾸거나 destroy 하면 같은 계정을 쓰는 다른 팀 사용자에게도 그대로 적용된다.
+# =============================================================================
+resource "aws_iam_account_password_policy" "this" {
+  minimum_password_length        = 8
+  require_symbols                = true
+  require_numbers                = true
+  require_uppercase_characters   = false
+  require_lowercase_characters   = true
+  allow_users_to_change_password = false
+  max_password_age               = 90
+  password_reuse_prevention      = 5
+  hard_expiry                    = false
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

@@ -80,3 +80,7 @@ import {
   id = "vuln-lab-app-user/Audit"
 }
 
+import {
+  to = aws_iam_account_password_policy.this
+  id = "iam-account-password-policy"
+}

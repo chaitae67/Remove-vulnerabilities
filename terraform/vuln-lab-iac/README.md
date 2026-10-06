@@ -4,9 +4,9 @@
 대상은 AWS 계정 `<ACCOUNT_ID>`, 리전 `ap-northeast-2`, VPC `vpc-086bab7aac7afcbb4` 이다.
 2026-10-06 기준 라이브 상태와 **diff 0** 이 되도록 맞췄다.
 
-- 대상: AWS 리소스 149개 import (+ 선택 리소스: ALB target group attachment 4개, OS 기준선 SSM 문서 6개). 서버 6대의 OS 설정은 `os/<host>/` 에 스크립트로 정리했다.
+- 대상: AWS 리소스 150개 import (+ 선택 리소스: ALB target group attachment 4개, OS 기준선 SSM 문서 6개). 서버 6대의 OS 설정은 `os/<host>/` 에 스크립트로 정리했다.
 - 검증 결과 (`_work/plan_final.log`):
-  `Plan: 149 to import, 0 to add, 0 to change, 0 to destroy.` (공개 저장소 버전 기준, 2026-10-06 재검증)
+  `Plan: 150 to import, 0 to add, 0 to change, 0 to destroy.` (공개 저장소 버전 기준, 2026-10-06 재검증)
   - `aws_lb_target_group_attachment` 4개는 provider 5.100.0 이 import 하지 못하고, 인스턴스가 중지 상태라 등록(RegisterTargets)도 실패할 수 있다.
     그래서 `manage_tg_attachments = false`(기본) 로 두어 plan 에 나오지 않는다. 자세한 내용은 4장 참고.
 
@@ -15,7 +15,7 @@
 > 운영 인프라는 이 디렉터리(`vuln-lab-iac`)로만 관리한다.
 
 > **이 디렉터리의 용도: 2026-10-06 기준 vuln-lab 현 상태를 Terraform 코드로 보존한 스냅샷이다. apply 하지 않는다.**
-> - 운영 변경 수단이 아니라 기록이다. 당시 AWS 설정(149개 리소스)과 서버 6대의 OS 구성을 코드로 남겼다.
+> - 운영 변경 수단이 아니라 기록이다. 당시 AWS 설정(150개 리소스)과 서버 6대의 OS 구성을 코드로 남겼다.
 > - `terraform plan` 은 조회 전용이라 언제든 돌려도 된다. 결과가 `0 to change` 가 아니면 그 사이 라이브가 바뀐 것이다(스냅샷과 현재 비교 용도).
 > - 4장(apply)·5장(재구축)은 나중에 이 스냅샷으로 환경을 다시 만들 때를 위한 참고다.
 
@@ -23,7 +23,7 @@
 > 이 저장소는 public 이라 로컬 원본 스냅샷에서 아래 정보를 가리고 올렸다. 실제 값은 팀 로컬 원본(`C:\claude_workuln-lab-iac`)에만 있다.
 > - AWS 계정 ID, 관리자 공인 IP·대역 → Terraform 변수 `account_id`, `admin_ip_cidr`, `admin_net_cidr` (기본값 없음, `terraform.tfvars.example` 참고). KMS 키 정책은 `templatefile()` 로 계정 ID 를 넣는다.
 > - 문서·OS 파일(`os/`)의 같은 값은 자리표시자로 바꿨다: `<ACCOUNT_ID>`, `<ADMIN_IP>`, `<ADMIN_NET_CIDR>`, `<BASTION_EIP>`, `<TEAM_IP_2>`, `<TEAM_IP_3>`. `os/*/baseline.*` 와 `files/` 를 실제로 쓸 때는 이 자리를 실제 값으로 바꿔야 한다.
-> - 운영진 개인 IAM 사용자 3명(사용자·정책 연결 6·그룹 멤버십 2, import 11개)은 뺐다. 그래서 import 수가 로컬 원본 160개 → 149개다.
+> - 운영진 개인 IAM 사용자 3명(사용자·정책 연결 6·그룹 멤버십 2, import 11개)은 뺐다. 그래서 import 수가 로컬 원본 161개 → 150개다.
 > - `_inventory/inventory.json`(계정 전체 조회 원본), plan 로그, state, 비밀값 파일은 올리지 않는다. `_inventory/inventory.py` 는 계정 ID 를 환경변수 `AWS_ACCOUNT_ID` 로 받는다.
 > - 비밀번호는 원래부터 코드에 없다(`server_password`, `db_password` 변수).
 
@@ -38,7 +38,7 @@
 | `imports.tf` | 라이브 리소스 import 블록 124개 (`_inventory/gen_imports.py` 로 생성) |
 | `imports_extra_network.tf` | SG egress 규칙 import 8개 (SG 상호참조 순환을 끊으려고 별도 리소스로 분리) |
 | `imports_extra_logging.tf` | 백업 볼트 `Default` import 1개 |
-| `imports_extra_iam.tf` | vuln-lab 관련 IAM 사용자 2(vuln-lab-app-user, terraform-admin)·그룹 3·정책 연결 10·그룹 멤버십 1 import 16개. 운영진 개인 사용자 3명은 공개 저장소 버전에서 뺐다(아래 안내) |
+| `imports_extra_iam.tf` | vuln-lab 관련 IAM 사용자 2(vuln-lab-app-user, terraform-admin)·그룹 3·정책 연결 10·그룹 멤버십 1 IAM 계정 비밀번호 정책 1 포함 import 17개. 운영진 개인 사용자 3명은 공개 저장소 버전에서 뺐다(아래 안내) |
 | `network.tf` | VPC, 서브넷 8개, IGW, NAT GW와 EIP, 라우팅 테이블·연결, VPC 엔드포인트(SSM 3개, S3 Gateway) |
 | `security.tf` | NACL 3개, 보안그룹 9개(default 포함), 분리한 egress 규칙 8개 |
 | `compute.tf` | EC2 6대, 키페어, EBS 기본 암호화·KMS, DB 데이터 볼륨과 연결, bastion EIP |
@@ -49,7 +49,7 @@
 | `kms.tf` + `policies/*.json` | CloudWatch 용·CloudTrail 용 KMS 키, 별칭, 키 정책 원문 |
 | `backup_config.tf` | AWS Backup(볼트·플랜 `zd-backup`·선택), AWS Config 레코더·전송 채널 |
 | `ssm.tf` + `ssm/*.json` | 자동 진단 Run Command 문서 3개(AutoDiag-Linux/Windows/DBMS). 라이브와 바이트 단위로 같다 |
-| `iam.tf` | vuln-lab EC2 역할·인스턴스 프로파일·인라인 정책, CloudTrail→CWLogs 역할, Backup 기본 역할, vuln-lab 관련 IAM 사용자(vuln-lab-app-user, terraform-admin)·그룹(AppOps, Audit, infra_Management)·관리형 정책 연결·멤버십. 사용자 태그(개인정보)는 `ignore_changes`, 키·MFA·로그인 프로필은 관리하지 않음 |
+| `iam.tf` | IAM 계정 비밀번호 정책(계정 단위), vuln-lab EC2 역할·인스턴스 프로파일·인라인 정책, CloudTrail→CWLogs 역할, Backup 기본 역할, vuln-lab 관련 IAM 사용자(vuln-lab-app-user, terraform-admin)·그룹(AppOps, Audit, infra_Management)·관리형 정책 연결·멤버십. 사용자 태그(개인정보)는 `ignore_changes`, 키·MFA·로그인 프로필은 관리하지 않음 |
 | `os_baseline.tf` | (선택) `os/<host>/baseline.*` 를 감싼 SSM 문서 6개. 기본 비활성 |
 | `outputs.tf` | ALB DNS, bastion/NAT 공인 IP, VPC·서브넷 ID, 인스턴스 ID·사설 IP, NS |
 | `terraform.tfvars.example` | 변수 예시 (자리표시만 있음) |
@@ -92,7 +92,7 @@
 ```bash
 cd C:/claude_work/vuln-lab-iac
 terraform plan -input=false -lock=false
-# 기대 결과: Plan: 149 to import, 0 to add, 0 to change, 0 to destroy.
+# 기대 결과: Plan: 150 to import, 0 to add, 0 to change, 0 to destroy.
 ```
 
 - 변수가 sensitive 라서 plan 출력에 비밀번호가 나오지 않는다. user_data 는 SHA1 해시로만 표시된다.
@@ -106,7 +106,7 @@ terraform plan -input=false -lock=false
 
 이 스냅샷은 **apply 하지 않는 것을 전제**로 만들었다. 이 코드를 만들면서 apply 는 한 번도 실행하지 않았다. 아래는 나중에 이 코드로 state 를 만들거나 재구축할 때의 참고다.
 
-- **import 149개** : 라이브 리소스를 Terraform state 에 기록만 한다. AWS 리소스는 바뀌지 않는다.
+- **import 150개** : 라이브 리소스를 Terraform state 에 기록만 한다. AWS 리소스는 바뀌지 않는다.
 - **ALB 대상 등록 4개 (`aws_lb_target_group_attachment.this`)** : 기본값 `manage_tg_attachments = false` 에서는 만들지 않는다(plan 에 나오지 않음).
   - provider 5.100.0 은 이 리소스의 import 를 지원하지 않는다.
   - 대상(web1:80, web-adm1:80, was1:8080, was-adm1:8080)은 라이브에 이미 등록돼 있다. 하지만 4대 모두 중지 상태라
@@ -127,8 +127,9 @@ terraform plan -input=false -lock=false
 |---|---|---|
 | `aws_ebs_encryption_by_default`, `aws_ebs_default_kms_key` | 리전 | 리전의 모든 새 EBS 볼륨 암호화 여부·기본 키가 바뀐다 |
 | `aws_config_configuration_recorder`, `_delivery_channel`, `_recorder_status` (2025-12 이전부터 있음, 프로젝트 이전 설정) | 리전 | 리전 전체 Config 기록이 바뀐다. 현재 레코더는 정지 상태다 |
+| `aws_iam_account_password_policy` (팀 1.10 조치) | 계정 | 계정 전체 IAM 사용자의 비밀번호 규칙이 바뀐다 |
 
-반대로 계정 단위 S3 Public Access Block, IAM 비밀번호 정책, AWS Backup 리전 설정, DHCP 옵션 세트는 **관리하지 않는다**(6장).
+반대로 계정 단위 S3 Public Access Block, AWS Backup 리전 설정, DHCP 옵션 세트는 **관리하지 않는다**(6장).
 기준: vuln-lab 이 실제로 쓰고 라이브 값이 이미 이 프로젝트 기준으로 맞춰진 것만 import 했고, 다른 팀 정책에 가까운 계정 공용 설정은 뺐다.
 
 ## 5. 새 환경에 재구축할 때 (참고)
@@ -181,7 +182,6 @@ terraform plan -input=false -lock=false
 | SSM 파라미터 `/autodiag/oracle_conn` | SecureString 이다. import 하면 비밀값이 state 에 평문으로 저장된다 |
 | SSM 문서 `SSM-SessionManagerRunShell` | 2022년부터 있던 계정 공용 Session Manager 기본 설정 |
 | SSM association `SystemAssociationForSsmAgentUpdate`(문서 AWS-UpdateSSMAgent, rate(14 days), 전체 인스턴스), `AWS-QuickSetup-SSM-EnableExplorer` | 2022~2023년 계정 공용 Quick Setup 설정 |
-| IAM 계정 비밀번호 정책 | 계정 공용 설정 |
 | 미사용 역할 `EC2-SSM-CWAgent-Role`, `CloudWatchAgentServerRole` | 어떤 vuln-lab 인스턴스에도 연결돼 있지 않다 |
 | S3 객체, DB 데이터, 애플리케이션 바이너리(jar 등) | 인프라가 아닌 데이터·산출물. Terraform 관리 대상이 아니다 |
 | 자동 진단 도구 S3 객체 6개 `s3://vuln-lab-backup/infra-auto-diag/tools/` (cloudscan_all.py, db_oracle_check.sh, kisa_all_check.ps1, makereport_all.py, s3report.ps1, s3report.sh, 2026-09-30~10-02) | `ssm/AutoDiag-*.json` 문서가 실행하는 도구다. 수 MB 크기 스크립트라 코드에 넣지 않았다. 원본 소스는 팀 저장소 `Remove-vulnerabilities/infra_auto_diag/`(업로드본과 동일 여부는 미확인). 재구축 시 AutoDiag 문서를 쓰려면 이 경로에 먼저 업로드한다 |
