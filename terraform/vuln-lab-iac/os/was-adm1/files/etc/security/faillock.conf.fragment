@@ -1,0 +1,4 @@
+# [일부만 확인된 내용] was-adm1 /etc/security/faillock.conf - 주석이 아닌 줄만(10/2 이전부터 설정됨)
+# 출처: results/apply/was-adm1/20261002-105226_precheck.log, 20261002-105556_U-02_U-03.log
+deny = 5
+unlock_time = 600

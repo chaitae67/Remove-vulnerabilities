@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "2.2",
+  "description": "DB server scan: Linux infra (kisa_all_check --only infra; now safe after U-26 /dev fix) + Oracle DBMS (run INSIDE the Oracle container via docker exec, in-container OS auth / as sysdba, no password). Produces server_linux_* (infra) and db_oracle_* (DBMS) and uploads both to S3 results/.",
+  "parameters": {
+    "S3Base": {
+      "type": "String",
+      "description": "S3 base prefix (tools/ and results/ live under it).",
+      "default": "s3://vuln-lab-backup/infra-auto-diag"
+    },
+    "Container": {
+      "type": "String",
+      "description": "Name of the running Oracle Docker container on the DB host.",
+      "default": "oracle-xe"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "scan",
+      "inputs": {
+        "timeoutSeconds": "1200",
+        "runCommand": [
+          "if ! command -v aws >/dev/null 2>&1; then echo '[!] aws CLI not available on this host'; exit 1; fi",
+          "WORK=/tmp/autodiag; mkdir -p \"$WORK/scan\"; cd \"$WORK\"",
+          "rm -f scan/*.csv scan/*.html 2>/dev/null || true",
+          "echo '[*] (1/2) infra scan on host...'",
+          "aws s3 cp {{S3Base}}/tools/kisa_all_check.ps1 kisa_all_check.ps1 || { echo '[!] download kisa_all_check failed'; exit 1; }",
+          "timeout 600 bash kisa_all_check.ps1 --only infra -o scan; echo \"[*] infra rc=$? (124=timeout, else ignore)\"",
+          "echo '[*] (2/2) oracle scan inside container {{Container}} (OS auth / as sysdba)...'",
+          "if ! command -v docker >/dev/null 2>&1 || [ -z \"$(docker ps -q -f name={{Container}})\" ]; then echo '[!] docker/container {{Container}} not available - skipping oracle'; else aws s3 cp {{S3Base}}/tools/db_oracle_check.sh db_oracle_check.sh && timeout 300 docker exec -i {{Container}} bash -s -- --csv /tmp/dbout.csv < db_oracle_check.sh; echo \"[*] oracle rc=$? (124=timeout, else ignore)\"; TS=$(date +%Y%m%d_%H%M); if docker cp {{Container}}:/tmp/dbout.csv \"scan/db_oracle_db_${TS}.csv\" 2>/dev/null; then HOSTIP=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n \"$HOSTIP\" ] && sed -i \"s|^# ip,.*|# ip,$HOSTIP|\" \"scan/db_oracle_db_${TS}.csv\" 2>/dev/null || true; docker exec {{Container}} rm -f /tmp/dbout.csv 2>/dev/null || true; else echo '[!] no oracle CSV produced from container'; fi; fi",
+          "ls scan/*.csv >/dev/null 2>&1 || { echo '[!] no CSV produced'; exit 1; }",
+          "aws s3 cp scan/ {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv' || { echo '[!] S3 upload failed - check IAM s3:PutObject'; exit 1; }",
+          "echo '[*] uploaded CSV(s) to {{S3Base}}/results/'"
+        ]
+      }
+    }
+  ]
+}

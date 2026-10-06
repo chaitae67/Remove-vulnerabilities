@@ -1,0 +1,6 @@
+# [일부만 확인된 내용] was-adm1 /etc/chrony.conf - 2026-10-02 U-65 로 바뀐 3~4행과 기존 10행만
+# 출처: results/apply/was-adm1/20261002-105923_U-65.log, 20261002-105226_precheck.log
+# 나머지 줄은 Rocky 8 chrony 패키지 기본 파일(1084 bytes, 2024-11-05)과 같다고 보며 원문은 미확보.
+#pool 2.rocky.pool.ntp.org iburst
+server 169.254.169.123 prefer iburst minpoll 4 maxpoll 4
+makestep 1.0 3
