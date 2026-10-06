@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "2.2",
+  "description": "KISA infra+web vulnerability scan on Linux; uploads CSV to S3 results/. Reuses kisa_all_check.ps1 from S3 tools/ (fetched via instance role).",
+  "parameters": {
+    "S3Base": {
+      "type": "String",
+      "description": "S3 base prefix (tools/ and results/ live under it).",
+      "default": "s3://vuln-lab-backup/infra-auto-diag"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "scan",
+      "inputs": {
+        "timeoutSeconds": "3600",
+        "runCommand": [
+          "if ! command -v aws >/dev/null 2>&1; then echo '[*] installing aws cli...'; curl -sSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip && (cd /tmp && rm -rf aws && unzip -q awscliv2.zip && ./aws/install -u -b /usr/local/bin) || true; fi",
+          "export PATH=$PATH:/usr/local/bin",
+          "command -v aws >/dev/null 2>&1 || { echo '[!] aws CLI not available; install it on this host and retry.'; exit 1; }",
+          "WORK=/tmp/autodiag; mkdir -p \"$WORK/scan\"; cd \"$WORK\"",
+          "aws s3 cp {{S3Base}}/tools/kisa_all_check.ps1 kisa_all_check.ps1 || { echo '[!] failed to download scanner from S3'; exit 1; }",
+          "rm -f scan/*.csv scan/*.html 2>/dev/null || true",
+          "bash kisa_all_check.ps1 -o scan; echo \"[*] scanner finished (exit $?, exit code is not a failure)\"",
+          "ls scan/*.csv >/dev/null 2>&1 || { echo '[!] no CSV produced'; exit 1; }",
+          "aws s3 cp scan/ {{S3Base}}/results/ --recursive --exclude '*' --include '*.csv' || { echo '[!] S3 upload failed - check this instance IAM role has s3:PutObject on the bucket'; exit 1; }",
+          "echo '[*] uploaded CSV to {{S3Base}}/results/'"
+        ]
+      }
+    }
+  ]
+}

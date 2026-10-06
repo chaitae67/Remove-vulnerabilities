@@ -1,0 +1,23 @@
+# =============================================================================
+# 변수 예시 파일 - 실제 값을 여기에 쓰지 않는다.
+#   cp terraform.tfvars.example secret.auto.tfvars   (secret.auto.tfvars 는 .gitignore 대상)
+#   그 다음 secret.auto.tfvars 의 <...> 자리만 실제 값으로 바꾼다.
+# =============================================================================
+
+# ---- 계정/관리자 IP (공개 저장소 버전은 필수) / 리전 ----------------------
+# region      = "ap-northeast-2"
+# aws_profile = "default"        # sk104_32_team_3 자격증명 프로필
+account_id     = "<vuln-lab AWS 계정 ID 12자리>"   # provider 도 이 계정만 허용
+admin_ip_cidr  = "<관리자 공인 IP>/32"            # bastion SG SSH 허용
+admin_net_cidr = "<관리자 대역>/24"               # public NACL SSH 허용
+
+# ---- 비밀값 (user_data 템플릿 전용, sensitive) -------------------------------
+server_password = "<리눅스 root/team, Windows Administrator 초기 비밀번호>"
+db_password     = "<Oracle XE SYS/oraadmin 비밀번호>"
+
+# ---- 선택 기능 ---------------------------------------------------------------
+# 새 환경 재구축 시에만 true (호스트별 OS 기준선 SSM 문서 6개 생성, association 없음)
+# enable_os_baseline = false
+
+# ALB 대상 등록 4개(import 불가) 관리 여부 - 인스턴스 기동 후에만 true (중지 상태면 RegisterTargets 실패)
+# manage_tg_attachments = false

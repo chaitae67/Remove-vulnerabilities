@@ -1,0 +1,22 @@
+# [재구성본] was-adm1 /etc/systemd/system/clinic-admin.service
+# - 원문 출처: results/apply/was-adm1/20261002-105226_precheck.log (systemctl cat clinic-admin)
+# - 원문과 다른 점은 ExecStart 의 --spring.datasource.password=<평문> 인자 하나뿐이다(비밀값이라 제거).
+#   실제 기동 명령은 drop-in db-creds.conf 가 ExecStart 를 비우고 다시 정의하므로 동작은 같다.
+# - User/StandardOutput/StandardError 는 drop-in runas.conf(2026-10-02 WEB-09/26)가 덮어쓴다.
+# - JVM 경로는 운영 값. baseline.sh 가 설치된 java-21 경로로 바꿔 배포한다.
+[Unit]
+Description=Clinic Admin App
+After=network.target
+
+[Service]
+Type=simple
+User=team
+WorkingDirectory=/opt/clinic
+ExecStart=/usr/lib/jvm/java-21-openjdk-21.0.12.1.1-1.1.el8_10.x86_64/bin/java -jar /opt/clinic/admin-app.jar --spring.datasource.url=jdbc:oracle:thin:@10.0.20.184:1521/XEPDB1 --spring.datasource.username=oraadmin --server.port=8080 --server.forward-headers-strategy=native --server.tomcat.use-relative-redirects=true
+Restart=always
+RestartSec=10
+StandardOutput=file:/tmp/admin-app.log
+StandardError=file:/tmp/admin-app-err.log
+
+[Install]
+WantedBy=multi-user.target

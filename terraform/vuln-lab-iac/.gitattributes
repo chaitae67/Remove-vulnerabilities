@@ -1,0 +1,4 @@
+# 라이브와 바이트 단위로 같아야 하는 파일 - 줄바꿈 변환 금지
+os/**/user_data.tpl -text
+ssm/*.json -text
+policies/*.json -text

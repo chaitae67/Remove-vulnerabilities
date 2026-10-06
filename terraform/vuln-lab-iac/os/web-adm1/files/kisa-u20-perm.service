@@ -1,0 +1,10 @@
+[Unit]
+Description=Keep /etc/systemd files root 0600 (KISA U-20)
+After=snapd.service snapd.seeded.service
+# snap refresh rewrites several units within seconds; without this the start limit (5/10s) also fails the path unit
+StartLimitIntervalSec=0
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/find /etc/systemd -xdev -type f ( ! -user root -o -perm /177 ) -exec chown root {} + -exec chmod 600 {} +
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+# 상태·비밀값·생성 산출물은 절대 공유 금지
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!terraform.tfvars.example
+*.pem
+crash.log
+_work/
+_inventory/inventory.json
+_inventory/userdata/
+# plan 파일·크래시 로그에는 sensitive 변수 평문이 들어간다
+tfplan
+*.tfplan
+*.tfvars.json
+crash.*.log
+_inventory/**/*.bin

@@ -1,0 +1,69 @@
+server {
+    
+    set_real_ip_from 10.0.0.0/24;
+    set_real_ip_from 10.0.1.0/24;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+    listen 80;
+    listen 443 ssl;
+    ssl_certificate /etc/ssl/certs/clinic-admin.crt;
+    ssl_certificate_key /etc/ssl/private/clinic-admin.key;
+    server_name _;
+
+    server_tokens off;
+    client_max_body_size 10m;
+    root /srv/clinic-admin;
+    disable_symlinks on;
+    more_clear_headers Server;
+    more_clear_headers X-Powered-By;
+    autoindex off;
+
+    error_page 400 401 403 404 405 413 500 502 503 504 /error.html;
+
+    location = /error.html {
+        internal;
+    }
+
+    location = /health {
+        limit_except GET HEAD {
+            deny all;
+        }
+
+        access_log off;
+        default_type text/plain;
+        return 200 'ok';
+    }
+
+    location / {
+        if ($http_x_forwarded_proto = "http") { return 301 https://$host$request_uri; }
+        allow <ADMIN_IP>/32;
+        deny all;
+
+        limit_except GET HEAD POST {
+            deny all;
+        }
+
+        resolver 10.0.0.2 valid=30s ipv6=off;
+        set $inalb internal-in-alb-1262980660.ap-northeast-2.elb.amazonaws.com;
+        proxy_pass https://$inalb:443;
+        proxy_connect_timeout 5s;
+        proxy_http_version 1.1;
+
+        proxy_ssl_server_name on;
+        proxy_ssl_name internal-in-alb-1262980660.ap-northeast-2.elb.amazonaws.com;
+
+        proxy_set_header Host admin.zerodayclinic.p-e.kr;
+        proxy_set_header X-Forwarded-Host admin.zerodayclinic.p-e.kr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+
+        proxy_hide_header Server;
+        proxy_hide_header X-Powered-By;
+
+        proxy_redirect ~^https?://admin\.zerodayclinic\.p-e\.kr(:\d+)?/(.*)$ https://admin.zerodayclinic.p-e.kr/$2;
+    }
+}

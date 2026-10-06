@@ -1,0 +1,9 @@
+# [일부만 확인된 내용] was-adm1 /etc/security/pwquality.conf - 주석이 아닌 줄만
+# 출처: results/apply/was-adm1/20261002-105556_U-02_U-03.log (VERIFY 출력)
+# minlen 은 10/2 이전부터 있던 값, 나머지 5줄은 2026-10-02 U-02 에서 추가
+minlen = 8
+dcredit = -1
+ucredit = -1
+lcredit = -1
+ocredit = -1
+enforce_for_root

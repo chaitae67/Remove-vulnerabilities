@@ -1,0 +1,15 @@
+# ---------------------------------------------------------------------------
+# [조각(fragment) - 파일 전체가 아님] db-active /etc/rc.d/rc.local
+#   권한·크기 : root:root 755, 60바이트, 수정 시각 2026-09-17 10:05
+#   근거      : results/apply/db-active/20261002-105957_chk_docker2.log
+#               ('grep -n -iE docker|containerd /etc/rc.d/rc.local' 결과가 2행·4행만 출력됨)
+#               wf_1001.json U-17(rc.local root:root 755)
+#   확인된 것은 아래 2행·4행뿐이다. 1행(셸 지정으로 추정)과 3행은 내용을 확인하지 못했다(TODO 확인필요).
+#   배경      : user_data 가 만든 /etc/systemd/system/docker.service.d/override.conf 에 'ExecStart=' 만 있어
+#               docker.service 가 'lacks both ExecStart= and ExecStop= setting. Refusing.' 로 기동 불가(LoadState=error).
+#               그래서 운영자가 rc.local 로 dockerd 를 직접 띄운다(dockerd cgroup = /system.slice/rc-local.service).
+# ---------------------------------------------------------------------------
+# 2행:
+dockerd &
+# 4행:
+docker start oracle-xe

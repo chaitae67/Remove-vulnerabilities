@@ -1,0 +1,5 @@
+#!/bin/sh
+cat <<EOF
+본 시스템은 인가된 사용자만 사용할 수 있으며, 무단 접근 시 관련 법령에 따라 처벌받을 수 있습니다.
+Authorized users only. All activities may be monitored and recorded.
+EOF
