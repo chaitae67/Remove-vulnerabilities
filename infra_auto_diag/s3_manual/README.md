@@ -1,4 +1,6 @@
-# 취약점 진단 → S3 수집 → 결과보고서 자동화 사용안내
+# SSM 없이 수동 실행 — 서버에서 점검 → S3 업로드 → 결과보고서
+
+SSM 을 쓸 수 없을 때의 보조 경로다(표준 절차는 상위 [README](../README.md)의 SSM 실행).
 
 각 서버에서 **점검하고 CSV를 S3에 올리기**만 하고, 마지막에 **분석 PC(로컬)에서 한 번에 결과보고서**를 만드는 방식입니다.
 서버에는 파이썬을 설치하지 않습니다(서버는 원본 CSV만 생산, 보고서 가공은 분석 PC).
@@ -6,7 +8,7 @@
 ## 구조
 
 ```
-s3://vuln-lab-backup/infra-auto-diag/
+s3://vuln-lab-backup-293936503010/infra-auto-diag/
 ├─ tools/     ← 스크립트 보관(최초 1회 업로드)
 ├─ results/   ← 각 서버가 올린 원본 CSV(누적)
 └─ reports/   ← (선택) 완성된 결과보고서 xlsx 공유 위치
@@ -18,12 +20,12 @@ s3://vuln-lab-backup/infra-auto-diag/
 ## 0) 준비 — 도구 S3에 올리기 (분석 PC에서 1회)
 
 ```powershell
-cd C:\Users\EZ\repo-remove-vuln\infra_auto_diag
-aws s3 cp s3report.sh        s3://vuln-lab-backup/infra-auto-diag/tools/
-aws s3 cp s3report.ps1       s3://vuln-lab-backup/infra-auto-diag/tools/
-aws s3 cp kisa_all_check.ps1 s3://vuln-lab-backup/infra-auto-diag/tools/
-aws s3 cp cloudscan_all.py   s3://vuln-lab-backup/infra-auto-diag/tools/
-aws s3 cp db_oracle_check.sh s3://vuln-lab-backup/infra-auto-diag/tools/
+cd infra_auto_diag
+aws s3 cp s3_manual/s3report.sh  s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/
+aws s3 cp s3_manual/s3report.ps1 s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/
+aws s3 cp kisa_all_check.ps1 s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/
+aws s3 cp cloudscan_all.py   s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/
+aws s3 cp db_oracle_check.sh s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/
 ```
 
 > 스크립트를 고쳤으면 그 파일을 **다시 이 명령으로 덮어써야** 서버가 새 버전을 받습니다.
@@ -36,26 +38,26 @@ aws s3 cp db_oracle_check.sh s3://vuln-lab-backup/infra-auto-diag/tools/
 **리눅스 (인프라 + 웹 자동)**
 ```bash
 cd ~
-aws s3 cp s3://vuln-lab-backup/infra-auto-diag/tools/s3report.sh . && bash s3report.sh --no-report
+aws s3 cp s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/s3report.sh . && bash s3report.sh --no-report
 ```
 
 **윈도우 (관리자 PowerShell, 인프라 + 웹 자동)**
 ```powershell
 mkdir C:\kisa -Force; cd C:\kisa
-aws s3 cp s3://vuln-lab-backup/infra-auto-diag/tools/s3report.ps1 .
+aws s3 cp s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/s3report.ps1 .
 powershell -ExecutionPolicy Bypass -File .\s3report.ps1 -NoReport
 ```
 
 **DBMS(Oracle) — DB 서버에서**
 ```bash
 cd ~
-aws s3 cp s3://vuln-lab-backup/infra-auto-diag/tools/s3report.sh . && \
+aws s3 cp s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/s3report.sh . && \
   bash s3report.sh --no-report --dbms --user oraadmin --pass '<비번>' --service FREEPDB1
 ```
 
 **클라우드 — 자격증명 있는 곳/클라우드 셸에서**
 ```bash
-aws s3 cp s3://vuln-lab-backup/infra-auto-diag/tools/s3report.sh . && bash s3report.sh --no-report --cloud aws
+aws s3 cp s3://vuln-lab-backup-293936503010/infra-auto-diag/tools/s3report.sh . && bash s3report.sh --no-report --cloud aws
 ```
 
 > `--no-report` = 점검하고 CSV 만 S3 에 올림(보고서는 로컬에서 한 번에 만듦). 결과 요약은 화면에 그대로 나옵니다.
@@ -65,7 +67,7 @@ aws s3 cp s3://vuln-lab-backup/infra-auto-diag/tools/s3report.sh . && bash s3rep
 서버 스캔이 끝난 뒤, 저장소의 `infra_auto_diag` 폴더에서:
 
 ```powershell
-cd C:\Users\EZ\repo-remove-vuln\infra_auto_diag
+cd infra_auto_diag
 powershell -ExecutionPolicy Bypass -File merge_local.ps1
 ```
 

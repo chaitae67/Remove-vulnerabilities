@@ -12,7 +12,7 @@
 #
 # Needs: aws CLI + (for report step) python + lxml. S3 access (IAM role / keys).
 param(
-  [string]$S3Base = "s3://vuln-lab-backup/infra-auto-diag",
+  [string]$S3Base = "s3://vuln-lab-backup-293936503010/infra-auto-diag",
   [string]$Work   = "$env:USERPROFILE\kisa_work",
   [switch]$MergeOnly,
   [switch]$NoReport,

@@ -5,7 +5,7 @@
     "S3Base": {
       "type": "String",
       "description": "S3 base prefix (tools/ and results/ live under it).",
-      "default": "s3://vuln-lab-backup/infra-auto-diag"
+      "default": "s3://vuln-lab-backup-293936503010/infra-auto-diag"
     }
   },
   "mainSteps": [

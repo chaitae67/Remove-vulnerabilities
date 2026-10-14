@@ -15,7 +15,7 @@ import io
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "makereport_all.py")
+OUT = os.path.join(os.path.dirname(HERE), "makereport_all.py")   # 결과물은 상위(infra_auto_diag/)에 생성
 
 
 def main():
