@@ -22,7 +22,7 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "kisa_all_check.ps1")
+OUT = os.path.join(os.path.dirname(HERE), "kisa_all_check.ps1")   # 결과물은 상위(infra_auto_diag/)에 생성
 
 SOURCES = {
     "UNIX": "kisa_unix_check.sh",

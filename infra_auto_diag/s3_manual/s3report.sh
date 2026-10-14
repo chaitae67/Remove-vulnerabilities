@@ -13,7 +13,7 @@
 # 전제: aws CLI + (보고서 생성 시) python3 + lxml. S3 접근 권한(IAM 역할/키).
 set -u
 
-S3="${S3_BASE:-s3://vuln-lab-backup/infra-auto-diag}"
+S3="${S3_BASE:-s3://vuln-lab-backup-293936503010/infra-auto-diag}"
 WORK="${WORK:-$HOME/kisa_work}"
 MODE="server"           # server | cloud | dbms
 CSP="aws"

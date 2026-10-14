@@ -26,7 +26,7 @@ sys.path.insert(0, HERE)
 import tpl_xml as X  # noqa: E402
 import server_report  # noqa: E402
 
-OFFICIAL = os.path.join(HERE, "결과보고서", "주통기")
+OFFICIAL = os.path.join(os.path.dirname(HERE), "결과보고서", "주통기")   # 로컬 전용(gitignore)
 OUT_DIR = os.environ.get("TPL_DIR") or HERE   # 양식 저장 폴더(기본: 이 폴더)
 COVER, TARGET, GRAPH = "0. 표지", "1. 진단 대상", "2-1. 요약결과(그래프)"
 PROJECT_TITLE = '"제로데이클리닉" 취약점 진단'
